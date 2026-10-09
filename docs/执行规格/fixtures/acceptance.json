@@ -1,0 +1,718 @@
+{
+  "version": "0.1.0-design",
+  "synthetic": true,
+  "forProductionSeed": false,
+  "containsRealCompanyEvidence": false,
+  "ids": {
+    "owner": "10000000-0000-4000-8000-000000000001",
+    "outsider": "10000000-0000-4000-8000-000000000002",
+    "reviewer": "10000000-0000-4000-8000-000000000003",
+    "projectA": "20000000-0000-4000-8000-000000000001",
+    "projectB": "20000000-0000-4000-8000-000000000002",
+    "sourceA": "30000000-0000-4000-8000-000000000001",
+    "sourceB": "30000000-0000-4000-8000-000000000002",
+    "baseA": "40000000-0000-4000-8000-000000000001",
+    "blockA": "50000000-0000-4000-8000-000000000001",
+    "candidateA": "60000000-0000-4000-8000-000000000001",
+    "envA": "70000000-0000-4000-8000-000000000001",
+    "fileA": "80000000-0000-4000-8000-000000000001",
+    "factName": "90000000-0000-4000-8000-000000000001",
+    "factPurpose": "90000000-0000-4000-8000-000000000002",
+    "evidenceA": "a0000000-0000-4000-8000-000000000001"
+  },
+  "identityPreparation": "测试执行时安全创建账号与会话；此文件不提供真实密码、密钥或批准token。",
+  "schemaCases": [
+    {
+      "id": "SC01",
+      "schema": "ProjectCreate",
+      "expectedValid": true,
+      "value": {
+        "name": "验收样例项目甲",
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "not_started",
+        "description": "纯合成验收数据，不得进入正式演示默认列表。",
+        "periodStart": null,
+        "periodEnd": null
+      },
+      "reason": "合法最小项目与空周期"
+    },
+    {
+      "id": "SC02",
+      "schema": "ProjectCreate",
+      "expectedValid": false,
+      "value": {
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "active"
+      },
+      "reason": "缺name"
+    },
+    {
+      "id": "SC03",
+      "schema": "ProjectCreate",
+      "expectedValid": false,
+      "value": {
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "not_started",
+        "description": "纯合成验收数据，不得进入正式演示默认列表。",
+        "periodStart": null,
+        "periodEnd": null
+      },
+      "reason": "名称超长"
+    },
+    {
+      "id": "SC04",
+      "schema": "ProjectCreate",
+      "expectedValid": false,
+      "value": {
+        "name": "验收样例项目甲",
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "done",
+        "description": "纯合成验收数据，不得进入正式演示默认列表。",
+        "periodStart": null,
+        "periodEnd": null
+      },
+      "reason": "未知状态"
+    },
+    {
+      "id": "SC05",
+      "schema": "ProjectCreate",
+      "expectedValid": false,
+      "value": {
+        "name": "验收样例项目甲",
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "not_started",
+        "description": "纯合成验收数据，不得进入正式演示默认列表。",
+        "periodStart": null,
+        "periodEnd": null,
+        "documentCode": "不能新增的字段"
+      },
+      "reason": "额外字段"
+    },
+    {
+      "id": "SC06",
+      "schema": "ProjectCreate",
+      "expectedValid": false,
+      "value": {
+        "name": "验收样例项目甲",
+        "ownerId": "10000000-0000-4000-8000-000000000001",
+        "status": "not_started",
+        "description": "纯合成验收数据，不得进入正式演示默认列表。",
+        "periodStart": "2026-99-01",
+        "periodEnd": null
+      },
+      "reason": "无效日期"
+    },
+    {
+      "id": "SC07",
+      "schema": "ProjectPatch",
+      "expectedValid": false,
+      "value": {
+        "name": "新名"
+      },
+      "reason": "修改缺预期修订"
+    },
+    {
+      "id": "SC08",
+      "schema": "ProjectPatch",
+      "expectedValid": true,
+      "value": {
+        "expectedRevision": 1,
+        "periodEnd": null
+      },
+      "reason": "显式清空允许字段"
+    },
+    {
+      "id": "SC09",
+      "schema": "UserCreate",
+      "expectedValid": true,
+      "value": {
+        "account": "fixture.owner",
+        "name": "验收编写者",
+        "globalRoles": [
+          "project_creator"
+        ]
+      },
+      "reason": "合法账号"
+    },
+    {
+      "id": "SC10",
+      "schema": "UserCreate",
+      "expectedValid": false,
+      "value": {
+        "account": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "验收用户",
+        "globalRoles": []
+      },
+      "reason": "账号超长"
+    },
+    {
+      "id": "SC11",
+      "schema": "BlockEdit",
+      "expectedValid": true,
+      "value": {
+        "expectedRevision": 3,
+        "content": [
+          {
+            "type": "paragraph",
+            "text": "这是待确认的合成正文。"
+          }
+        ],
+        "sourceVersionIds": [
+          "30000000-0000-4000-8000-000000000001"
+        ]
+      },
+      "reason": "受控正文"
+    },
+    {
+      "id": "SC12",
+      "schema": "BlockEdit",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 3,
+        "content": [
+          {
+            "type": "html",
+            "text": "<script>example</script>"
+          }
+        ]
+      },
+      "reason": "不允许自由HTML结构"
+    },
+    {
+      "id": "SC13",
+      "schema": "AdoptCandidate",
+      "expectedValid": true,
+      "value": {
+        "expectedRevision": 3
+      },
+      "reason": "只提交比较版本，目标来自路径"
+    },
+    {
+      "id": "SC14",
+      "schema": "AdoptCandidate",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 3,
+        "force": true
+      },
+      "reason": "禁止强制覆盖开关"
+    },
+    {
+      "id": "SC15",
+      "schema": "DocumentGenerate",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 0,
+        "blockIds": []
+      },
+      "reason": "空任务范围"
+    },
+    {
+      "id": "SC16",
+      "schema": "DocumentGenerate",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 0,
+        "blockIds": [
+          "50000000-0000-4000-8000-000000000001",
+          "50000000-0000-4000-8000-000000000001"
+        ]
+      },
+      "reason": "重复目标"
+    },
+    {
+      "id": "SC17",
+      "schema": "SearchRequest",
+      "expectedValid": true,
+      "value": {
+        "query": "登录失败如何处理",
+        "projectId": "20000000-0000-4000-8000-000000000001",
+        "limit": 10
+      },
+      "reason": "项目范围检索"
+    },
+    {
+      "id": "SC18",
+      "schema": "SearchRequest",
+      "expectedValid": false,
+      "value": {
+        "query": "全公司资料"
+      },
+      "reason": "没有显式范围"
+    },
+    {
+      "id": "SC19",
+      "schema": "SearchRequest",
+      "expectedValid": false,
+      "value": {
+        "query": "资料",
+        "baseIds": []
+      },
+      "reason": "空范围"
+    },
+    {
+      "id": "SC20",
+      "schema": "SearchRequest",
+      "expectedValid": false,
+      "value": {
+        "query": "资料",
+        "baseIds": [
+          "40000000-0000-4000-8000-000000000001"
+        ],
+        "limit": 100
+      },
+      "reason": "超过检索数量上限"
+    },
+    {
+      "id": "SC21",
+      "schema": "KnowledgeBaseCreate",
+      "expectedValid": true,
+      "value": {
+        "name": "验收项目库",
+        "scope": "project",
+        "projectId": "20000000-0000-4000-8000-000000000001",
+        "ownerId": "10000000-0000-4000-8000-000000000001"
+      },
+      "reason": "项目库明确归属"
+    },
+    {
+      "id": "SC22",
+      "schema": "KnowledgeBaseCreate",
+      "expectedValid": false,
+      "value": {
+        "name": "项目库",
+        "scope": "project",
+        "projectId": null,
+        "ownerId": "10000000-0000-4000-8000-000000000001"
+      },
+      "reason": "项目库不能无项目"
+    },
+    {
+      "id": "SC23",
+      "schema": "ConversationCreate",
+      "expectedValid": true,
+      "value": {
+        "title": "验收公共问答",
+        "projectId": null,
+        "baseIds": [
+          "40000000-0000-4000-8000-000000000001"
+        ],
+        "mode": "qa"
+      },
+      "reason": "公共问答有限范围"
+    },
+    {
+      "id": "SC24",
+      "schema": "ConversationCreate",
+      "expectedValid": false,
+      "value": {
+        "title": "越界写入",
+        "projectId": null,
+        "baseIds": [
+          "40000000-0000-4000-8000-000000000001"
+        ],
+        "mode": "write"
+      },
+      "reason": "项目外不能写入"
+    },
+    {
+      "id": "SC25",
+      "schema": "ReviewDecision",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 1,
+        "decision": "reject",
+        "reason": ""
+      },
+      "reason": "退回必须有原因"
+    },
+    {
+      "id": "SC26",
+      "schema": "ReviewDecision",
+      "expectedValid": true,
+      "value": {
+        "expectedRevision": 1,
+        "decision": "reject",
+        "reason": "缺少来源。"
+      },
+      "reason": "合法退回"
+    },
+    {
+      "id": "SC27",
+      "schema": "ModelProfilePatch",
+      "expectedValid": false,
+      "value": {
+        "expectedRevision": 1,
+        "arbitraryShell": "not allowed"
+      },
+      "reason": "不能通过模型配置传自由命令"
+    },
+    {
+      "id": "SC28",
+      "schema": "VerifyJob",
+      "expectedValid": true,
+      "value": {
+        "expectedRevision": 3,
+        "observedOutcome": "still_unknown",
+        "evidenceIds": [],
+        "reason": "未能确认服务器是否保存。"
+      },
+      "reason": "核实可以仍未知"
+    },
+    {
+      "id": "SC29",
+      "schema": "JobStatus",
+      "expectedValid": false,
+      "value": "done",
+      "reason": "不允许另一套终态"
+    },
+    {
+      "id": "SC30",
+      "schema": "JobStatus",
+      "expectedValid": true,
+      "value": "cancel_requested",
+      "reason": "有取消中状态"
+    },
+    {
+      "id": "SC31",
+      "schema": "ErrorEnvelope",
+      "expectedValid": true,
+      "value": {
+        "error": {
+          "code": "REVISION_CONFLICT",
+          "message": "内容已更新",
+          "currentRevision": 4
+        },
+        "requestId": "fixture-request"
+      },
+      "reason": "规范冲突响应"
+    },
+    {
+      "id": "SC32",
+      "schema": "ErrorEnvelope",
+      "expectedValid": false,
+      "value": {
+        "error": {
+          "code": "INTERNAL_ERROR",
+          "message": "错误",
+          "stack": "secret stack"
+        },
+        "requestId": "fixture-request"
+      },
+      "reason": "响应不允许堆栈字段"
+    },
+    {
+      "id": "SC33",
+      "schema": "ContentImage",
+      "expectedValid": true,
+      "value": {
+        "type": "image",
+        "evidenceId": "a0000000-0000-4000-8000-000000000001",
+        "caption": "合成图题",
+        "alt": "测试截图说明"
+      },
+      "reason": "仅引用证据标识，不传磁盘路径"
+    },
+    {
+      "id": "SC34",
+      "schema": "ContentImage",
+      "expectedValid": false,
+      "value": {
+        "type": "image",
+        "evidenceId": "a0000000-0000-4000-8000-000000000001",
+        "caption": "图题",
+        "alt": "说明",
+        "path": "C:/secret"
+      },
+      "reason": "禁止自由本地图片路径"
+    },
+    {
+      "id": "SC35",
+      "schema": "ModelCandidateOutput",
+      "expectedValid": true,
+      "value": {
+        "targetBlockId": "50000000-0000-4000-8000-000000000001",
+        "baseRevision": 3,
+        "completionState": "complete",
+        "content": [
+          {
+            "type": "paragraph",
+            "text": "验收样例项目甲用于演示受控文档编写、资料核对和交付流程。"
+          }
+        ],
+        "usedFactIds": [
+          "90000000-0000-4000-8000-000000000001",
+          "90000000-0000-4000-8000-000000000002"
+        ],
+        "usedSources": [],
+        "missingInputs": []
+      },
+      "reason": "合规单块候选"
+    },
+    {
+      "id": "SC36",
+      "schema": "ModelCandidateOutput",
+      "expectedValid": true,
+      "value": {
+        "targetBlockId": "50000000-0000-4000-8000-000000000001",
+        "baseRevision": 3,
+        "completionState": "needs_input",
+        "content": [],
+        "usedFactIds": [],
+        "usedSources": [],
+        "missingInputs": [
+          "缺少已确认的软件用途。"
+        ]
+      },
+      "reason": "缺资料明确停止"
+    },
+    {
+      "id": "SC37",
+      "schema": "ModelCandidateOutput",
+      "expectedValid": false,
+      "value": {
+        "targetBlockId": "50000000-0000-4000-8000-000000000001",
+        "baseRevision": 3,
+        "completionState": "needs_input",
+        "content": [
+          {
+            "type": "paragraph",
+            "text": "验收样例项目甲用于演示受控文档编写、资料核对和交付流程。"
+          }
+        ],
+        "usedFactIds": [
+          "90000000-0000-4000-8000-000000000001",
+          "90000000-0000-4000-8000-000000000002"
+        ],
+        "usedSources": [],
+        "missingInputs": [
+          "缺用途"
+        ]
+      },
+      "reason": "缺资料状态不夹带正文"
+    },
+    {
+      "id": "SC38",
+      "schema": "ModelCandidateOutput",
+      "expectedValid": false,
+      "value": {
+        "targetBlockId": "50000000-0000-4000-8000-000000000001",
+        "baseRevision": 3,
+        "completionState": "complete",
+        "content": [
+          {
+            "type": "paragraph",
+            "text": "验收样例项目甲用于演示受控文档编写、资料核对和交付流程。"
+          }
+        ],
+        "usedFactIds": [
+          "90000000-0000-4000-8000-000000000001",
+          "90000000-0000-4000-8000-000000000002"
+        ],
+        "usedSources": [],
+        "missingInputs": [],
+        "font": "宋体"
+      },
+      "reason": "模型不能输出样式字段"
+    }
+  ],
+  "scenarioCases": [
+    {
+      "id": "FLOW-01",
+      "taskId": "DEV-03",
+      "given": "创建测试身份与真实会话，非生产；fixture.user的密码由测试环境安全生成。",
+      "when": "调用getCurrentSession后logout，再复用旧会话。",
+      "then": "旧会话返回401；伪造sessionStorage不改变结果。",
+      "operations": [
+        "login",
+        "getCurrentSession",
+        "logout"
+      ],
+      "reference": "A11"
+    },
+    {
+      "id": "FLOW-02",
+      "taskId": "DEV-05",
+      "given": "项目甲仅owner/reviewer可读，outsider仅能读项目乙。",
+      "when": "outsider请求getProject甲、listProjects及甲文件。",
+      "then": "对象拒绝/按防枚举策略隐藏；列表total与文件下载不泄漏甲。",
+      "operations": [
+        "getProject",
+        "listProjects",
+        "downloadFile"
+      ],
+      "reference": "A04"
+    },
+    {
+      "id": "FLOW-03",
+      "taskId": "DEV-05",
+      "given": "至少21条隔离测试项目，名称与部门条件有交叉但不相同。",
+      "when": "在实际UI提交AND查询、翻页、重置和刷新。",
+      "then": "可见行/total一致，名称未提交时不变化，数据实际持久化。",
+      "operations": [
+        "listProjects"
+      ],
+      "reference": "A03"
+    },
+    {
+      "id": "FLOW-04",
+      "taskId": "DEV-08",
+      "given": "模板有blocks，但没有通过试填与办公环境检查。",
+      "when": "调用publishTemplateVersion。",
+      "then": "拒绝发布并定位缺少材料，不因数组非空而成功。",
+      "operations": [
+        "publishTemplateVersion"
+      ],
+      "reference": "A16"
+    },
+    {
+      "id": "FLOW-05",
+      "taskId": "DEV-10",
+      "given": "资料世代1已发布，世代2处理中失败。",
+      "when": "持续检索并读取世代1引用。",
+      "then": "检索不混入半个世代2，错误明确，旧授权引用可读。",
+      "operations": [
+        "processSourceVersion",
+        "searchKnowledge",
+        "getSourceVersion"
+      ],
+      "reference": "A20"
+    },
+    {
+      "id": "FLOW-06",
+      "taskId": "DEV-10",
+      "given": "包含可回答、无依据、受限和相互矛盾资料。",
+      "when": "按用户范围searchKnowledge。",
+      "then": "只返回授权来源；无命中不是依赖错误；页码不能猜测。",
+      "operations": [
+        "searchKnowledge"
+      ],
+      "reference": "A21"
+    },
+    {
+      "id": "FLOW-07",
+      "taskId": "DEV-15",
+      "given": "blockA当前revision=3；candidate基于3；人工已保存至4。",
+      "when": "采用candidate，expectedRevision仍为3。",
+      "then": "409，当前r4与批准版不变，候选保留可比较。",
+      "operations": [
+        "saveBlockDraft",
+        "adoptBlockCandidate"
+      ],
+      "reference": "B01"
+    },
+    {
+      "id": "FLOW-08",
+      "taskId": "DEV-12",
+      "given": "非幂等页面提交已发出但响应未知。",
+      "when": "取消并尝试resume。",
+      "then": "取消请求/待核实真实显示，不重放；核实后才决定后续状态。",
+      "operations": [
+        "cancelJob",
+        "resumeJob",
+        "verifyJobOutcome"
+      ],
+      "reference": "B02"
+    },
+    {
+      "id": "FLOW-09",
+      "taskId": "DEV-13",
+      "given": "合同允许blockA和sourceA，固定测试模型返回其他块或sourceB。",
+      "when": "执行generateBlock的保存门禁。",
+      "then": "拒绝越界，项目乙和当前正文未变化；候选与日志按范围保存。",
+      "operations": [
+        "generateBlock"
+      ],
+      "reference": "A09"
+    },
+    {
+      "id": "FLOW-10",
+      "taskId": "DEV-14",
+      "given": "中文输入法正在组合文字，随后SSE断线。",
+      "when": "按Enter，再恢复页面和事件流。",
+      "then": "不误发；只恢复原任务，sequence去重，输入可恢复。",
+      "operations": [
+        "sendMessage",
+        "streamJobEvents",
+        "getJob"
+      ],
+      "reference": "A26/A27"
+    },
+    {
+      "id": "FLOW-11",
+      "taskId": "DEV-16",
+      "given": "输出快照锁定后项目事实发生变化。",
+      "when": "导出合成测试报告。",
+      "then": "只用锁定版本或明确重新开始，不混合新旧事实；正式发布有环境检查。",
+      "operations": [
+        "exportDocument",
+        "createDelivery"
+      ],
+      "reference": "A43"
+    },
+    {
+      "id": "FLOW-12",
+      "taskId": "DEV-19",
+      "given": "批准的一种语言提供成功、断言失败和无法编译样例。",
+      "when": "startTestRun并重跑失败样例。",
+      "then": "分类真实，不改业务代码求过；旧失败和分母保留。",
+      "operations": [
+        "startTestRun",
+        "getTestRun",
+        "listTestSteps"
+      ],
+      "reference": "A32/A34"
+    },
+    {
+      "id": "FLOW-13",
+      "taskId": "DEV-20",
+      "given": "截图可取得但业务断言不满足。",
+      "when": "执行授权功能用例。",
+      "then": "用例不通过；截图是失败证据，不因图存在而通过。",
+      "operations": [
+        "startTestRun",
+        "listRunEvidence"
+      ],
+      "reference": "A36"
+    },
+    {
+      "id": "FLOW-14",
+      "taskId": "DEV-21",
+      "given": "当前软件与旧截图版本不同，且原图含待脱敏数据。",
+      "when": "选择手册素材并重写描述。",
+      "then": "要求复核/脱敏；保留原图关系，重写不重新执行。",
+      "operations": [
+        "startManualCapture",
+        "saveBlockDraft"
+      ],
+      "reference": "A39/A40"
+    },
+    {
+      "id": "FLOW-15",
+      "taskId": "DEV-22",
+      "given": "审计摘要与原始敏感输入分开；读者无导出权。",
+      "when": "读取并尝试导出审计。",
+      "then": "不能看到秘密，导出被拒绝；有权导出仍按同一范围。",
+      "operations": [
+        "listAuditEvents",
+        "getAuditEvent",
+        "exportAuditEvents"
+      ],
+      "reference": "A46"
+    },
+    {
+      "id": "FLOW-16",
+      "taskId": "DEV-23",
+      "given": "所有当前变更页面及批准样例。",
+      "when": "固定5173真实操作，1920×1080截图看图。",
+      "then": "对齐/溢出/焦点/空错态/按钮分页都通过，证据对应当前代码。",
+      "operations": [],
+      "reference": "A47"
+    }
+  ],
+  "notes": [
+    "schema检查只证明结构，不证明授权、业务结论、运行环境或Word格式。",
+    "场景尚未执行；真实模型、代码、浏览器与Word样例需按决策单另行提供。"
+  ]
+}

@@ -1,0 +1,75 @@
+:root {
+  color-scheme: light;
+  --desk: #f4f6f8;
+  --sheet: #ffffff;
+  --ink: #182534;
+  --ink-secondary: #536477;
+  --ink-tertiary: #5c6e82;
+  --stamp: #2876d7;
+  --stamp-press: #1d5fb0;
+  --on-stamp: #ffffff;
+  --stamp-wash: rgba(40, 118, 215, 0.1);
+  --ok: #267149;
+  --ok-wash: #e8f6ee;
+  --warn: #9d6400;
+  --warn-wash: #fff7e6;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-md: 16px;
+  --rule: rgba(24, 37, 52, 0.1);
+  --rule-strong: rgba(24, 37, 52, 0.18);
+  --inset: #e6edf3;
+  --inset-border: rgba(24, 37, 52, 0.12);
+  --focus-ring: rgba(36, 84, 166, 0.22);
+  --fault: #b42318;
+  --fault-ink: #8e1e16;
+  --fault-wash: #f8f1f0;
+  --spine: #182534;
+  --spine-ink: #e7edf3;
+  --spine-muted: #c5d0dc;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --radius-control: 4px;
+  --radius-sheet: 2px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  max-width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  background: var(--desk);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(36, 84, 166, 0.16);
+}

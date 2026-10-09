@@ -1,0 +1,1678 @@
+{
+  "version": "0.1.0-design",
+  "date": "2026-09-27",
+  "businessCodeImplemented": false,
+  "contractPath": "D:/项目/智能化/docs/执行规格/contracts/openapi.json",
+  "entryPath": "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+  "executionRules": {
+    "taskIdsAreOrder": false,
+    "chooseReadyTask": "按dependsOn与当前任务相关decisionGates选就绪项；不把不相关决策当全局阻塞。",
+    "oneTaskPerIteration": true,
+    "sharedWritesRequireCoordination": [
+      "D:/项目/智能化/web/src/router.ts",
+      "D:/项目/智能化/web/src/styles/base.css",
+      "D:/项目/智能化/web/src/styles/console.css",
+      "D:/项目/智能化/server/app/main.py",
+      "D:/项目/智能化/server/app/models.py",
+      "D:/项目/智能化/server/migrations",
+      "D:/项目/智能化/web/src/views/ProjectTestsView.vue",
+      "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue"
+    ],
+    "frontendAcceptance": "修改前端必须在http://localhost:5173实际操作并查看1920×1080截图；未看图不得完成。",
+    "doNot": "不改原始模板、AGENTS、未授权项目或生产环境；不擅自加UI库、模型或自由shell入口。",
+    "dependencyCommands": "根据已批准栈和实际文件准备；不存在的脚本不得报告已运行。"
+  },
+  "tasks": [
+    {
+      "id": "DEV-00",
+      "title": "核对基线并登记当前可执行范围",
+      "status": "not_started",
+      "dependsOn": [],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/docs/交接/回报/DEV-00.md",
+        "D:/项目/智能化/docs/交接/04-开工输入与决策记录.md"
+      ],
+      "operationIds": [],
+      "implementationSteps": [
+        "读AGENTS与本执行入口；核对现有源码/工具/端口，不修改业务文件。",
+        "核对合同和任务图；只询问阻塞下一任务的决策，批准记录有实际依据。",
+        "报告下一就绪任务，不再重写总体方案。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-00-AC01",
+          "given": "已有工作区",
+          "when": "核对文件和当前状态",
+          "then": "区分原型、规划和实际实现，没有虚构后端或截图。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-00-AC02",
+          "given": "后端选型未批准",
+          "when": "选择后续任务",
+          "then": "独立UI任务仍可选；后端任务标明D02阻塞，不自行安装。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "基线回报、可用工具、实际决策状态、下一个任务"
+      ],
+      "regressionReferences": [
+        "B08"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-00.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-01",
+      "title": "六模块导航与现有页面状态基线",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-00"
+      ],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/web/src/router.ts",
+        "D:/项目/智能化/web/src/layouts/AppShell.vue",
+        "D:/项目/智能化/web/src/components/NavItem.vue",
+        "D:/项目/智能化/web/src/views/HomeView.vue",
+        "D:/项目/智能化/web/src/views/ProjectsView.vue",
+        "D:/项目/智能化/web/src/views/UsersView.vue",
+        "D:/项目/智能化/web/src/views/KnowledgeView.vue",
+        "D:/项目/智能化/web/src/views/AssistantView.vue",
+        "D:/项目/智能化/web/src/views/SettingsView.vue",
+        "D:/项目/智能化/web/src/styles/console.css"
+      ],
+      "operationIds": [],
+      "implementationSteps": [
+        "按页面实施规格调整六入口，/users为入口并兼容/system/users；模板留在系统模块。",
+        "复用控件与令牌；已有数据逻辑仅作为明确原型，不新增模拟成功业务。",
+        "补当前页面加载/空/错误展示结构和未接入原因；按1920×1080固定桌面布局，修改后截图看图。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-01-AC01",
+          "given": "现有Vue工程",
+          "when": "点击六入口及旧用户地址",
+          "then": "导航正确、无重复用户菜单、不出现模板或文档编号。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-01-AC02",
+          "given": "固定1920×1080桌面",
+          "when": "查看正常/空/错误与焦点",
+          "then": "无裁剪溢出，真实点击可操作，截图有当前版本记录。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "受影响Vue文件、build结果、页面截图和明确未联调项"
+      ],
+      "regressionReferences": [
+        "A18",
+        "A47"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-01.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-02",
+      "title": "建立可持久化的后端与文件基础",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-00"
+      ],
+      "decisionGates": [
+        "D02",
+        "D12"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/pyproject.toml",
+        "D:/项目/智能化/server/app/main.py",
+        "D:/项目/智能化/server/app/config.py",
+        "D:/项目/智能化/server/app/db.py",
+        "D:/项目/智能化/server/app/models.py",
+        "D:/项目/智能化/server/app/errors.py",
+        "D:/项目/智能化/server/app/files.py",
+        "D:/项目/智能化/server/migrations",
+        "D:/项目/智能化/server/tests/test_foundation.py",
+        "D:/项目/智能化/web/vite.config.ts"
+      ],
+      "operationIds": [
+        "getHealth",
+        "uploadFile",
+        "downloadFile",
+        "previewFile"
+      ],
+      "implementationSteps": [
+        "使用已确认的后端方案建立应用与迁移；若采用推荐栈按服务端实施规则建表。",
+        "配置同源/api代理，前端端口固定5173；文件原件在服务端数据区不公开目录。",
+        "统一错误/请求标识/事务；文件先临时写、校验，再提交记录；写操作安全检查与身份服务联调后开放。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-02-AC01",
+          "given": "空隔离数据库与批准目录",
+          "when": "应用迁移并重启",
+          "then": "基础表与文件元数据持久，健康接口不泄密。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-02-AC02",
+          "given": "未认证或路径越界文件请求",
+          "when": "尝试读取或上传",
+          "then": "拒绝；不能因基础阶段缺认证而公开文件写入。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "服务骨架、迁移、配置样例、基础测试；无默认秘密"
+      ],
+      "regressionReferences": [
+        "A04",
+        "A24",
+        "A46"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-02.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-03",
+      "title": "真实登录会话与前端身份替换",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-02"
+      ],
+      "decisionGates": [
+        "D03",
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/identity.py",
+        "D:/项目/智能化/server/app/permissions.py",
+        "D:/项目/智能化/server/app/bootstrap_admin.py",
+        "D:/项目/智能化/server/app/main.py",
+        "D:/项目/智能化/server/tests/test_identity.py",
+        "D:/项目/智能化/web/src/api/client.ts",
+        "D:/项目/智能化/web/src/api/identity.ts",
+        "D:/项目/智能化/web/src/session.ts",
+        "D:/项目/智能化/web/src/views/SignIn.vue",
+        "D:/项目/智能化/web/src/router.ts",
+        "D:/项目/智能化/web/src/api/files.ts"
+      ],
+      "operationIds": [
+        "getCsrf",
+        "login",
+        "getCurrentSession",
+        "logout",
+        "changePassword"
+      ],
+      "implementationSteps": [
+        "实现实际认证、会话撤销和CSRF；首次管理员仅受控引导，不提供公共注册或固定密码。",
+        "路由通过/auth/me恢复身份，删除将sessionStorage存在当认证的路径。",
+        "保留登录表单/焦点/失败输入，所有错误不回显密码，登录失败不能用定时器成功。",
+        "API客户端统一处理同源cookie/CSRF、JSON或FormData、204、超时、AbortSignal及规范错误；文件上传/下载复用api/files.ts，不另写多套fetch。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-03-AC01",
+          "given": "合法与非法账号/会话",
+          "when": "登录、退出、再次访问",
+          "then": "只有真实验证成功可进入；退出后服务端拒绝旧会话。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-03-AC02",
+          "given": "localStorage被修改",
+          "when": "调用受保护接口",
+          "then": "仍被服务端授权规则限制。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "认证实现、迁移或引导说明、API测试、登录截图"
+      ],
+      "regressionReferences": [
+        "A11",
+        "A12",
+        "A46"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-03.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-04",
+      "title": "用户管理与角色会话操作",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-03"
+      ],
+      "decisionGates": [
+        "D03",
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/users.py",
+        "D:/项目/智能化/server/app/permissions.py",
+        "D:/项目/智能化/server/tests/test_users.py",
+        "D:/项目/智能化/web/src/api/users.ts",
+        "D:/项目/智能化/web/src/system.ts",
+        "D:/项目/智能化/web/src/views/UsersView.vue",
+        "D:/项目/智能化/web/src/views/RolesView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listUsers",
+        "createUser",
+        "updateUser",
+        "setUserRoles",
+        "disableUser",
+        "enableUser",
+        "resetCredentials",
+        "revokeUserSessions",
+        "listRoleDefinitions"
+      ],
+      "implementationSteps": [
+        "真实API替换本地用户存储；按字段合同和权限显示操作。",
+        "新增/启停/重置/角色变更带修订和原因；账号唯一、最后管理员保护。",
+        "停用触发会话失效及后续执行权限检查，不删除责任历史。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-04-AC01",
+          "given": "普通用户与管理员",
+          "when": "分别读取/修改账号",
+          "then": "权限正确，密码或凭据不出列表。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-04-AC02",
+          "given": "最后管理员或正在执行任务的用户",
+          "when": "尝试停用",
+          "then": "最后管理员拒绝；普通停用撤权并保留任务待核实状态。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "用户CRUD与授权测试、列表表单三态截图"
+      ],
+      "regressionReferences": [
+        "A11",
+        "A12",
+        "A13",
+        "A14"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-04.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-05",
+      "title": "项目与成员真实业务闭环",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-04"
+      ],
+      "decisionGates": [
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/projects.py",
+        "D:/项目/智能化/server/tests/test_projects.py",
+        "D:/项目/智能化/web/src/api/projects.ts",
+        "D:/项目/智能化/web/src/projects.ts",
+        "D:/项目/智能化/web/src/views/ProjectsView.vue",
+        "D:/项目/智能化/web/src/views/ProjectDetailView.vue"
+      ],
+      "operationIds": [
+        "listProjects",
+        "createProject",
+        "getProject",
+        "updateProject",
+        "archiveProject",
+        "unarchiveProject",
+        "listProjectMembers",
+        "setProjectMember",
+        "removeProjectMember"
+      ],
+      "implementationSteps": [
+        "新建项目与owner成员同事务；负责人通过userId选择，禁止任意姓名映射成权限。",
+        "实现名称/部门/负责人/状态AND查询、分页与稳定排序，移除运行时演示注入。",
+        "成员授权、归档影响和版本冲突真实反馈；保留用户旧本地数据直到批准迁移。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-05-AC01",
+          "given": "两个隔离项目",
+          "when": "查询、深链或猜ID",
+          "then": "只返回授权项目，total不泄漏其他项目。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-05-AC02",
+          "given": "至少两页合法项目数据",
+          "when": "查询/重置/分页/创建/刷新",
+          "then": "结果、总数、页码和持久化一致。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "项目成员API、权限与事务测试、1920×1080截图"
+      ],
+      "regressionReferences": [
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A24"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-05.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-06",
+      "title": "项目事实与知识关联",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-09"
+      ],
+      "decisionGates": [
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/facts.py",
+        "D:/项目/智能化/server/app/projects.py",
+        "D:/项目/智能化/server/tests/test_facts.py",
+        "D:/项目/智能化/web/src/api/facts.ts",
+        "D:/项目/智能化/web/src/views/ProjectMaterialsView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listProjectFacts",
+        "createFactCandidate",
+        "reviseFact",
+        "confirmFact",
+        "listProjectKnowledgeBindings",
+        "setProjectKnowledgeBindings"
+      ],
+      "implementationSteps": [
+        "候选事实和已确认值分开；来源存在且属于允许范围。",
+        "确认写新修订并产生影响事件；修改旧事实不能改旧基线。",
+        "知识绑定先按合同实现，尚未建立的库不给假选项，待DEV09联调。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-06-AC01",
+          "given": "已确认事实及旧引用",
+          "when": "提出修改并确认",
+          "then": "原版保留，下游标复核。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-06-AC02",
+          "given": "其他项目来源或无权知识库",
+          "when": "尝试关联",
+          "then": "拒绝而非复制资料绕过权限。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "事实与来源API、材料页、修订测试"
+      ],
+      "regressionReferences": [
+        "A08",
+        "A21",
+        "B04"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-06.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-07",
+      "title": "系统模型环境与配置界面",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-03"
+      ],
+      "decisionGates": [
+        "D01",
+        "D10",
+        "D12"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/system.py",
+        "D:/项目/智能化/server/app/model_adapter.py",
+        "D:/项目/智能化/server/tests/test_system.py",
+        "D:/项目/智能化/web/src/api/system.ts",
+        "D:/项目/智能化/web/src/system.ts",
+        "D:/项目/智能化/web/src/views/SettingsView.vue",
+        "D:/项目/智能化/web/src/views/EnvironmentsView.vue",
+        "D:/项目/智能化/web/src/router.ts",
+        "D:/项目/智能化/web/src/views/RulesView.vue"
+      ],
+      "operationIds": [
+        "getSettings",
+        "updateSettings",
+        "listModelProfiles",
+        "createModelProfile",
+        "updateModelProfile",
+        "testModelProfile",
+        "listEnvironments",
+        "createEnvironment",
+        "updateEnvironment",
+        "listEffectiveRules",
+        "getEnvironment",
+        "verifyEnvironment"
+      ],
+      "implementationSteps": [
+        "元数据配置可先开发；真实模型或环境探测只在对应决策和网络授权满足后执行。",
+        "密钥仅替换/清除，不回显；适配器和执行环境来自批准注册表，不从上传内容动态执行。",
+        "连接成功、能力已验证、环境可用分别显示；参数下限上限遵schema并配置资源预算。",
+        "角色定义与公共规则页只读；用户/项目角色分配走各自既有接口，公共规则维护回设置或模板，不造策略编辑器。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-07-AC01",
+          "given": "保存带凭据的配置",
+          "when": "刷新/导出/查看日志",
+          "then": "不泄漏凭据，未探测能力不标已通过。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-07-AC02",
+          "given": "未授权地址或不可用环境",
+          "when": "测试连接/开启工具",
+          "then": "拒绝或明确失败，不显示伪成功。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "配置接口、脱敏测试、配置状态截图和真实能力记录"
+      ],
+      "regressionReferences": [
+        "A15",
+        "A46"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-07.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-08",
+      "title": "模板包与试填发布管理",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-12"
+      ],
+      "decisionGates": [
+        "D06",
+        "D07"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/templates.py",
+        "D:/项目/智能化/server/app/docx_renderer.py",
+        "D:/项目/智能化/server/tests/test_templates.py",
+        "D:/项目/智能化/web/src/api/templates.ts",
+        "D:/项目/智能化/web/src/templates.ts",
+        "D:/项目/智能化/web/src/views/TemplatesView.vue",
+        "D:/项目/智能化/web/src/views/TemplateDetailView.vue",
+        "D:/项目/智能化/data/template-packages"
+      ],
+      "operationIds": [
+        "listTemplates",
+        "createTemplate",
+        "getTemplate",
+        "listTemplateVersions",
+        "createTemplateVersion",
+        "getTemplateVersion",
+        "validateTemplateVersion",
+        "publishTemplateVersion",
+        "updateTemplateVersionDraft",
+        "approveTemplateFormat"
+      ],
+      "implementationSteps": [
+        "登记原件和副本，原始20模板不动；区分固定、事实、正文、图片、表格、重复块。",
+        "按块任务规范写真实Skill/rules文件，字段类型与内容输出一致；没有真实映射就未适配。",
+        "试填/目标办公环境确认后发布不可变包；项目不会自动升级。",
+        "格式确认有明确approveTemplateFormat接口和证据，不能凭前端勾选或自动验证job成功就伪造人工批准。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-08-AC01",
+          "given": "仅有非空blocks数组",
+          "when": "申请发布",
+          "then": "缺样例与格式确认仍拒绝。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-08-AC02",
+          "given": "长表、多图、缺必填与特殊字符",
+          "when": "试填并在指定软件看结果",
+          "then": "规则和实际页面通过后才可发布。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "机器化模板副本、Skill与规则、样例输入输出、验证/发布记录"
+      ],
+      "regressionReferences": [
+        "A16",
+        "A17",
+        "A41"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-08.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-09",
+      "title": "知识库与原件生命周期",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05"
+      ],
+      "decisionGates": [
+        "D08",
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/knowledge.py",
+        "D:/项目/智能化/server/tests/test_knowledge_access.py",
+        "D:/项目/智能化/web/src/api/knowledge.ts",
+        "D:/项目/智能化/web/src/knowledge.ts",
+        "D:/项目/智能化/web/src/views/KnowledgeView.vue",
+        "D:/项目/智能化/web/src/views/KnowledgeDetailView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listKnowledgeBases",
+        "createKnowledgeBase",
+        "getKnowledgeBase",
+        "updateKnowledgeBase",
+        "setKnowledgeAccess",
+        "archiveKnowledgeBase",
+        "listSources",
+        "createSource",
+        "getSourceVersion",
+        "createSourceVersion",
+        "retireSource"
+      ],
+      "implementationSteps": [
+        "实现库归属、读者维护者、资料版本和上传元数据；文件权限继承且服务器复查。",
+        "批量文件逐项显示失败，不把上传成功当可检索。",
+        "停用与引用检查，不直接删除被正式基线使用的原件。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-09-AC01",
+          "given": "同名/重复/不同版本文件",
+          "when": "登记与更新",
+          "then": "版本明确，不静默覆盖。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-09-AC02",
+          "given": "范围收紧或其他用户",
+          "when": "搜索列表/文件预览/下载",
+          "then": "均重新鉴权，无元数据泄漏。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "库与资料API、生命周期测试、上传错误与列表截图"
+      ],
+      "regressionReferences": [
+        "A19",
+        "A20",
+        "A22",
+        "A23"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-09.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-10",
+      "title": "解析索引检索与引用",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-09",
+        "DEV-12"
+      ],
+      "decisionGates": [
+        "D08"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/knowledge_parser.py",
+        "D:/项目/智能化/server/app/knowledge_search.py",
+        "D:/项目/智能化/server/tests/test_knowledge_pipeline.py",
+        "D:/项目/智能化/web/src/views/KnowledgeDetailView.vue"
+      ],
+      "operationIds": [
+        "processSourceVersion",
+        "publishSourceVersion",
+        "searchKnowledge"
+      ],
+      "implementationSteps": [
+        "按批准格式解析原件、保存定位；扫描件无OCR能力时needs_input。",
+        "新generation完整后原子发布，不混用新旧片段；历史引用仍指原版本。",
+        "先权限过滤再词法检索，返回来源、版本和已核实定位；暂不增加独立向量平台。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-10-AC01",
+          "given": "中文问题、无答案和受限来源",
+          "when": "检索",
+          "then": "命中能回原文，无依据与服务失败明确区别。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-10-AC02",
+          "given": "重建过程中失败",
+          "when": "继续检索旧版本",
+          "then": "可用旧发布世代不被半成品替换。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "解析与检索服务、引用样例、失败/权限测试和检索页面证据"
+      ],
+      "regressionReferences": [
+        "A19",
+        "A20",
+        "A21",
+        "A22"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-10.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-11",
+      "title": "文档实例与内容块编辑",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-08"
+      ],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/documents.py",
+        "D:/项目/智能化/server/tests/test_documents.py",
+        "D:/项目/智能化/web/src/api/documents.ts",
+        "D:/项目/智能化/web/src/views/ProjectDocumentsView.vue",
+        "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listDocuments",
+        "createDocument",
+        "getDocument",
+        "listDocumentBlocks",
+        "getBlock",
+        "listBlockRevisions",
+        "saveBlockDraft"
+      ],
+      "implementationSteps": [
+        "按已发布模板实例化块，名称/用途/版本识别，无编号表单。",
+        "目录/正文/依据区按页面规格实施，固定和计算项只读；正文采用受控语义结构。",
+        "保存携带expectedRevision；冲突保留用户输入，批准版不可原地改写。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-11-AC01",
+          "given": "同块同时编辑",
+          "when": "保存旧修订",
+          "then": "409并保留双方内容。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-11-AC02",
+          "given": "固定事实块或计算块",
+          "when": "提交自由改动",
+          "then": "服务器拒绝，UI解释修改入口。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "文档块接口、工作台编辑、冲突测试与各宽度截图"
+      ],
+      "regressionReferences": [
+        "A07",
+        "A18",
+        "A40"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-11.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-12",
+      "title": "持久任务执行器和事件流",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-02",
+        "DEV-03"
+      ],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/jobs.py",
+        "D:/项目/智能化/server/app/worker.py",
+        "D:/项目/智能化/server/app/job_events.py",
+        "D:/项目/智能化/server/tests/test_jobs.py",
+        "D:/项目/智能化/web/src/api/jobs.ts"
+      ],
+      "operationIds": [
+        "listJobs",
+        "getJob",
+        "streamJobEvents",
+        "pauseJob",
+        "resumeJob",
+        "cancelJob",
+        "verifyJobOutcome"
+      ],
+      "implementationSteps": [
+        "数据库任务/步骤/事件，短事务领取、租约、fencing、有限重试；无额外队列平台。",
+        "完整实现10状态，暂停/取消中与待核实不混淆；纯函数步骤可安全恢复。",
+        "SSE有sequence与快照恢复，断线不重新执行，外部未知副作用不重放。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-12-AC01",
+          "given": "worker中断或旧租约晚到",
+          "when": "恢复与提交结果",
+          "then": "不覆盖新执行结果，检查点可追溯。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-12-AC02",
+          "given": "待核实的提交动作",
+          "when": "请求取消或resume",
+          "then": "不盲目重试，停止意图保留，状态真实。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "任务worker、重启/重复提交/断线测试及日志"
+      ],
+      "regressionReferences": [
+        "A27",
+        "A28",
+        "A29",
+        "B02",
+        "B03"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-12.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-13",
+      "title": "单Agent分块执行与来源校验",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-06",
+        "DEV-07",
+        "DEV-10",
+        "DEV-11",
+        "DEV-12"
+      ],
+      "decisionGates": [
+        "D01"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/agent.py",
+        "D:/项目/智能化/server/app/context_builder.py",
+        "D:/项目/智能化/server/app/block_rules.py",
+        "D:/项目/智能化/server/tests/test_agent_scope.py"
+      ],
+      "operationIds": [
+        "generateBlock",
+        "generateDocumentBlocks"
+      ],
+      "implementationSteps": [
+        "按块任务合同组装项目记忆与来源快照，每轮一个目标；工具请求通过注册表而非自由shell。",
+        "模型只提交受控BlockContent；校验范围、来源、版本和预算，输出作为候选不切当前稿。",
+        "缺资料产生明确待办，部分完成汇总真实；最后整篇检查只产问题不重写全文。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-13-AC01",
+          "given": "固定模型返回越界字段/别项目引用",
+          "when": "运行校验步骤",
+          "then": "拒绝且不修改其他块。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-13-AC02",
+          "given": "真实本地模型与批准材料",
+          "when": "连续多轮生成",
+          "then": "来源与修订可追溯，缺资料停机，不需用户反复发继续。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "单Agent执行器、块规则、模拟门禁测试和独立真实模型样例"
+      ],
+      "regressionReferences": [
+        "A09",
+        "A10",
+        "A25",
+        "A29",
+        "B01",
+        "B03"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-13.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-14",
+      "title": "助手会话与任务卡联动",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-01",
+        "DEV-13"
+      ],
+      "decisionGates": [
+        "D01"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/conversations.py",
+        "D:/项目/智能化/server/tests/test_conversations.py",
+        "D:/项目/智能化/web/src/api/assistant.ts",
+        "D:/项目/智能化/web/src/assistant.ts",
+        "D:/项目/智能化/web/src/views/AssistantView.vue",
+        "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listConversations",
+        "createConversation",
+        "getConversation",
+        "listMessages",
+        "sendMessage",
+        "startAssistantTask",
+        "listJobs",
+        "getJob",
+        "streamJobEvents",
+        "pauseJob",
+        "resumeJob",
+        "cancelJob"
+      ],
+      "implementationSteps": [
+        "会话固定项目或明确公共库范围；默认本人可见，后续读取重新检查来源权限。",
+        "QA和写入/执行模式分开；已有任务共享jobId，不从文档面板与助手重复创建。",
+        "处理中文输入法、消息失败恢复、SSE去重/断线快照、候选采用入口。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-14-AC01",
+          "given": "中文输入法组合中Enter及网络重连",
+          "when": "发送消息/恢复任务",
+          "then": "不误发、不重复运行、不丢历史。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-14-AC02",
+          "given": "同一块任务在两个入口打开",
+          "when": "查看进度并暂停",
+          "then": "同一真实状态；缺资料可定位，不自动授予工具权限。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "会话API、任务卡UI、范围与断线测试、1920×1080截图"
+      ],
+      "regressionReferences": [
+        "A26",
+        "A27",
+        "A30"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-14.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-15",
+      "title": "候选采用和逐修订审核",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-11",
+        "DEV-12"
+      ],
+      "decisionGates": [
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/reviews.py",
+        "D:/项目/智能化/server/app/documents.py",
+        "D:/项目/智能化/server/tests/test_candidate_review.py",
+        "D:/项目/智能化/web/src/api/reviews.ts",
+        "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue",
+        "D:/项目/智能化/web/src/views/ProjectReviewsView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "adoptBlockCandidate",
+        "discardBlockCandidate",
+        "listReviews",
+        "createReview",
+        "decideReview"
+      ],
+      "implementationSteps": [
+        "候选/当前稿/批准版分开；CAS核对块revision和候选baseRevision，部分采用另存修订。",
+        "审批只作用具体修订，退回要理由；编审政策未定不默认允许自批。",
+        "UI显示保存、候选生成、采用、批准的不同结果，差异与依据并排。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-15-AC01",
+          "given": "r3生成候选后人工改r4",
+          "when": "采用旧候选",
+          "then": "409，r4和批准版不变，候选仍可比较。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-15-AC02",
+          "given": "已批准修订有后续修改",
+          "when": "保存新工作稿",
+          "then": "旧批准保留，新稿须另审，不自动继承批准。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "采用/审核服务、冲突测试、差异与审核页面截图"
+      ],
+      "regressionReferences": [
+        "A07",
+        "B01"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-15.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-16",
+      "title": "Word导出与不可变交付",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-08",
+        "DEV-11",
+        "DEV-12",
+        "DEV-15"
+      ],
+      "decisionGates": [
+        "D06",
+        "D07",
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/exports.py",
+        "D:/项目/智能化/server/app/deliveries.py",
+        "D:/项目/智能化/server/tests/test_exports.py",
+        "D:/项目/智能化/web/src/api/exports.ts",
+        "D:/项目/智能化/web/src/views/ProjectReviewsView.vue",
+        "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue"
+      ],
+      "operationIds": [
+        "exportDocument",
+        "listDeliveries",
+        "createDelivery",
+        "getDelivery",
+        "approveExportFormat"
+      ],
+      "implementationSteps": [
+        "冻结内容/事实/模板/证据快照；纯程序填充，不重新调用模型或测试。",
+        "草稿与正式门禁分开，目录/图表/引用/布局按真实办公链处理；正式发布须有检查记录。",
+        "生成物文件校验后提交基线；失败保留诊断，不能半发布；下载再次鉴权。",
+        "需要人工排版检查的导出停在waiting_input，仅对锁定文件快照执行approveExportFormat，拒绝过期或不匹配检查。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-16-AC01",
+          "given": "内容有真实失败结果但证据完整获批",
+          "when": "导出测试报告",
+          "then": "如实显示失败，不篡改通过。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-16-AC02",
+          "given": "导出期间上游变化",
+          "when": "完成本次输出",
+          "then": "使用原锁定快照或明确重启，不混合版本。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "渲染器、导出/基线测试、合格Word及截图、环境记录"
+      ],
+      "regressionReferences": [
+        "A40",
+        "A41",
+        "A42",
+        "A43",
+        "B06"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-16.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-17",
+      "title": "工作台真实待办与进度聚合",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-06",
+        "DEV-12",
+        "DEV-15"
+      ],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/workbench.py",
+        "D:/项目/智能化/server/tests/test_workbench.py",
+        "D:/项目/智能化/web/src/api/workbench.ts",
+        "D:/项目/智能化/web/src/views/HomeView.vue"
+      ],
+      "operationIds": [
+        "getWorkbench",
+        "listIssues"
+      ],
+      "implementationSteps": [
+        "按权限聚合待办、最近项目与运行任务；同一问题唯一键去重，不复制业务状态。",
+        "处理入口指向实际块/问题/运行；来源问题解决后待办关闭，已读不等于完成。",
+        "各区独立加载/报错，不做假KPI；新建项目跳转真实创建区。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-17-AC01",
+          "given": "无待办与后端故障",
+          "when": "打开工作台",
+          "then": "空态与错误不同，其他成功区域保留。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-17-AC02",
+          "given": "有需审核块或缺材料",
+          "when": "点击处理并解决",
+          "then": "定位正确，真实解决后列表变化。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "聚合API、权限/定位测试、工作台截图"
+      ],
+      "regressionReferences": [
+        "A01",
+        "A02"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-17.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-18",
+      "title": "跨文档引用与变更影响",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-06",
+        "DEV-11",
+        "DEV-15"
+      ],
+      "decisionGates": [],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/relations.py",
+        "D:/项目/智能化/server/tests/test_relations.py",
+        "D:/项目/智能化/web/src/api/relations.ts",
+        "D:/项目/智能化/web/src/views/ProjectRelationsView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "listRelations",
+        "listImpacts",
+        "resolveImpact"
+      ],
+      "implementationSteps": [
+        "稳定对象与修订关联；引用可双向，生成依赖无环，不能把序号当ID。",
+        "上游确认触发影响记录，分类复核/重测/重采集/引用确认；现有内容不静默改。",
+        "处理影响保存真实行动与理由，不以关闭告警替代运行。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-18-AC01",
+          "given": "需求值变化",
+          "when": "确认并查看影响",
+          "then": "相关块/用例可定位，旧运行与基线不变。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-18-AC02",
+          "given": "循环生成依赖",
+          "when": "安排任务",
+          "then": "明确阻塞并定位循环，不无限互相重写。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "关系数据、影响服务与测试、关系页截图"
+      ],
+      "regressionReferences": [
+        "A08",
+        "A18",
+        "B03"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-18.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-19",
+      "title": "函数测试的批准范围与真实运行",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-07",
+        "DEV-12",
+        "DEV-13",
+        "DEV-24"
+      ],
+      "decisionGates": [
+        "D04",
+        "D09",
+        "D10"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/test_cases.py",
+        "D:/项目/智能化/server/app/unit_runner.py",
+        "D:/项目/智能化/server/app/evidence.py",
+        "D:/项目/智能化/server/tests/test_unit_runner.py",
+        "D:/项目/智能化/web/src/api/tests.ts",
+        "D:/项目/智能化/web/src/views/ProjectTestsView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "approveActionScope",
+        "listTestCases",
+        "createTestCase",
+        "approveTestCase",
+        "startTestRun",
+        "listTestRuns",
+        "getTestRun",
+        "listTestSteps",
+        "listRunEvidence",
+        "importEvidence"
+      ],
+      "implementationSteps": [
+        "复用DEV24的用例/运行/证据与分发合同，只新增unit适配，不复制一套数据系统。",
+        "只接一种批准语言/框架；输入代码副本、函数范围、用例预期来源和固定依赖。",
+        "隔离运行记录真实报告、退出状态、日志、软件版本；模型不能改产品代码或下载任意依赖。",
+        "生成测试文档说明使用对应run，不从日志里是否有passed字样猜结论；手工导入明确来源。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-19-AC01",
+          "given": "成功、断言失败、无法构建三个样例",
+          "when": "执行并查看报告",
+          "then": "分类真实且保留证据，不擅改预期。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-19-AC02",
+          "given": "重跑后成功",
+          "when": "查看历史和统计",
+          "then": "原失败存在，覆盖分母仍是批准范围。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "用例/运行适配、隔离说明、真实样例报告、测试页截图"
+      ],
+      "regressionReferences": [
+        "A31",
+        "A32",
+        "A33",
+        "A34",
+        "B07"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-19.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-20",
+      "title": "浏览器功能测试与人工接管",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-07",
+        "DEV-12",
+        "DEV-13",
+        "DEV-24"
+      ],
+      "decisionGates": [
+        "D05",
+        "D09",
+        "D10"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/browser_runner.py",
+        "D:/项目/智能化/server/app/browser_control.py",
+        "D:/项目/智能化/server/app/evidence.py",
+        "D:/项目/智能化/server/tests/test_browser_runner.py",
+        "D:/项目/智能化/web/src/views/ProjectTestsView.vue"
+      ],
+      "operationIds": [
+        "approveActionScope",
+        "startTestRun",
+        "getTestRun",
+        "listTestSteps",
+        "listRunEvidence",
+        "getBrowserControl",
+        "takeOverBrowser",
+        "releaseBrowserControl",
+        "verifyJobOutcome"
+      ],
+      "implementationSteps": [
+        "复用DEV24的公共执行模型，浏览器适配不依赖DEV19所选代码语言已完成。",
+        "指定域名/角色/测试数据；语义定位、观察-动作-复核，每次关键状态变化重新观察。",
+        "业务断言与截图分开；会话与后端数据范围分别隔离；清理失败单列。",
+        "提交未知先核实；停稳后排他接管，归还重观察。若无批准通道，明确不可用并提供手工取证流程，不假实现。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-20-AC01",
+          "given": "截图已保存但业务断言失败",
+          "when": "结束测试",
+          "then": "用例不通过，截图作为失败证据。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-20-AC02",
+          "given": "提交超时/接管",
+          "when": "执行停止或恢复",
+          "then": "不重复提交、不同时两人控制，未知状态不伪报。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "浏览器适配、断言/超时/接管测试、真实授权截图与日志"
+      ],
+      "regressionReferences": [
+        "A35",
+        "A36",
+        "A37",
+        "A38",
+        "B02"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-20.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-21",
+      "title": "用户手册截图到内容块",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-11",
+        "DEV-20"
+      ],
+      "decisionGates": [
+        "D05",
+        "D06",
+        "D10"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/manual_capture.py",
+        "D:/项目/智能化/server/tests/test_manual_capture.py",
+        "D:/项目/智能化/web/src/views/ProjectTestsView.vue",
+        "D:/项目/智能化/web/src/views/DocumentWorkbenchView.vue"
+      ],
+      "operationIds": [
+        "startManualCapture",
+        "importEvidence",
+        "listRunEvidence",
+        "saveBlockDraft"
+      ],
+      "implementationSteps": [
+        "固定用户任务与角色，先检查合格可复用证据，再实际操作采集。",
+        "原图、裁剪/脱敏图、步骤和文档块关联；真实菜单/按钮名称对应，不生成伪造界面。",
+        "安装/备份/恢复等非界面内容回到资料需求，不看图猜测。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-21-AC01",
+          "given": "旧版本截图或敏感图",
+          "when": "选入手册",
+          "then": "复核/脱敏，保留原图关系，不自动复用。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-21-AC02",
+          "given": "只重写说明",
+          "when": "提交任务",
+          "then": "不重测、不重截、不改变既有客观结果。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "采集流程、手册块样例、图片版本记录和UI截图"
+      ],
+      "regressionReferences": [
+        "A39",
+        "A40",
+        "B07"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-21.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-22",
+      "title": "审计、迁移与备份恢复交接",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-03",
+        "DEV-05",
+        "DEV-08",
+        "DEV-09",
+        "DEV-12",
+        "DEV-16"
+      ],
+      "decisionGates": [
+        "D09",
+        "D11",
+        "D12"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/audit.py",
+        "D:/项目/智能化/server/app/operations.py",
+        "D:/项目/智能化/server/tests/test_audit_recovery.py",
+        "D:/项目/智能化/web/src/api/audit.ts",
+        "D:/项目/智能化/web/src/views/AuditView.vue",
+        "D:/项目/智能化/web/src/router.ts",
+        "D:/项目/智能化/docs/运维"
+      ],
+      "operationIds": [
+        "listAuditEvents",
+        "getAuditEvent",
+        "exportAuditEvents"
+      ],
+      "implementationSteps": [
+        "关键写入和拒绝记录脱敏审计；查询/导出范围一致，普通页面不能改日志。",
+        "原型数据先备份、预览和负责人确认；不继承本地管理员/假发布，不双写两套权威数据。",
+        "实际演练数据库与文件同一恢复点、版本核对、会话失效和回退；安装说明不含秘密。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-22-AC01",
+          "given": "审计里有敏感原始参数",
+          "when": "读取/导出",
+          "then": "只见允许摘要，导出需独立授权。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-22-AC02",
+          "given": "备份恢复及迁移样例",
+          "when": "重启查看旧交付和新账号",
+          "then": "文件关系正确，无演示混入，不退回假登录。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "审计接口与页面、迁移/恢复实测、安装升级回退说明"
+      ],
+      "regressionReferences": [
+        "A45",
+        "A46",
+        "A48"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-22.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-23",
+      "title": "完整试点回归与正式移交",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-01",
+        "DEV-04",
+        "DEV-05",
+        "DEV-06",
+        "DEV-07",
+        "DEV-08",
+        "DEV-10",
+        "DEV-11",
+        "DEV-14",
+        "DEV-15",
+        "DEV-16",
+        "DEV-17",
+        "DEV-18",
+        "DEV-19",
+        "DEV-20",
+        "DEV-21",
+        "DEV-22"
+      ],
+      "decisionGates": [
+        "D11",
+        "D12"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/tests/e2e",
+        "D:/项目/智能化/docs/交接/回报/DEV-23.md",
+        "D:/项目/智能化/docs/运维",
+        "D:/项目/智能化/docs/执行规格/fixtures"
+      ],
+      "operationIds": [],
+      "implementationSteps": [
+        "按已批准支持清单执行48基础与8补充场景；样例、模型、配置和实际版本固定。",
+        "每个受影响页面1920×1080截图看图；实际点击按钮/查询/分页与异常。",
+        "关闭P0/P1和强制UI/Word问题，交付源码快照、合同、迁移、模板包、证据与限制清单；不能用未实现标不适用蒙混。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-23-AC01",
+          "given": "完整已批准范围",
+          "when": "从资料→AI候选→采用→测试取证→审核→Word发布",
+          "then": "六模块一致且可追溯，生产授权之外无动作。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-23-AC02",
+          "given": "失败/无权/中断/恢复样例",
+          "when": "回归与审阅证据",
+          "then": "有可核对结果；未执行项明确不通过，不能伪造签审。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "可运行试点版、56项适用性与结果、真实截图/Word/恢复证据、验收决定"
+      ],
+      "regressionReferences": [
+        "A01-A48",
+        "B01-B08"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-23.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    },
+    {
+      "id": "DEV-24",
+      "title": "测试用例证据基础与受控执行分发",
+      "status": "not_started",
+      "dependsOn": [
+        "DEV-05",
+        "DEV-12"
+      ],
+      "decisionGates": [
+        "D09"
+      ],
+      "readFirst": [
+        "D:/项目/智能化/AGENTS.md",
+        "D:/项目/智能化/docs/执行规格/00-执行入口.md",
+        "D:/项目/智能化/docs/执行规格/contracts/openapi.json"
+      ],
+      "allowedWritePaths": [
+        "D:/项目/智能化/server/app/test_cases.py",
+        "D:/项目/智能化/server/app/test_runs.py",
+        "D:/项目/智能化/server/app/evidence.py",
+        "D:/项目/智能化/server/app/action_approvals.py",
+        "D:/项目/智能化/server/tests/test_execution_store.py",
+        "D:/项目/智能化/web/src/api/tests.ts",
+        "D:/项目/智能化/web/src/views/ProjectTestsView.vue",
+        "D:/项目/智能化/web/src/router.ts"
+      ],
+      "operationIds": [
+        "approveActionScope",
+        "listTestCases",
+        "createTestCase",
+        "approveTestCase",
+        "startTestRun",
+        "listTestRuns",
+        "getTestRun",
+        "listTestSteps",
+        "listRunEvidence",
+        "importEvidence"
+      ],
+      "implementationSteps": [
+        "先实现共同用例、预期确认、运行/步骤/证据存储和范围token，不依赖某种语言或浏览器已接通。",
+        "执行分发只接受批准kind和已注册runner；runner未适配时明确拒绝，不伪造运行或阻塞人工证据导入。",
+        "明确人工导入来源、环境版本与查询权限，之后DEV19和DEV20分别注册真实适配器。"
+      ],
+      "acceptance": [
+        {
+          "id": "DEV-24-AC01",
+          "given": "未注册unit或browser runner",
+          "when": "申请真实执行",
+          "then": "返回前置/依赖错误，不创建已通过记录。",
+          "status": "not_run"
+        },
+        {
+          "id": "DEV-24-AC02",
+          "given": "人工证据和不同项目运行",
+          "when": "登记与读取",
+          "then": "来源标记真实，跨项目被拒，结果与用例版本对应。",
+          "status": "not_run"
+        }
+      ],
+      "deliverables": [
+        "共同测试/证据服务、手工材料流程、授权测试、测试管理UI"
+      ],
+      "regressionReferences": [
+        "A10",
+        "A31",
+        "A36"
+      ],
+      "reportPath": "D:/项目/智能化/docs/交接/回报/DEV-24.md",
+      "doesNotAuthorize": "不授权生产操作、秘密外发、任意依赖安装或其他任务同时改共享文件。"
+    }
+  ],
+  "workspaceRoot": "D:/项目/智能化",
+  "kind": "development_work_items_not_runtime_jobs"
+}

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试页面</title>
+    <style>
+        body {
+            font-family: "Microsoft YaHei UI", sans-serif;
+            padding: 40px;
+            background: #f4f6f8;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { color: #182534; }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #2876d7;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 10px 5px;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+            border-left: 4px solid;
+        }
+        .ok { background: #e8f6ee; color: #267149; border-color: #267149; }
+        .error { background: #f8f1f0; color: #b42318; border-color: #b42318; }
+        pre {
+            background: #f4f6f8;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✅ 测试页面正常显示</h1>
+        <p>如果你能看到这个页面，说明前端服务正常运行。</p>
+
+        <div class="status ok">
+            <strong>前端服务状态：正常</strong>
+            <p>地址：http://localhost:5173</p>
+        </div>
+
+        <h2>🔍 系统检查</h2>
+        <div id="results">检测中...</div>
+
+        <h2>📋 可能的问题</h2>
+        <div class="status error">
+            <strong>主页面显示空白的原因：</strong>
+            <ul style="margin: 10px 0 0 20px; line-height: 1.8;">
+                <li>前端 JavaScript 执行出错</li>
+                <li>Vue 路由配置问题</li>
+                <li>API 调用失败导致页面卡住</li>
+                <li>浏览器兼容性问题</li>
+            </ul>
+        </div>
+
+        <h2>🛠️ 解决方案</h2>
+        <ol style="line-height: 2;">
+            <li>按 F12 打开开发者工具</li>
+            <li>查看 Console 标签中的<strong>红色错误信息</strong></li>
+            <li>截图或复制错误信息</li>
+            <li>告诉我具体的错误内容</li>
+        </ol>
+
+        <a href="/" class="btn">返回主页</a>
+        <button class="btn" onclick="runTests()" style="background: #267149;">重新检测</button>
+    </div>
+
+    <script>
+        async function runTests() {
+            const results = document.getElementById('results');
+            results.innerHTML = '<p>正在检测...</p>';
+
+            let html = '';
+
+            // 测试后端
+            try {
+                const res = await fetch('http://localhost:8000/api/v1/health');
+                if (res.ok) {
+                    html += '<div class="status ok">✅ 后端服务：正常</div>';
+                } else {
+                    html += '<div class="status error">❌ 后端服务：异常 (HTTP ' + res.status + ')</div>';
+                }
+            } catch (e) {
+                html += '<div class="status error">❌ 后端服务：无法连接<pre>' + e.message + '</pre></div>';
+            }
+
+            // 测试 Vue 是否加载
+            html += '<div class="status ' + (typeof Vue !== 'undefined' ? 'ok' : 'error') + '">';
+            html += (typeof Vue !== 'undefined' ? '✅' : '❌') + ' Vue.js：' + (typeof Vue !== 'undefined' ? '已加载' : '未加载');
+            html += '</div>';
+
+            results.innerHTML = html;
+        }
+
+        runTests();
+    </script>
+</body>
+</html>

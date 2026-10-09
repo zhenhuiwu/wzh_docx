@@ -1,0 +1,5606 @@
+{
+  "date": "2026-09-24",
+  "inspection": "只读 OOXML 结构检查，未进行 Word 页面渲染或标准全文合规审查",
+  "template_count": 20,
+  "templates": [
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[01][SDP] 软件开发计划-438C-2021.docx",
+      "filename": "[01][SDP] 软件开发计划-438C-2021.docx",
+      "sha256": "4313936e1d3d591239ea6a0ba60fe24fb6f3e8ca2a5dba92f15098db97a9a1bf",
+      "bytes": 68053,
+      "body_paragraph_count": 406,
+      "table_count": 13,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 129,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 2
+        },
+        {
+          "text": "标识",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "与其它计划的关系",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "策划背景概述",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "实施整个软件开发活动的计划",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件开发过程",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件开发总体计划",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件开发方法",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件产品标准",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "可重用软件产品",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "采用可重用软件产品",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "开发可重用软件产品",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "关键性需求的处理",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 3
+        },
+        {
+          "text": "安全性保证",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "保密性保证",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "其他关键性需求保证",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "计算机硬件资源利用",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "决策理由的记录原理",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "需方评审途径",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "实施详细软件开发活动的计划",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "项目计划及监督",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "软件开发策划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 3
+        },
+        {
+          "text": "软件集成测试计划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "软件配置项测试计划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件安装计划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件移交计划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "跟踪和更新计划",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "建立软件开发环境",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件工程环境",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件测试环境",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件开发库",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件开发文件",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "非交付软件",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "初样研制",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件需求分析",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件设计",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "设计决策",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "体系结构设计",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "详细设计",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件实现及单元测试",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试的独立性",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "在目标计算机系统上进行测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试准备",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试的演示性运行",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "执行软件配置项测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "修改和再测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试结果分析和记录",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "系统测试",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试的独立性",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "在目标计算机系统上进行测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试准备",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试的演示性运行",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "执行软件系统测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "修改和再测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试结果分析和记录",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "正样研制",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件需求分析",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件设计",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "配置项测试",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试的独立性",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "在目标计算机系统上进行测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试准备",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试的演示性运行",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "执行软件配置项测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "修改和再测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试结果分析和记录",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "系统测试",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试的独立性",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "在目标计算机系统上进行测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试准备",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试的演示性运行",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "执行软件系统测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "修改和再测试",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "软件系统测试结果分析和记录",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 1
+        },
+        {
+          "text": "确认测试（若适用）",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "软件测评",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "出所检验（若适用）",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "部队试验（若适用）",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "设计定型（若适用）",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "软件使用准备",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "可执行软件的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "用户现场的版本说明的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "用户手册的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "用户现场安装",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件移交准备",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "可执行软件的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "源文件准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "保障现场的版本说明的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "已完成的软件设计和其它的软件支持信息的准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "保障手册准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "到指定保障现场的移交",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件验收支持",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件配置管理",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件产品评估",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "中间阶段的和最终的软件产品的评估",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "软件产品评估记录",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518101\"",
+        " ",
+        " PAGEREF _Toc58518101 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518102\"",
+        " ",
+        " PAGEREF _Toc58518102 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518103\"",
+        " ",
+        " PAGEREF _Toc58518103 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518104\"",
+        " ",
+        " PAGEREF _Toc58518104 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518105\"",
+        " ",
+        " PAGEREF _Toc58518105 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518106\"",
+        " ",
+        " PAGEREF _Toc58518106 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518107\"",
+        " ",
+        " PAGEREF _Toc58518107 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518108\"",
+        " ",
+        " PAGEREF _Toc58518108 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518109\"",
+        " ",
+        " PAGEREF _Toc58518109 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518110\"",
+        " ",
+        " PAGEREF _Toc58518110 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518111\"",
+        " ",
+        " PAGEREF _Toc58518111 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518112\"",
+        " ",
+        " PAGEREF _Toc58518112 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518113\"",
+        " ",
+        " PAGEREF _Toc58518113 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518114\"",
+        " ",
+        " PAGEREF _Toc58518114 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518115\"",
+        " ",
+        " PAGEREF _Toc58518115 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518116\"",
+        " ",
+        " PAGEREF _Toc58518116 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518117\"",
+        " ",
+        " PAGEREF _Toc58518117 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518118\"",
+        " ",
+        " PAGEREF _Toc58518118 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518119\"",
+        " ",
+        " PAGEREF _Toc58518119 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518120\"",
+        " ",
+        " PAGEREF _Toc58518120 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518121\"",
+        " ",
+        " PAGEREF _Toc58518121 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518122\"",
+        " ",
+        " PAGEREF _Toc58518122 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518123\"",
+        " ",
+        " PAGEREF _Toc58518123 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518124\"",
+        " ",
+        " PAGEREF _Toc58518124 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518125\"",
+        " ",
+        " PAGEREF _Toc58518125 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518126\"",
+        " ",
+        " PAGEREF _Toc58518126 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518127\"",
+        " ",
+        " PAGEREF _Toc58518127 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518128\"",
+        " ",
+        " PAGEREF _Toc58518128 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518129\"",
+        " ",
+        " PAGEREF _Toc58518129 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518130\"",
+        " ",
+        " PAGEREF _Toc58518130 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518131\"",
+        " ",
+        " PAGEREF _Toc58518131 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518132\"",
+        " ",
+        " PAGEREF _Toc58518132 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518133\"",
+        " ",
+        " PAGEREF _Toc58518133 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518134\"",
+        " ",
+        " PAGEREF _Toc58518134 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518135\"",
+        " ",
+        " PAGEREF _Toc58518135 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518136\"",
+        " ",
+        " PAGEREF _Toc58518136 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518137\"",
+        " ",
+        " PAGEREF _Toc58518137 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518138\"",
+        " ",
+        " PAGEREF _Toc58518138 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518139\"",
+        " ",
+        " PAGEREF _Toc58518139 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518140\"",
+        " ",
+        " PAGEREF _Toc58518140 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518141\"",
+        " ",
+        " PAGEREF _Toc58518141 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518142\"",
+        " ",
+        " PAGEREF _Toc58518142 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518143\"",
+        " ",
+        " PAGEREF _Toc58518143 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518144\"",
+        " ",
+        " PAGEREF _Toc58518144 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518145\"",
+        " ",
+        " PAGEREF _Toc58518145 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518146\"",
+        " ",
+        " PAGEREF _Toc58518146 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518147\"",
+        " ",
+        " PAGEREF _Toc58518147 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518148\"",
+        " ",
+        " PAGEREF _Toc58518148 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518149\"",
+        " ",
+        " PAGEREF _Toc58518149 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518150\"",
+        " ",
+        " PAGEREF _Toc58518150 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518151\"",
+        " ",
+        " PAGEREF _Toc58518151 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518152\"",
+        " ",
+        " PAGEREF _Toc58518152 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518153\"",
+        " ",
+        " PAGEREF _Toc58518153 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518154\"",
+        " ",
+        " PAGEREF _Toc58518154 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518155\"",
+        " ",
+        " PAGEREF _Toc58518155 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518156\"",
+        " ",
+        " PAGEREF _Toc58518156 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518157\"",
+        " ",
+        " PAGEREF _Toc58518157 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518158\"",
+        " ",
+        " PAGEREF _Toc58518158 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518159\"",
+        " ",
+        " PAGEREF _Toc58518159 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518160\"",
+        " ",
+        " PAGEREF _Toc58518160 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518161\"",
+        " ",
+        " PAGEREF _Toc58518161 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518162\"",
+        " ",
+        " PAGEREF _Toc58518162 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518163\"",
+        " ",
+        " PAGEREF _Toc58518163 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518164\"",
+        " ",
+        " PAGEREF _Toc58518164 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518165\"",
+        " ",
+        " PAGEREF _Toc58518165 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518166\"",
+        " ",
+        " PAGEREF _Toc58518166 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518167\"",
+        " ",
+        " PAGEREF _Toc58518167 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518168\"",
+        " ",
+        " PAGEREF _Toc58518168 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518169\"",
+        " ",
+        " PAGEREF _Toc58518169 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518170\"",
+        " ",
+        " PAGEREF _Toc58518170 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518171\"",
+        " ",
+        " PAGEREF _Toc58518171 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518172\"",
+        " ",
+        " PAGEREF _Toc58518172 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518173\"",
+        " ",
+        " PAGEREF _Toc58518173 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518174\"",
+        " ",
+        " PAGEREF _Toc58518174 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518175\"",
+        " ",
+        " PAGEREF _Toc58518175 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518176\"",
+        " ",
+        " PAGEREF _Toc58518176 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518177\"",
+        " ",
+        " PAGEREF _Toc58518177 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518178\"",
+        " ",
+        " PAGEREF _Toc58518178 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518179\"",
+        " ",
+        " PAGEREF _Toc58518179 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518180\"",
+        " ",
+        " PAGEREF _Toc58518180 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518181\"",
+        " ",
+        " PAGEREF _Toc58518181 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518182\"",
+        " ",
+        " PAGEREF _Toc58518182 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518183\"",
+        " ",
+        " PAGEREF _Toc58518183 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518184\"",
+        " ",
+        " PAGEREF _Toc58518184 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518185\"",
+        " ",
+        " PAGEREF _Toc58518185 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518186\"",
+        " ",
+        " PAGEREF _Toc58518186 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518187\"",
+        " ",
+        " PAGEREF _Toc58518187 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518188\"",
+        " ",
+        " PAGEREF _Toc58518188 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518189\"",
+        " ",
+        " PAGEREF _Toc58518189 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518190\"",
+        " ",
+        " PAGEREF _Toc58518190 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518191\"",
+        " ",
+        " PAGEREF _Toc58518191 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518192\"",
+        " ",
+        " PAGEREF _Toc58518192 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518193\"",
+        " ",
+        " PAGEREF _Toc58518193 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518194\"",
+        " ",
+        " PAGEREF _Toc58518194 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518195\"",
+        " ",
+        " PAGEREF _Toc58518195 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58518196\"",
+        " ",
+        " PAGEREF _Toc58518196 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[02][SIP] 软件安装计划-438C-2021.docx",
+      "filename": "[02][SIP] 软件安装计划-438C-2021.docx",
+      "sha256": "c78a6268d4ad0f884b4bf9224dd5e7f466c4654f36a4b69ccfd18444600a79de",
+      "bytes": 24955,
+      "body_paragraph_count": 73,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 24,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "与其他计划之间的关系",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "安装准备",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "说明",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "联系点",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "培训材料",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "培训",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "资金",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "人员",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "安保人员",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "为现场的测试人员提供特定现场信息",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "(现场位置)",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "进度表",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "设施清单",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "设施图纸",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "安装小组",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "安装过程",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "数据更新过程",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "为用户的现场专项信息",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[03][STrP] 软件移交计划-438C-2021.docx",
+      "filename": "[03][STrP] 软件移交计划-438C-2021.docx",
+      "sha256": "0deb010f33770bf16955d028743f7c168a6112f7882e04aa5d31d10b72219253",
+      "bytes": 24371,
+      "body_paragraph_count": 52,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 17,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "与其他计划之间的关系",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "可交付资源的源",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "设施",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "硬件",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "交付文档",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "人员",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "资金",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "各种资源之间的相互关系",
+          "style_id": "65",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "推荐的过程",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "培训",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[04][STP] 软件测试计划-438C-2021.docx",
+      "filename": "[04][STP] 软件测试计划-438C-2021.docx",
+      "sha256": "16ecf42f569bac36cf26433abc7e372f9ab1d5b1d28c87a789571a87755fcb67",
+      "bytes": 31477,
+      "body_paragraph_count": 122,
+      "table_count": 2,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 34,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "与其他计划的关系",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "测试依据",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "软件测试环境",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "4.X(测试现场名称)",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "4.X.1软件项",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.2硬件和固件项",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.3 软硬件环境部署关系",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "4.X.4其他材料",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.5所有者的特性、需方权利和许可证",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.6安装、测试和控制",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.7测试环境的差异性分析和有效性说明",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.8参与组织",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.9人员及分工",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.10人员培训",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "4.X.11要执行的测试",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "测试标识",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "一般信息",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "测试级",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "测试类别",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "一般测试条件",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "测试进展",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "数据记录、整理和分析",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "计划执行的测试",
+          "style_id": "20",
+          "style": "样式 标题 2 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "5.2.X(测试项)",
+          "style_id": "21",
+          "style": "样式 标题 3 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 2
+        },
+        {
+          "text": "5.2.X.Y(测试项的项目唯一的标识符)",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "测试进度",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "测试终止条件",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "需求的可追踪性",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "19",
+          "style": "样式 标题 1 + 段前: 0 磅 段后: 0 磅 行距: 单倍行距",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519426\"",
+        " ",
+        " PAGEREF _Toc58519426 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519427\"",
+        " ",
+        " PAGEREF _Toc58519427 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519428\"",
+        " ",
+        " PAGEREF _Toc58519428 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519429\"",
+        " ",
+        " PAGEREF _Toc58519429 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519430\"",
+        " ",
+        " PAGEREF _Toc58519430 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519431\"",
+        " ",
+        " PAGEREF _Toc58519431 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519432\"",
+        " ",
+        " PAGEREF _Toc58519432 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519433\"",
+        " ",
+        " PAGEREF _Toc58519433 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519434\"",
+        " ",
+        " PAGEREF _Toc58519434 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519435\"",
+        " ",
+        " PAGEREF _Toc58519435 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519436\"",
+        " ",
+        " PAGEREF _Toc58519436 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519437\"",
+        " ",
+        " PAGEREF _Toc58519437 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519438\"",
+        " ",
+        " PAGEREF _Toc58519438 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519439\"",
+        " ",
+        " PAGEREF _Toc58519439 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519440\"",
+        " ",
+        " PAGEREF _Toc58519440 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519441\"",
+        " ",
+        " PAGEREF _Toc58519441 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519442\"",
+        " ",
+        " PAGEREF _Toc58519442 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519443\"",
+        " ",
+        " PAGEREF _Toc58519443 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519444\"",
+        " ",
+        " PAGEREF _Toc58519444 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519445\"",
+        " ",
+        " PAGEREF _Toc58519445 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519446\"",
+        " ",
+        " PAGEREF _Toc58519446 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519447\"",
+        " ",
+        " PAGEREF _Toc58519447 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519448\"",
+        " ",
+        " PAGEREF _Toc58519448 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519449\"",
+        " ",
+        " PAGEREF _Toc58519449 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519450\"",
+        " ",
+        " PAGEREF _Toc58519450 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519451\"",
+        " ",
+        " PAGEREF _Toc58519451 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519452\"",
+        " ",
+        " PAGEREF _Toc58519452 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519453\"",
+        " ",
+        " PAGEREF _Toc58519453 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519454\"",
+        " ",
+        " PAGEREF _Toc58519454 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519455\"",
+        " ",
+        " PAGEREF _Toc58519455 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519456\"",
+        " ",
+        " PAGEREF _Toc58519456 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519457\"",
+        " ",
+        " PAGEREF _Toc58519457 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519458\"",
+        " ",
+        " PAGEREF _Toc58519458 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[05][OCD] 运行方案说明-438C-2021.docx",
+      "filename": "[05][OCD] 运行方案说明-438C-2021.docx",
+      "sha256": "65d0def9491127e151e94cef5805740033b472309aa64a5504c76cdbd8b20c3f",
+      "bytes": 27149,
+      "body_paragraph_count": 77,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 25,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "与其他计划之间的关系",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "现行系统",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "现行系统的状态",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "运行约束",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "现行系统的更改",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "改进目标",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "运行环境的变化",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "改进后系统的运行环境",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "更改后或实现的运行环境",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "更改概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "更改文档",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档优先级",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "未涉及的更改",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "假设和理由",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "子系统修改和系统的发布",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "子系统修改",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "子系统的优先级",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "子系统的更改",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "用户/受影响人员",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer2.xml",
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[06][SSS] 系统-子系统规格说明-438C-2021.docx",
+      "filename": "[06][SSS] 系统-子系统规格说明-438C-2021.docx",
+      "sha256": "0d95e9993fd4bee2b35218999e80feddaace6734342221e37d9558d85291c606",
+      "bytes": 27349,
+      "body_paragraph_count": 80,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 26,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "要求状态和方式",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统能力需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统外部接口需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统内部接口需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统内部数据需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "适应性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "保密性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "安全性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统环境需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "计算机资源需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统人员需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "设计和实现约束",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "人员需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "培训需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "综合保障需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "安装需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "其他需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "合格性规定",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer2.xml",
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[07][IRS] 接口需求规格说明-438C-2021.docx",
+      "filename": "[07][IRS] 接口需求规格说明-438C-2021.docx",
+      "sha256": "4b37c247701b5ff85327ac73e5b679464f0210ec9877a71e535581971384181a",
+      "bytes": 35581,
+      "body_paragraph_count": 98,
+      "table_count": 4,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 12,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": " 文档概述",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "接口标识和接口图",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "3.x （接口的项目唯一标识符）",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "3.y 需求的优先顺序和关键性",
+          "style_id": "51",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 2
+        },
+        {
+          "text": "合格性规定",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注解",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519103\"",
+        " ",
+        " PAGEREF _Toc58519103 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519104\"",
+        " ",
+        " PAGEREF _Toc58519104 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519105\"",
+        " ",
+        " PAGEREF _Toc58519105 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519106\"",
+        " ",
+        " PAGEREF _Toc58519106 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519107\"",
+        " ",
+        " PAGEREF _Toc58519107 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519108\"",
+        " ",
+        " PAGEREF _Toc58519108 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519109\"",
+        " ",
+        " PAGEREF _Toc58519109 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519110\"",
+        " ",
+        " PAGEREF _Toc58519110 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519111\"",
+        " ",
+        " PAGEREF _Toc58519111 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519112\"",
+        " ",
+        " PAGEREF _Toc58519112 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519113\"",
+        " ",
+        " PAGEREF _Toc58519113 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519114\"",
+        " ",
+        " PAGEREF _Toc58519114 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "12240",
+            "h": "15840"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "720",
+            "footer": "720",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[08][SSDD] 系统-子系统设计说明-438C-2021.docx",
+      "filename": "[08][SSDD] 系统-子系统设计说明-438C-2021.docx",
+      "sha256": "136d20e351538d54aa7b9ed6fd11207fe03a855fa00f1bb4e4f14ac54ce8626b",
+      "bytes": 27175,
+      "body_paragraph_count": 41,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 13,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "系统级设计决策",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "系统体系结构设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "系统结构",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "执行方案",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "接口设计",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "接口标识与图",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "需求项可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer2.xml",
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[09][IDD] 接口设计说明-438C-2021.docx",
+      "filename": "[09][IDD] 接口设计说明-438C-2021.docx",
+      "sha256": "a629dcab8679a25d4ac089e12d46ac26cdaf33bd13bcd716903374e02e85149b",
+      "bytes": 36370,
+      "body_paragraph_count": 80,
+      "table_count": 4,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 10,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "53",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "53",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "53",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "接口设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "接口标识和接口图",
+          "style_id": "3",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "3.x（接口的项目唯一标识符）",
+          "style_id": "3",
+          "style": "heading 2",
+          "runs": 2
+        },
+        {
+          "text": "需求的可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注解",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519268\"",
+        " ",
+        " PAGEREF _Toc58519268 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519269\"",
+        " ",
+        " PAGEREF _Toc58519269 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519270\"",
+        " ",
+        " PAGEREF _Toc58519270 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519271\"",
+        " ",
+        " PAGEREF _Toc58519271 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519272\"",
+        " ",
+        " PAGEREF _Toc58519272 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519273\"",
+        " ",
+        " PAGEREF _Toc58519273 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519274\"",
+        " ",
+        " PAGEREF _Toc58519274 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519275\"",
+        " ",
+        " PAGEREF _Toc58519275 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519276\"",
+        " ",
+        " PAGEREF _Toc58519276 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519277\"",
+        " ",
+        " PAGEREF _Toc58519277 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1797",
+            "bottom": "1440",
+            "left": "1797",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml",
+        "word/header2.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml",
+        "word/footer3.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[10][SRS] 软件需求规格说明-438C-2021.docx",
+      "filename": "[10][SRS] 软件需求规格说明-438C-2021.docx",
+      "sha256": "9becf608c7d27b23df3a29e58c0225edb72027b5b2329ac3e6f3a7c3362f6ae8",
+      "bytes": 48742,
+      "body_paragraph_count": 155,
+      "table_count": 7,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 33,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "要求的状态和方式",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件能力需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "3.2.X（软件能力）",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件外部接口需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "3.3.X（接口的项目唯一的标识符）",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "软件内部接口需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件内部数据需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "适应性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "安全性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "保密性需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件环境需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "计算机资源需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "3.10.1计算机硬件需求",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "3.10.2计算机硬件资源使用需求",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "3.10.3计算机软件需求",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "3.10.4计算机通信需求",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "软件质量因素",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "设计和实现约束",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "人员需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "培训需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件保障需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "其他需求",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "验收、交付和包装需求（修改有关内容）",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "需求的优先顺序和关键程度",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "合格性规定",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519018\"",
+        " ",
+        " PAGEREF _Toc58519018 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519019\"",
+        " ",
+        " PAGEREF _Toc58519019 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519020\"",
+        " ",
+        " PAGEREF _Toc58519020 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519021\"",
+        " ",
+        " PAGEREF _Toc58519021 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519022\"",
+        " ",
+        " PAGEREF _Toc58519022 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519023\"",
+        " ",
+        " PAGEREF _Toc58519023 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519024\"",
+        " ",
+        " PAGEREF _Toc58519024 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519025\"",
+        " ",
+        " PAGEREF _Toc58519025 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519026\"",
+        " ",
+        " PAGEREF _Toc58519026 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519027\"",
+        " ",
+        " PAGEREF _Toc58519027 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519028\"",
+        " ",
+        " PAGEREF _Toc58519028 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519029\"",
+        " ",
+        " PAGEREF _Toc58519029 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519030\"",
+        " ",
+        " PAGEREF _Toc58519030 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519031\"",
+        " ",
+        " PAGEREF _Toc58519031 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519032\"",
+        " ",
+        " PAGEREF _Toc58519032 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519033\"",
+        " ",
+        " PAGEREF _Toc58519033 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519034\"",
+        " ",
+        " PAGEREF _Toc58519034 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519035\"",
+        " ",
+        " PAGEREF _Toc58519035 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519036\"",
+        " ",
+        " PAGEREF _Toc58519036 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519037\"",
+        " ",
+        " PAGEREF _Toc58519037 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519038\"",
+        " ",
+        " PAGEREF _Toc58519038 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519039\"",
+        " ",
+        " PAGEREF _Toc58519039 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519040\"",
+        " ",
+        " PAGEREF _Toc58519040 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519041\"",
+        " ",
+        " PAGEREF _Toc58519041 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519042\"",
+        " ",
+        " PAGEREF _Toc58519042 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519043\"",
+        " ",
+        " PAGEREF _Toc58519043 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519044\"",
+        " ",
+        " PAGEREF _Toc58519044 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519045\"",
+        " ",
+        " PAGEREF _Toc58519045 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519046\"",
+        " ",
+        " PAGEREF _Toc58519046 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519047\"",
+        " ",
+        " PAGEREF _Toc58519047 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519048\"",
+        " ",
+        " PAGEREF _Toc58519048 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519049\"",
+        " ",
+        " PAGEREF _Toc58519049 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519050\"",
+        " ",
+        " PAGEREF _Toc58519050 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[11][SDD] 软件设计说明-438C-2021.docx",
+      "filename": "[11][SDD] 软件设计说明-438C-2021.docx",
+      "sha256": "c28f3d7176d3b018c62b1cd069a1803144f665529e708be0ee9e27551ba22567",
+      "bytes": 47288,
+      "body_paragraph_count": 135,
+      "table_count": 5,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 13,
+      "heading_samples": [
+        {
+          "text": "标识",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "CSCI级设计决策",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "CSCI体系结构设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "CSCI部件",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "执行方案",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "接口设计",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "CSCI详细设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "5.X (软件单元的唯一标识符，或者一组软件单元的标志符)",
+          "style_id": "54",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "需求可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "7.注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " HYPERLINK \\l _Toc12389 ",
+        " PAGEREF _Toc12389 \\h ",
+        " HYPERLINK \\l _Toc97 ",
+        " PAGEREF _Toc97 \\h ",
+        " HYPERLINK \\l _Toc23144 ",
+        " PAGEREF _Toc23144 \\h ",
+        " HYPERLINK \\l _Toc21457 ",
+        " PAGEREF _Toc21457 \\h ",
+        " HYPERLINK \\l _Toc24773 ",
+        " PAGEREF _Toc24773 \\h ",
+        " HYPERLINK \\l _Toc24395 ",
+        " PAGEREF _Toc24395 \\h ",
+        " HYPERLINK \\l _Toc197 ",
+        " PAGEREF _Toc197 \\h ",
+        " HYPERLINK \\l _Toc23972 ",
+        " PAGEREF _Toc23972 \\h ",
+        " HYPERLINK \\l _Toc31181 ",
+        " PAGEREF _Toc31181 \\h ",
+        " HYPERLINK \\l _Toc26864 ",
+        " PAGEREF _Toc26864 \\h ",
+        " HYPERLINK \\l _Toc31968 ",
+        " PAGEREF _Toc31968 \\h ",
+        " HYPERLINK \\l _Toc22649 ",
+        " PAGEREF _Toc22649 \\h ",
+        " HYPERLINK \\l _Toc3366 ",
+        " PAGEREF _Toc3366 \\h ",
+        " HYPERLINK \\l _Toc12195 ",
+        " PAGEREF _Toc12195 \\h ",
+        " HYPERLINK \\l _Toc461 ",
+        " PAGEREF _Toc461 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml",
+        "word/header2.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml",
+        "word/footer3.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[12][DBDD] 数据库设计说明-438C-2021.docx",
+      "filename": "[12][DBDD] 数据库设计说明-438C-2021.docx",
+      "sha256": "978420bce8d1d76cde91449ca0114017e2f52edf1f1c89d55c722f7da574d4e3",
+      "bytes": 31872,
+      "body_paragraph_count": 117,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 12,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "3",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "3",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "3",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 2
+        },
+        {
+          "text": "数据库级设计决策",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "数据库详细设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "X（数据库设计级别的名称）",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "用于数据库访问或操纵的软件单元详细设计",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "X（软件单元的唯一标识符，或者一组软件单元的标志符）",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        "TOC \\o \"1-1\" \\h \\u ",
+        " HYPERLINK \\l _Toc20648 ",
+        " PAGEREF _Toc20648 \\h ",
+        " HYPERLINK \\l _Toc14107 ",
+        " PAGEREF _Toc14107 \\h ",
+        " HYPERLINK \\l _Toc10593 ",
+        " PAGEREF _Toc10593 \\h ",
+        " HYPERLINK \\l _Toc8286 ",
+        " PAGEREF _Toc8286 \\h ",
+        " HYPERLINK \\l _Toc21990 ",
+        " PAGEREF _Toc21990 \\h ",
+        " HYPERLINK \\l _Toc6657 ",
+        " PAGEREF _Toc6657 \\h ",
+        " HYPERLINK \\l _Toc17163 ",
+        " PAGEREF _Toc17163 \\h ",
+        " HYPERLINK \\l _Toc15758 ",
+        " PAGEREF _Toc15758 \\h ",
+        " HYPERLINK \\l _Toc11277 ",
+        " PAGEREF _Toc11277 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[13][STD] 软件测试说明-438C-2021.docx",
+      "filename": "[13][STD] 软件测试说明-438C-2021.docx",
+      "sha256": "8bc0476eb39b179648280a9f3cd6d0474d0bf62c4fbf9478e5e358150c129378",
+      "bytes": 30138,
+      "body_paragraph_count": 113,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 22,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "测试准备",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "3.X(测试的项目唯一的标识符)",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "3.X.1硬件准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "3.X.2软件准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "3.X.3其他测试前准备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "测试说明",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "4.X(测试的项目唯一的标识符)",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "4.X.Y(测试用例的项目唯一的标识符)",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.l涉及的需求",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.2先决条件",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.3测试输入",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.4预期的测试结果",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.5评价结果的准则",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.6测试规程",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.Y.7假设和约束",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "需求的可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519489\"",
+        " ",
+        " PAGEREF _Toc58519489 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519490\"",
+        " ",
+        " PAGEREF _Toc58519490 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519491\"",
+        " ",
+        " PAGEREF _Toc58519491 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519492\"",
+        " ",
+        " PAGEREF _Toc58519492 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519493\"",
+        " ",
+        " PAGEREF _Toc58519493 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519494\"",
+        " ",
+        " PAGEREF _Toc58519494 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519495\"",
+        " ",
+        " PAGEREF _Toc58519495 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519496\"",
+        " ",
+        " PAGEREF _Toc58519496 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519497\"",
+        " ",
+        " PAGEREF _Toc58519497 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519498\"",
+        " ",
+        " PAGEREF _Toc58519498 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519499\"",
+        " ",
+        " PAGEREF _Toc58519499 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519500\"",
+        " ",
+        " PAGEREF _Toc58519500 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519501\"",
+        " ",
+        " PAGEREF _Toc58519501 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519502\"",
+        " ",
+        " PAGEREF _Toc58519502 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519503\"",
+        " ",
+        " PAGEREF _Toc58519503 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[14][STR] 软件测试报告-438C-2021.docx",
+      "filename": "[14][STR] 软件测试报告-438C-2021.docx",
+      "sha256": "5c57ace0e505cc1baee01da71450d043304804a6691ea3f8a9be49c0a06ee989",
+      "bytes": 31102,
+      "body_paragraph_count": 68,
+      "table_count": 5,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 17,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文裆概述",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "测试结果概述",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "对被测试软件的总体评估",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "测试环境的影晌",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "改进建议",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "详细测试结果",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "4.X(测试的项目唯一的标识符)",
+          "style_id": "33",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "4.X.1测试结果总结",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "4.X.2遇到的问题",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "4.X.2.Y(测试用例的项目唯一的标识符)",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "4.X.3与测试用例/规程的不一致",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "4.X.3.Y(测试用例的项目唯一的标识符)",
+          "style_id": "5",
+          "style": "heading 4",
+          "runs": 2
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519702\"",
+        " ",
+        " PAGEREF _Toc58519702 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519703\"",
+        " ",
+        " PAGEREF _Toc58519703 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519704\"",
+        " ",
+        " PAGEREF _Toc58519704 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519705\"",
+        " ",
+        " PAGEREF _Toc58519705 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519706\"",
+        " ",
+        " PAGEREF _Toc58519706 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519707\"",
+        " ",
+        " PAGEREF _Toc58519707 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519708\"",
+        " ",
+        " PAGEREF _Toc58519708 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519709\"",
+        " ",
+        " PAGEREF _Toc58519709 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519710\"",
+        " ",
+        " PAGEREF _Toc58519710 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519711\"",
+        " ",
+        " PAGEREF _Toc58519711 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519712\"",
+        " ",
+        " PAGEREF _Toc58519712 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519713\"",
+        " ",
+        " PAGEREF _Toc58519713 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519714\"",
+        " ",
+        " PAGEREF _Toc58519714 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519715\"",
+        " ",
+        " PAGEREF _Toc58519715 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58519716\"",
+        " ",
+        " PAGEREF _Toc58519716 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[15][SPS] 软件产品规格说明-438C-2021.docx",
+      "filename": "[15][SPS] 软件产品规格说明-438C-2021.docx",
+      "sha256": "3a2e0ba62edeca129b413b283388c52172ab8100792eafebd8e5317f0b10a9df",
+      "bytes": 27195,
+      "body_paragraph_count": 69,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 17,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文裆",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "需求",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "可执行软件",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "源文件",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "包装需求",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "合格性规定",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件支持信息",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "“已建成”软件设计",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "编译/建立规程",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "修改规程",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "计算机硬件资源使用",
+          "style_id": "27",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "需求的可追踪性",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520477\"",
+        " ",
+        " PAGEREF _Toc58520477 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520478\"",
+        " ",
+        " PAGEREF _Toc58520478 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520479\"",
+        " ",
+        " PAGEREF _Toc58520479 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520480\"",
+        " ",
+        " PAGEREF _Toc58520480 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520481\"",
+        " ",
+        " PAGEREF _Toc58520481 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520482\"",
+        " ",
+        " PAGEREF _Toc58520482 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520483\"",
+        " ",
+        " PAGEREF _Toc58520483 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520484\"",
+        " ",
+        " PAGEREF _Toc58520484 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520485\"",
+        " ",
+        " PAGEREF _Toc58520485 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520486\"",
+        " ",
+        " PAGEREF _Toc58520486 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520487\"",
+        " ",
+        " PAGEREF _Toc58520487 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520488\"",
+        " ",
+        " PAGEREF _Toc58520488 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520489\"",
+        " ",
+        " PAGEREF _Toc58520489 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520490\"",
+        " ",
+        " PAGEREF _Toc58520490 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520491\"",
+        " ",
+        " PAGEREF _Toc58520491 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520492\"",
+        " ",
+        " PAGEREF _Toc58520492 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520493\"",
+        " ",
+        " PAGEREF _Toc58520493 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[16][SVD] 软件版本说明-438C-2021.docx",
+      "filename": "[16][SVD] 软件版本说明-438C-2021.docx",
+      "sha256": "30e9b9683e1a52cf5aa6e45ceee125f67cf2e5e0013371cd9d716992d5de195f",
+      "bytes": 26167,
+      "body_paragraph_count": 51,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 14,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "版本说明",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "发布的材料清单",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件内容清单",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "更改说明",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "适应性数据",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "有关的文档",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "安装说明",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "可能的问题和已知的错误",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520353\"",
+        " ",
+        " PAGEREF _Toc58520353 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520354\"",
+        " ",
+        " PAGEREF _Toc58520354 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520355\"",
+        " ",
+        " PAGEREF _Toc58520355 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520356\"",
+        " ",
+        " PAGEREF _Toc58520356 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520357\"",
+        " ",
+        " PAGEREF _Toc58520357 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520358\"",
+        " ",
+        " PAGEREF _Toc58520358 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520359\"",
+        " ",
+        " PAGEREF _Toc58520359 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520360\"",
+        " ",
+        " PAGEREF _Toc58520360 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520361\"",
+        " ",
+        " PAGEREF _Toc58520361 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520362\"",
+        " ",
+        " PAGEREF _Toc58520362 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520363\"",
+        " ",
+        " PAGEREF _Toc58520363 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520364\"",
+        " ",
+        " PAGEREF _Toc58520364 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520365\"",
+        " ",
+        " PAGEREF _Toc58520365 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520366\"",
+        " ",
+        " PAGEREF _Toc58520366 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[17][SUM] 软件用户手册-438C-2021.docx",
+      "filename": "[17][SUM] 软件用户手册-438C-2021.docx",
+      "sha256": "585a0b9c2e642356f4c6997aa86de4b729ceac7ed31a6525d6817066c5430abc",
+      "bytes": 29877,
+      "body_paragraph_count": 119,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 31,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件综述",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件应用",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件清单",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件环境",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件组织和操作概述",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "意外事故及运行的备用状态和方式",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "保密性",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "帮助和问题报告",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "软件入门",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件的首次用户",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "熟悉设备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "访问控制",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "安装和设置",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "启动",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "停止和挂起",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "使用指南",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "能力",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "约定",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "处理规程",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "5.3.X(软件使用方面)",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 2
+        },
+        {
+          "text": "有关的处理",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "数据备份",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "错误、故障和紧急情况下的恢复",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "消息",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "快速参考指南",
+          "style_id": "29",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520602\"",
+        " ",
+        " PAGEREF _Toc58520602 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520603\"",
+        " ",
+        " PAGEREF _Toc58520603 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520604\"",
+        " ",
+        " PAGEREF _Toc58520604 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520605\"",
+        " ",
+        " PAGEREF _Toc58520605 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520606\"",
+        " ",
+        " PAGEREF _Toc58520606 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520607\"",
+        " ",
+        " PAGEREF _Toc58520607 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520608\"",
+        " ",
+        " PAGEREF _Toc58520608 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520609\"",
+        " ",
+        " PAGEREF _Toc58520609 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520610\"",
+        " ",
+        " PAGEREF _Toc58520610 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520611\"",
+        " ",
+        " PAGEREF _Toc58520611 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520612\"",
+        " ",
+        " PAGEREF _Toc58520612 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520613\"",
+        " ",
+        " PAGEREF _Toc58520613 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520614\"",
+        " ",
+        " PAGEREF _Toc58520614 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520615\"",
+        " ",
+        " PAGEREF _Toc58520615 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520616\"",
+        " ",
+        " PAGEREF _Toc58520616 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520617\"",
+        " ",
+        " PAGEREF _Toc58520617 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520618\"",
+        " ",
+        " PAGEREF _Toc58520618 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520619\"",
+        " ",
+        " PAGEREF _Toc58520619 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520620\"",
+        " ",
+        " PAGEREF _Toc58520620 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520621\"",
+        " ",
+        " PAGEREF _Toc58520621 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520622\"",
+        " ",
+        " PAGEREF _Toc58520622 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520623\"",
+        " ",
+        " PAGEREF _Toc58520623 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520624\"",
+        " ",
+        " PAGEREF _Toc58520624 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520625\"",
+        " ",
+        " PAGEREF _Toc58520625 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520626\"",
+        " ",
+        " PAGEREF _Toc58520626 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520627\"",
+        " ",
+        " PAGEREF _Toc58520627 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520628\"",
+        " ",
+        " PAGEREF _Toc58520628 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520629\"",
+        " ",
+        " PAGEREF _Toc58520629 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520630\"",
+        " ",
+        " PAGEREF _Toc58520630 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520631\"",
+        " ",
+        " PAGEREF _Toc58520631 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520632\"",
+        " ",
+        " PAGEREF _Toc58520632 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[18][CPM] 计算机编程手册-438C-2021.docx",
+      "filename": "[18][CPM] 计算机编程手册-438C-2021.docx",
+      "sha256": "bafe0b2d5ee06fc486171d431ebb602151d6c52c9c292d7cf3fedf266371f42f",
+      "bytes": 27206,
+      "body_paragraph_count": 85,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 17,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文档",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件编程环境",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "系统配置",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "操作信息",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "编译、汇编和连接",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "编程信息",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "编程特征",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "接口程序指令",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "输入和输出控制",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "其他编程技术",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "编程示例",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "错误检测和诊断特征",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        " TOC \\o \"1-3\" \\h \\z \\u ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520507\"",
+        " ",
+        " PAGEREF _Toc58520507 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520508\"",
+        " ",
+        " PAGEREF _Toc58520508 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520509\"",
+        " ",
+        " PAGEREF _Toc58520509 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520510\"",
+        " ",
+        " PAGEREF _Toc58520510 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520511\"",
+        " ",
+        " PAGEREF _Toc58520511 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520512\"",
+        " ",
+        " PAGEREF _Toc58520512 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520513\"",
+        " ",
+        " PAGEREF _Toc58520513 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520514\"",
+        " ",
+        " PAGEREF _Toc58520514 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520515\"",
+        " ",
+        " PAGEREF _Toc58520515 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520516\"",
+        " ",
+        " PAGEREF _Toc58520516 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520517\"",
+        " ",
+        " PAGEREF _Toc58520517 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520518\"",
+        " ",
+        " PAGEREF _Toc58520518 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520519\"",
+        " ",
+        " PAGEREF _Toc58520519 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520520\"",
+        " ",
+        " PAGEREF _Toc58520520 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520521\"",
+        " ",
+        " PAGEREF _Toc58520521 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520522\"",
+        " ",
+        " PAGEREF _Toc58520522 \\h ",
+        " ",
+        "HYPERLINK \\l \"_Toc58520523\"",
+        " ",
+        " PAGEREF _Toc58520523 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml",
+        "word/footer2.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[19][FSM] 固件保障手册-438C-2021.docx",
+      "filename": "[19][FSM] 固件保障手册-438C-2021.docx",
+      "sha256": "7bf8cae38f54a9ed7fe2ef2bd7d14f9665f731610becd16b3b5ee1510c3eb9cf",
+      "bytes": 20532,
+      "body_paragraph_count": 44,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 14,
+      "heading_samples": [
+        {
+          "text": "范围",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "标识",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "引用文件",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "固件使用说明",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "(每个固件设备的标识符)",
+          "style_id": "28",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "写固件设备过程",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "编程设备",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "编程板",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "编程过程",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "安装和修改过程",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "供应信息",
+          "style_id": "4",
+          "style": "heading 3",
+          "runs": 1
+        },
+        {
+          "text": "注释",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        },
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1440",
+            "right": "1800",
+            "bottom": "1440",
+            "left": "1800",
+            "header": "851",
+            "footer": "992",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer2.xml",
+        "word/footer1.xml"
+      ]
+    },
+    {
+      "file": "D:\\项目\\智能化\\438C-2021全套模板\\[20][SDSR] 软件研制总结报告-438C-2021.docx",
+      "filename": "[20][SDSR] 软件研制总结报告-438C-2021.docx",
+      "sha256": "b4eccd8576f11a7082c645c470e569eccfb7a2e531135fda3ba3d800917b47c3",
+      "bytes": 35258,
+      "body_paragraph_count": 89,
+      "table_count": 3,
+      "inline_image_count": 0,
+      "content_control_count": 0,
+      "heading_count": 35,
+      "heading_samples": [
+        {
+          "text": "标识",
+          "style_id": "56",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "系统概述",
+          "style_id": "56",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "文档概述",
+          "style_id": "56",
+          "style": "样式 标题 2第一层条Chapter X.X. Statementh22Header 2l2Level 2 Hea...",
+          "runs": 1
+        },
+        {
+          "text": "任务来源与研制依据",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件概述",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件研制过程",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件研制过程概述",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "系统要求分析和设计",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件需求分析",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "概要设计",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "详细设计",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "编码和软件单元测试",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件部件集成和测试",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件配置项测试",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "系统集成和测试",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "其它",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件满足任务指标情况",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "主要研制成果",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "关键技术及解决方案",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 2
+        },
+        {
+          "text": "质量保证情况",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "质量保证措施实施情况",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件重大技术质量问题和解决情况",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "配置管理情况",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "软件配置管理要求",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件配置管理实施情况",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件配置状态变更情况",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "测试和分析",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "研制成果评价",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "功能性能符合性评价",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 2
+        },
+        {
+          "text": "软件工程化管理评价",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 2
+        },
+        {
+          "text": "软件质量评价",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件可靠性评价",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 1
+        },
+        {
+          "text": "软件标准化评价",
+          "style_id": "4",
+          "style": "heading 2",
+          "runs": 2
+        },
+        {
+          "text": "结论",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        },
+        {
+          "text": "注解",
+          "style_id": "2",
+          "style": "heading 1",
+          "runs": 1
+        }
+      ],
+      "fields": [
+        " FORMTEXT ",
+        "TOC \\o \"1-1\" \\h \\u ",
+        " HYPERLINK \\l _Toc10994 ",
+        " PAGEREF _Toc10994 \\h ",
+        " HYPERLINK \\l _Toc25687 ",
+        " PAGEREF _Toc25687 \\h ",
+        " HYPERLINK \\l _Toc32585 ",
+        " PAGEREF _Toc32585 \\h ",
+        " HYPERLINK \\l _Toc4096 ",
+        " PAGEREF _Toc4096 \\h ",
+        " HYPERLINK \\l _Toc21604 ",
+        " PAGEREF _Toc21604 \\h ",
+        " HYPERLINK \\l _Toc4622 ",
+        " PAGEREF _Toc4622 \\h ",
+        " HYPERLINK \\l _Toc11585 ",
+        " PAGEREF _Toc11585 \\h ",
+        " HYPERLINK \\l _Toc16648 ",
+        " PAGEREF _Toc16648 \\h ",
+        " HYPERLINK \\l _Toc28609 ",
+        " PAGEREF _Toc28609 \\h ",
+        " HYPERLINK \\l _Toc5851 ",
+        " PAGEREF _Toc5851 \\h ",
+        " HYPERLINK \\l _Toc29545 ",
+        " PAGEREF _Toc29545 \\h ",
+        " HYPERLINK \\l _Toc25887 ",
+        " PAGEREF _Toc25887 \\h ",
+        " HYPERLINK \\l _Toc17165 ",
+        " PAGEREF _Toc17165 \\h "
+      ],
+      "section_properties": [
+        {
+          "pgSz": {
+            "w": "11906",
+            "h": "16838"
+          },
+          "pgMar": {
+            "top": "1588",
+            "right": "1361",
+            "bottom": "1361",
+            "left": "1588",
+            "header": "1021",
+            "footer": "1021",
+            "gutter": "0"
+          },
+          "cols": {
+            "space": "720",
+            "num": "1"
+          }
+        }
+      ],
+      "tracked_insertions": 0,
+      "tracked_deletions": 0,
+      "has_comments_part": false,
+      "header_parts": [
+        "word/header1.xml"
+      ],
+      "footer_parts": [
+        "word/footer1.xml"
+      ]
+    }
+  ]
+}

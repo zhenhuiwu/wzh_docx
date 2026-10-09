@@ -1,0 +1,29 @@
+[project]
+name = "doc-workbench-server"
+version = "0.1.0"
+description = "Local foundation for the document workbench."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.141.1",
+  "pydantic-settings==2.15.0",
+  "uvicorn==0.54.0",
+  "python-docx==1.1.2",
+  "markdown==3.7",
+  "python-multipart>=0.0.9",
+  "pywin32>=312 ; sys_platform == 'win32'",
+  "deepagents==0.7.18",
+  "langchain-openai>=1.6.6",
+  "playwright==1.63.0",
+  "httpx==0.28.1",
+  "pytest==9.1.1",
+]
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

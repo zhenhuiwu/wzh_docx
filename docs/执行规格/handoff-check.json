@@ -1,0 +1,22 @@
+{
+  "date": "2026-09-27",
+  "scope": "执行规格静态核查，不是业务代码或UI验收",
+  "issues": [],
+  "checkedMarkdownFiles": 18,
+  "pages": 21,
+  "pageGwtSpecifications": 43,
+  "developmentTasks": 25,
+  "taskGwtSpecifications": 50,
+  "apiPaths": 101,
+  "apiOperations": 123,
+  "dataSchemas": 169,
+  "syntheticSchemaExamples": 38,
+  "businessScenarioSpecifications": 16,
+  "protectedSourceFiles": 48,
+  "unchangedSourceFiles": 48,
+  "businessCodeModified": false,
+  "originalTemplatesModified": false,
+  "frontendScreenshotsPerformed": false,
+  "fullSchemaValidationPassed": false,
+  "fullSchemaValidationBlocker": "本地jsonschema缺referencing；未安装依赖，正反例尚未完整执行。"
+}

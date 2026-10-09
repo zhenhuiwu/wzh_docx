@@ -1,0 +1,17 @@
+{
+  "date": "2026-09-27",
+  "scope": "完整方案与交接材料遗漏检查，只修改文档",
+  "issues": [],
+  "checkedDocuments": 14,
+  "clarifiedGaps": 8,
+  "baseAcceptanceCases": 48,
+  "additionalAcceptanceCases": 8,
+  "decisionItemsTracked": 14,
+  "protectedFiles": 48,
+  "unchangedProtectedFiles": 48,
+  "frontendChanged": false,
+  "businessImplemented": false,
+  "screenshotsVerified": false,
+  "actualSkillPackagesCreated": false,
+  "remainingInputs": "模型/运行环境/Word标准/角色政策等未确认；不以文档代替用户批准或实际开发产物"
+}

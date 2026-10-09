@@ -1,0 +1,76 @@
+{
+  "exampleOnly": true,
+  "productionUsable": false,
+  "templateBindingStatus": "unverified",
+  "name": "系统概述示例块",
+  "internalKey": "overview.summary",
+  "wordBinding": {
+    "mode": "template_slot",
+    "slotName": "overview_summary",
+    "styleMustComeFromApprovedTemplate": true,
+    "approvedTemplateVersionId": null
+  },
+  "inputContract": {
+    "projectId": "20000000-0000-4000-8000-000000000001",
+    "targetBlockId": "50000000-0000-4000-8000-000000000001",
+    "baseRevision": 3,
+    "requiredFactLabels": [
+      "项目名称",
+      "软件用途"
+    ],
+    "confirmedFacts": [
+      {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "label": "项目名称",
+        "value": "验收样例项目甲",
+        "revision": 1
+      },
+      {
+        "id": "90000000-0000-4000-8000-000000000002",
+        "label": "软件用途",
+        "value": "用于演示受控文档编写、资料核对和交付流程。",
+        "revision": 1
+      }
+    ],
+    "allowedSources": [],
+    "allowedTools": []
+  },
+  "prompt": "只编写当前系统概述块。仅依据本轮已确认事实，使用提供的项目名称和软件用途，输出1至2个正文段落。不得新增技术栈、性能数字、部署方式、安全资质或测试结论，不写标题、字体、编号或排版标记，不修改其他块。缺少项目名称或用途时返回needs_input并列出缺项，content为空。返回ModelCandidateOutput结构；targetBlockId和baseRevision原样使用，usedFactIds只能引用本轮事实，usedSources只能来自允许集合。",
+  "outputSchemaName": "ModelCandidateOutput",
+  "programChecks": [
+    "任务身份/项目/块匹配；baseRevision仍有效",
+    "所有必需事实确为已确认且版本未变",
+    "内容只允许paragraph且1至2段；不存在富HTML/样式字段",
+    "事实和来源ID都在输入允许集合内",
+    "保存为候选，不自动采用当前稿"
+  ],
+  "normalExpected": {
+    "targetBlockId": "50000000-0000-4000-8000-000000000001",
+    "baseRevision": 3,
+    "completionState": "complete",
+    "content": [
+      {
+        "type": "paragraph",
+        "text": "验收样例项目甲用于演示受控文档编写、资料核对和交付流程。"
+      }
+    ],
+    "usedFactIds": [
+      "90000000-0000-4000-8000-000000000001",
+      "90000000-0000-4000-8000-000000000002"
+    ],
+    "usedSources": [],
+    "missingInputs": []
+  },
+  "missingExpected": {
+    "targetBlockId": "50000000-0000-4000-8000-000000000001",
+    "baseRevision": 3,
+    "completionState": "needs_input",
+    "content": [],
+    "usedFactIds": [],
+    "usedSources": [],
+    "missingInputs": [
+      "缺少已确认的软件用途。"
+    ]
+  },
+  "acceptance": "本例只验证合同，不证明真实公司模板位置或字体已适配。真实绑定由DEV08验证，真实模型能力由DEV13验证。"
+}

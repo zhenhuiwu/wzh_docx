@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统状态检查 - 项目文档管理系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+            background: #f4f6f8;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #182534;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .status.ok {
+            background: #e8f6ee;
+            color: #267149;
+            border-left: 4px solid #267149;
+        }
+        .status.error {
+            background: #f8f1f0;
+            color: #b42318;
+            border-left: 4px solid #b42318;
+        }
+        .status.warning {
+            background: #fff7e6;
+            color: #9d6400;
+            border-left: 4px solid #9d6400;
+        }
+        .check-item {
+            margin: 15px 0;
+            padding: 10px;
+            background: #f4f6f8;
+            border-radius: 4px;
+        }
+        .check-item strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #182534;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #2876d7;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-top: 20px;
+            cursor: pointer;
+            border: none;
+            font-size: 14px;
+        }
+        .btn:hover {
+            background: #1d5fb0;
+        }
+        code {
+            background: #e6edf3;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "Consolas", monospace;
+            font-size: 13px;
+        }
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #2876d7;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 系统状态检查</h1>
+
+        <div class="status ok">
+            <strong>✅ 前端服务正常</strong>
+            <p>你能看到这个页面，说明前端服务已正常运行。</p>
+        </div>
+
+        <div class="check-item">
+            <strong>正在检查后端服务...</strong>
+            <p id="backend-status"><span class="loading"></span> 检测中...</p>
+        </div>
+
+        <div class="check-item">
+            <strong>正在检查 API 连接...</strong>
+            <p id="api-status"><span class="loading"></span> 检测中...</p>
+        </div>
+
+        <div id="result"></div>
+
+        <h2 style="margin-top: 30px; margin-bottom: 15px; font-size: 20px;">📋 系统信息</h2>
+        <div class="check-item">
+            <strong>前端地址</strong>
+            <p><code>http://localhost:5173</code></p>
+        </div>
+        <div class="check-item">
+            <strong>后端地址</strong>
+            <p><code>http://localhost:8000</code></p>
+        </div>
+        <div class="check-item">
+            <strong>健康检查</strong>
+            <p><code>http://localhost:8000/api/v1/health</code></p>
+        </div>
+
+        <button class="btn" onclick="location.reload()">🔄 重新检测</button>
+    </div>
+
+    <script>
+        async function checkBackend() {
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/health', {
+                    method: 'GET',
+                    mode: 'cors',
+                    cache: 'no-cache'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('backend-status').innerHTML = '✅ 后端服务正常运行';
+                    document.getElementById('api-status').innerHTML = '✅ API 连接成功';
+
+                    document.getElementById('result').innerHTML = `
+                        <div class="status ok">
+                            <strong>🎉 系统完全正常！</strong>
+                            <p>前端和后端都已正常运行，现在可以使用完整功能。</p>
+                            <a href="/" class="btn">进入系统</a>
+                        </div>
+                    `;
+                    return true;
+                } else {
+                    throw new Error('API 返回错误');
+                }
+            } catch (error) {
+                document.getElementById('backend-status').innerHTML = '❌ 后端服务未运行';
+                document.getElementById('api-status').innerHTML = '❌ 无法连接到 API';
+
+                document.getElementById('result').innerHTML = `
+                    <div class="status error">
+                        <strong>⚠️ 后端服务未启动</strong>
+                        <p>前端正常，但后端服务未运行。</p>
+                    </div>
+                    <div class="status warning" style="margin-top: 15px;">
+                        <strong>📌 解决方案</strong>
+                        <p style="margin-top: 10px;">1. 启动 PostgreSQL 数据库</p>
+                        <p>2. 运行后端服务：</p>
+                        <pre style="margin: 10px 0; padding: 10px; background: white; border-radius: 4px; overflow-x: auto;">cd D:\\项目\\智能化\\server
+.venv\\Scripts\\activate
+python -m uvicorn app.main:app --reload</pre>
+                        <p>3. 刷新此页面检查状态</p>
+                    </div>
+                `;
+                return false;
+            }
+        }
+
+        // 页面加载时自动检测
+        checkBackend();
+
+        // 每5秒自动重新检测
+        setInterval(checkBackend, 5000);
+    </script>
+</body>
+</html>

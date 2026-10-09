@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN client_contact TEXT NOT NULL DEFAULT '';

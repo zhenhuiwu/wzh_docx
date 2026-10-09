@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统诊断</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei UI", sans-serif;
+            padding: 20px;
+            background: #f4f6f8;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { color: #182534; margin-bottom: 20px; }
+        .status {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid;
+        }
+        .ok { background: #e8f6ee; color: #267149; border-color: #267149; }
+        .error { background: #f8f1f0; color: #b42318; border-color: #b42318; }
+        .info { background: #e6f2fa; color: #1d5fb0; border-color: #2876d7; }
+        pre {
+            background: #f4f6f8;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #2876d7;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 5px;
+            cursor: pointer;
+            border: none;
+        }
+        .btn:hover { background: #1d5fb0; }
+        #log { max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 系统诊断</h1>
+
+        <div id="backend-status" class="status info">检测后端中...</div>
+        <div id="api-status" class="status info">检测 API 中...</div>
+        <div id="session-status" class="status info">检测会话中...</div>
+
+        <h2 style="margin-top: 30px; margin-bottom: 15px;">📋 详细日志</h2>
+        <div id="log"></div>
+
+        <div style="margin-top: 20px;">
+            <button class="btn" onclick="runTests()">🔄 重新检测</button>
+            <a class="btn" href="/" style="background: #267149;">进入系统</a>
+            <button class="btn" onclick="showConsole()" style="background: #666;">打开控制台</button>
+        </div>
+
+        <h2 style="margin-top: 30px; margin-bottom: 15px;">📌 快速修复</h2>
+        <div class="status info">
+            <strong>如果看到空白页面：</strong>
+            <ol style="margin: 10px 0 0 20px; line-height: 1.8;">
+                <li>按 F12 打开开发者工具</li>
+                <li>查看 Console 标签的错误信息</li>
+                <li>查看 Network 标签的失败请求</li>
+                <li>刷新页面（Ctrl+F5）清除缓存</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const log = document.getElementById('log');
+
+        function addLog(message, type = 'info') {
+            const color = type === 'error' ? '#b42318' : type === 'ok' ? '#267149' : '#182534';
+            log.innerHTML += `<div style="color: ${color}; margin: 5px 0;">${new Date().toLocaleTimeString()} - ${message}</div>`;
+            console.log(message);
+        }
+
+        async function testBackend() {
+            addLog('测试后端健康检查...');
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/health');
+                if (response.ok) {
+                    const data = await response.json();
+                    addLog('✅ 后端正常: ' + JSON.stringify(data), 'ok');
+                    document.getElementById('backend-status').className = 'status ok';
+                    document.getElementById('backend-status').textContent = '✅ 后端服务正常';
+                    return true;
+                } else {
+                    throw new Error('HTTP ' + response.status);
+                }
+            } catch (error) {
+                addLog('❌ 后端错误: ' + error.message, 'error');
+                document.getElementById('backend-status').className = 'status error';
+                document.getElementById('backend-status').textContent = '❌ 后端服务异常: ' + error.message;
+                return false;
+            }
+        }
+
+        async function testCSRF() {
+            addLog('测试 CSRF token...');
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/csrf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    addLog('✅ CSRF token 获取成功', 'ok');
+                    document.getElementById('api-status').className = 'status ok';
+                    document.getElementById('api-status').textContent = '✅ API 接口正常';
+                    return data.data.token;
+                } else {
+                    throw new Error('HTTP ' + response.status);
+                }
+            } catch (error) {
+                addLog('❌ CSRF 错误: ' + error.message, 'error');
+                document.getElementById('api-status').className = 'status error';
+                document.getElementById('api-status').textContent = '❌ API 接口异常: ' + error.message;
+                return null;
+            }
+        }
+
+        async function testSession() {
+            addLog('测试会话获取...');
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/session');
+                addLog('会话响应状态: ' + response.status);
+
+                if (response.status === 401) {
+                    addLog('✅ 未登录状态（正常）', 'ok');
+                    document.getElementById('session-status').className = 'status ok';
+                    document.getElementById('session-status').textContent = '✅ 会话检测正常（未登录）';
+                    return true;
+                } else if (response.ok) {
+                    const data = await response.json();
+                    addLog('✅ 已登录: ' + JSON.stringify(data), 'ok');
+                    document.getElementById('session-status').className = 'status ok';
+                    document.getElementById('session-status').textContent = '✅ 已登录状态';
+                    return true;
+                }
+            } catch (error) {
+                addLog('❌ 会话错误: ' + error.message, 'error');
+                document.getElementById('session-status').className = 'status error';
+                document.getElementById('session-status').textContent = '❌ 会话检测异常: ' + error.message;
+                return false;
+            }
+        }
+
+        async function runTests() {
+            log.innerHTML = '';
+            addLog('=== 开始系统诊断 ===');
+
+            const backendOk = await testBackend();
+            if (!backendOk) {
+                addLog('后端未运行，停止后续测试', 'error');
+                return;
+            }
+
+            await testCSRF();
+            await testSession();
+
+            addLog('=== 诊断完成 ===', 'ok');
+        }
+
+        function showConsole() {
+            alert('请按 F12 打开开发者工具，查看 Console 和 Network 标签');
+        }
+
+        // 页面加载时自动运行
+        runTests();
+    </script>
+</body>
+</html>

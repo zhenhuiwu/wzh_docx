@@ -1,0 +1,1327 @@
+{
+  "contractVersion": "0.1.0-design",
+  "designOnly": true,
+  "operations": [
+    {
+      "operationId": "getHealth",
+      "method": "GET",
+      "path": "/health",
+      "input": null,
+      "output": "HealthResponse",
+      "tag": "基础",
+      "capability": null,
+      "gates": []
+    },
+    {
+      "operationId": "getCsrf",
+      "method": "GET",
+      "path": "/auth/csrf",
+      "input": null,
+      "output": "CsrfResponse",
+      "tag": "身份",
+      "capability": null,
+      "gates": [
+        "D03"
+      ]
+    },
+    {
+      "operationId": "login",
+      "method": "POST",
+      "path": "/auth/login",
+      "input": "LoginRequest",
+      "output": "SessionResponse",
+      "tag": "身份",
+      "capability": null,
+      "gates": [
+        "D03"
+      ]
+    },
+    {
+      "operationId": "getCurrentSession",
+      "method": "GET",
+      "path": "/auth/me",
+      "input": null,
+      "output": "SessionResponse",
+      "tag": "身份",
+      "capability": null,
+      "gates": []
+    },
+    {
+      "operationId": "logout",
+      "method": "POST",
+      "path": "/auth/logout",
+      "input": null,
+      "output": null,
+      "tag": "身份",
+      "capability": null,
+      "gates": []
+    },
+    {
+      "operationId": "changePassword",
+      "method": "POST",
+      "path": "/auth/change-password",
+      "input": "ChangePasswordRequest",
+      "output": null,
+      "tag": "身份",
+      "capability": null,
+      "gates": [
+        "D03"
+      ]
+    },
+    {
+      "operationId": "listUsers",
+      "method": "GET",
+      "path": "/users",
+      "input": null,
+      "output": "UserListResponse",
+      "tag": "用户",
+      "capability": "users.read",
+      "gates": []
+    },
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/users",
+      "input": "UserCreate",
+      "output": "UserResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": [
+        "D03",
+        "D09"
+      ]
+    },
+    {
+      "operationId": "updateUser",
+      "method": "PATCH",
+      "path": "/users/{userId}",
+      "input": "UserPatch",
+      "output": "UserResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": []
+    },
+    {
+      "operationId": "setUserRoles",
+      "method": "PUT",
+      "path": "/users/{userId}/roles",
+      "input": "UserRolesMutation",
+      "output": "UserResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "disableUser",
+      "method": "POST",
+      "path": "/users/{userId}/disable",
+      "input": "ReasonMutation",
+      "output": "UserResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": []
+    },
+    {
+      "operationId": "enableUser",
+      "method": "POST",
+      "path": "/users/{userId}/enable",
+      "input": "ReasonMutation",
+      "output": "UserResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": []
+    },
+    {
+      "operationId": "resetCredentials",
+      "method": "POST",
+      "path": "/users/{userId}/reset-credentials",
+      "input": "ReasonMutation",
+      "output": "CredentialActionResponse",
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": [
+        "D03"
+      ]
+    },
+    {
+      "operationId": "revokeUserSessions",
+      "method": "DELETE",
+      "path": "/users/{userId}/sessions",
+      "input": null,
+      "output": null,
+      "tag": "用户",
+      "capability": "users.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listProjects",
+      "method": "GET",
+      "path": "/projects",
+      "input": null,
+      "output": "ProjectListResponse",
+      "tag": "项目",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "createProject",
+      "method": "POST",
+      "path": "/projects",
+      "input": "ProjectCreate",
+      "output": "ProjectResponse",
+      "tag": "项目",
+      "capability": "projects.create",
+      "gates": []
+    },
+    {
+      "operationId": "getProject",
+      "method": "GET",
+      "path": "/projects/{projectId}",
+      "input": null,
+      "output": "ProjectResponse",
+      "tag": "项目",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "updateProject",
+      "method": "PATCH",
+      "path": "/projects/{projectId}",
+      "input": "ProjectPatch",
+      "output": "ProjectResponse",
+      "tag": "项目",
+      "capability": "projects.manage",
+      "gates": []
+    },
+    {
+      "operationId": "archiveProject",
+      "method": "POST",
+      "path": "/projects/{projectId}/archive",
+      "input": "ReasonMutation",
+      "output": "ProjectResponse",
+      "tag": "项目",
+      "capability": "projects.manage",
+      "gates": []
+    },
+    {
+      "operationId": "unarchiveProject",
+      "method": "POST",
+      "path": "/projects/{projectId}/unarchive",
+      "input": "ReasonMutation",
+      "output": "ProjectResponse",
+      "tag": "项目",
+      "capability": "projects.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listProjectMembers",
+      "method": "GET",
+      "path": "/projects/{projectId}/members",
+      "input": null,
+      "output": "MemberListResponse",
+      "tag": "项目",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "setProjectMember",
+      "method": "PUT",
+      "path": "/projects/{projectId}/members/{userId}",
+      "input": "MemberChange",
+      "output": "MemberListResponse",
+      "tag": "项目",
+      "capability": "projects.members.manage",
+      "gates": []
+    },
+    {
+      "operationId": "removeProjectMember",
+      "method": "DELETE",
+      "path": "/projects/{projectId}/members/{userId}",
+      "input": null,
+      "output": "MemberListResponse",
+      "tag": "项目",
+      "capability": "projects.members.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listProjectFacts",
+      "method": "GET",
+      "path": "/projects/{projectId}/facts",
+      "input": null,
+      "output": "FactListResponse",
+      "tag": "项目",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "createFactCandidate",
+      "method": "POST",
+      "path": "/projects/{projectId}/facts",
+      "input": "FactCreate",
+      "output": "FactResponse",
+      "tag": "项目",
+      "capability": "facts.edit",
+      "gates": []
+    },
+    {
+      "operationId": "reviseFact",
+      "method": "PATCH",
+      "path": "/facts/{factId}",
+      "input": "FactPatch",
+      "output": "FactResponse",
+      "tag": "项目",
+      "capability": "facts.edit",
+      "gates": []
+    },
+    {
+      "operationId": "confirmFact",
+      "method": "POST",
+      "path": "/facts/{factId}/confirm",
+      "input": "ReasonMutation",
+      "output": "FactResponse",
+      "tag": "项目",
+      "capability": "facts.confirm",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "getWorkbench",
+      "method": "GET",
+      "path": "/workbench",
+      "input": null,
+      "output": "WorkbenchResponse",
+      "tag": "工作台",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "listIssues",
+      "method": "GET",
+      "path": "/issues",
+      "input": null,
+      "output": "IssueListResponse",
+      "tag": "工作台",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "listTemplates",
+      "method": "GET",
+      "path": "/system/templates",
+      "input": null,
+      "output": "TemplateListResponse",
+      "tag": "系统",
+      "capability": "templates.read",
+      "gates": []
+    },
+    {
+      "operationId": "createTemplate",
+      "method": "POST",
+      "path": "/system/templates",
+      "input": "TemplateCreate",
+      "output": "TemplateResponse",
+      "tag": "系统",
+      "capability": "templates.manage",
+      "gates": []
+    },
+    {
+      "operationId": "getTemplate",
+      "method": "GET",
+      "path": "/system/templates/{templateId}",
+      "input": null,
+      "output": "TemplateResponse",
+      "tag": "系统",
+      "capability": "templates.read",
+      "gates": []
+    },
+    {
+      "operationId": "listTemplateVersions",
+      "method": "GET",
+      "path": "/system/templates/{templateId}/versions",
+      "input": null,
+      "output": "TemplateVersionListResponse",
+      "tag": "系统",
+      "capability": "templates.read",
+      "gates": []
+    },
+    {
+      "operationId": "createTemplateVersion",
+      "method": "POST",
+      "path": "/system/templates/{templateId}/versions",
+      "input": "TemplateVersionCreate",
+      "output": "TemplateVersionResponse",
+      "tag": "系统",
+      "capability": "templates.manage",
+      "gates": []
+    },
+    {
+      "operationId": "getTemplateVersion",
+      "method": "GET",
+      "path": "/template-versions/{versionId}",
+      "input": null,
+      "output": "TemplateVersionResponse",
+      "tag": "系统",
+      "capability": "templates.read",
+      "gates": []
+    },
+    {
+      "operationId": "validateTemplateVersion",
+      "method": "POST",
+      "path": "/template-versions/{versionId}/validate",
+      "input": "Mutation",
+      "output": "JobAcceptedResponse",
+      "tag": "系统",
+      "capability": "templates.manage",
+      "gates": [
+        "D06"
+      ]
+    },
+    {
+      "operationId": "publishTemplateVersion",
+      "method": "POST",
+      "path": "/template-versions/{versionId}/publish",
+      "input": "ReasonMutation",
+      "output": "TemplateVersionResponse",
+      "tag": "系统",
+      "capability": "templates.publish",
+      "gates": [
+        "D06"
+      ]
+    },
+    {
+      "operationId": "getSettings",
+      "method": "GET",
+      "path": "/system/settings",
+      "input": null,
+      "output": "SettingsResponse",
+      "tag": "系统",
+      "capability": "system.manage",
+      "gates": []
+    },
+    {
+      "operationId": "updateSettings",
+      "method": "PUT",
+      "path": "/system/settings",
+      "input": "SettingsPatch",
+      "output": "SettingsResponse",
+      "tag": "系统",
+      "capability": "system.manage",
+      "gates": [
+        "D11",
+        "D12"
+      ]
+    },
+    {
+      "operationId": "listModelProfiles",
+      "method": "GET",
+      "path": "/system/model-profiles",
+      "input": null,
+      "output": "ModelProfileListResponse",
+      "tag": "系统",
+      "capability": "system.models.manage",
+      "gates": []
+    },
+    {
+      "operationId": "createModelProfile",
+      "method": "POST",
+      "path": "/system/model-profiles",
+      "input": "ModelProfileCreate",
+      "output": "ModelProfileResponse",
+      "tag": "系统",
+      "capability": "system.models.manage",
+      "gates": [
+        "D01",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "updateModelProfile",
+      "method": "PATCH",
+      "path": "/system/model-profiles/{profileId}",
+      "input": "ModelProfilePatch",
+      "output": "ModelProfileResponse",
+      "tag": "系统",
+      "capability": "system.models.manage",
+      "gates": [
+        "D01"
+      ]
+    },
+    {
+      "operationId": "testModelProfile",
+      "method": "POST",
+      "path": "/model-profiles/{profileId}/test",
+      "input": "Mutation",
+      "output": "ModelTestResponse",
+      "tag": "系统",
+      "capability": "system.models.manage",
+      "gates": [
+        "D01",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "listEnvironments",
+      "method": "GET",
+      "path": "/system/environments",
+      "input": null,
+      "output": "EnvironmentProfileListResponse",
+      "tag": "系统",
+      "capability": "system.environments.read",
+      "gates": []
+    },
+    {
+      "operationId": "createEnvironment",
+      "method": "POST",
+      "path": "/system/environments",
+      "input": "EnvironmentProfileCreate",
+      "output": "EnvironmentProfileResponse",
+      "tag": "系统",
+      "capability": "system.environments.manage",
+      "gates": [
+        "D04",
+        "D05",
+        "D06",
+        "D10",
+        "D12"
+      ]
+    },
+    {
+      "operationId": "updateEnvironment",
+      "method": "PATCH",
+      "path": "/system/environments/{environmentId}",
+      "input": "EnvironmentProfilePatch",
+      "output": "EnvironmentProfileResponse",
+      "tag": "系统",
+      "capability": "system.environments.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listAuditEvents",
+      "method": "GET",
+      "path": "/system/audit-events",
+      "input": null,
+      "output": "AuditListResponse",
+      "tag": "系统",
+      "capability": "audit.read",
+      "gates": []
+    },
+    {
+      "operationId": "uploadFile",
+      "method": "POST",
+      "path": "/files",
+      "input": "FileUpload",
+      "output": "FileResponse",
+      "tag": "文件",
+      "capability": "files.upload",
+      "gates": [
+        "D08",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "downloadFile",
+      "method": "GET",
+      "path": "/files/{fileId}/content",
+      "input": null,
+      "output": "FileInfo",
+      "tag": "文件",
+      "capability": "files.read",
+      "gates": []
+    },
+    {
+      "operationId": "previewFile",
+      "method": "GET",
+      "path": "/files/{fileId}/preview",
+      "input": null,
+      "output": "FileInfo",
+      "tag": "文件",
+      "capability": "files.read",
+      "gates": []
+    },
+    {
+      "operationId": "listKnowledgeBases",
+      "method": "GET",
+      "path": "/knowledge-bases",
+      "input": null,
+      "output": "KnowledgeBaseListResponse",
+      "tag": "知识库",
+      "capability": "knowledge.read",
+      "gates": []
+    },
+    {
+      "operationId": "createKnowledgeBase",
+      "method": "POST",
+      "path": "/knowledge-bases",
+      "input": "KnowledgeBaseCreate",
+      "output": "KnowledgeBaseResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "getKnowledgeBase",
+      "method": "GET",
+      "path": "/knowledge-bases/{baseId}",
+      "input": null,
+      "output": "KnowledgeBaseResponse",
+      "tag": "知识库",
+      "capability": "knowledge.read",
+      "gates": []
+    },
+    {
+      "operationId": "updateKnowledgeBase",
+      "method": "PATCH",
+      "path": "/knowledge-bases/{baseId}",
+      "input": "KnowledgeBasePatch",
+      "output": "KnowledgeBaseResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": []
+    },
+    {
+      "operationId": "setKnowledgeAccess",
+      "method": "PUT",
+      "path": "/knowledge-bases/{baseId}/access",
+      "input": "KnowledgeAccess",
+      "output": "KnowledgeBaseResponse",
+      "tag": "知识库",
+      "capability": "knowledge.access.manage",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "archiveKnowledgeBase",
+      "method": "POST",
+      "path": "/knowledge-bases/{baseId}/archive",
+      "input": "ReasonMutation",
+      "output": "KnowledgeBaseResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listSources",
+      "method": "GET",
+      "path": "/knowledge-bases/{baseId}/sources",
+      "input": null,
+      "output": "SourceVersionListResponse",
+      "tag": "知识库",
+      "capability": "knowledge.read",
+      "gates": []
+    },
+    {
+      "operationId": "createSource",
+      "method": "POST",
+      "path": "/knowledge-bases/{baseId}/sources",
+      "input": "SourceCreate",
+      "output": "SourceVersionResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": []
+    },
+    {
+      "operationId": "getSourceVersion",
+      "method": "GET",
+      "path": "/source-versions/{sourceVersionId}",
+      "input": null,
+      "output": "SourceVersionResponse",
+      "tag": "知识库",
+      "capability": "knowledge.read",
+      "gates": []
+    },
+    {
+      "operationId": "createSourceVersion",
+      "method": "POST",
+      "path": "/sources/{sourceId}/versions",
+      "input": "SourceVersionCreate",
+      "output": "SourceVersionResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": []
+    },
+    {
+      "operationId": "processSourceVersion",
+      "method": "POST",
+      "path": "/source-versions/{sourceVersionId}/process",
+      "input": "Mutation",
+      "output": "JobAcceptedResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": [
+        "D08"
+      ]
+    },
+    {
+      "operationId": "publishSourceVersion",
+      "method": "POST",
+      "path": "/source-versions/{sourceVersionId}/publish",
+      "input": "ReasonMutation",
+      "output": "SourceVersionResponse",
+      "tag": "知识库",
+      "capability": "knowledge.publish",
+      "gates": []
+    },
+    {
+      "operationId": "retireSource",
+      "method": "POST",
+      "path": "/sources/{sourceId}/retire",
+      "input": "ReasonMutation",
+      "output": "SourceVersionResponse",
+      "tag": "知识库",
+      "capability": "knowledge.manage",
+      "gates": []
+    },
+    {
+      "operationId": "searchKnowledge",
+      "method": "POST",
+      "path": "/knowledge/search",
+      "input": "SearchRequest",
+      "output": "SearchResponse",
+      "tag": "知识库",
+      "capability": "knowledge.read",
+      "gates": []
+    },
+    {
+      "operationId": "listProjectKnowledgeBindings",
+      "method": "GET",
+      "path": "/projects/{projectId}/knowledge-bindings",
+      "input": null,
+      "output": "KnowledgeBindingListResponse",
+      "tag": "项目",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "setProjectKnowledgeBindings",
+      "method": "PUT",
+      "path": "/projects/{projectId}/knowledge-bindings",
+      "input": "KnowledgeBindingChange",
+      "output": "KnowledgeBindingListResponse",
+      "tag": "项目",
+      "capability": "projects.manage",
+      "gates": []
+    },
+    {
+      "operationId": "listDocuments",
+      "method": "GET",
+      "path": "/projects/{projectId}/documents",
+      "input": null,
+      "output": "DocumentListResponse",
+      "tag": "文档",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "createDocument",
+      "method": "POST",
+      "path": "/projects/{projectId}/documents",
+      "input": "DocumentCreate",
+      "output": "DocumentResponse",
+      "tag": "文档",
+      "capability": "documents.edit",
+      "gates": []
+    },
+    {
+      "operationId": "getDocument",
+      "method": "GET",
+      "path": "/documents/{documentId}",
+      "input": null,
+      "output": "DocumentResponse",
+      "tag": "文档",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "listDocumentBlocks",
+      "method": "GET",
+      "path": "/documents/{documentId}/blocks",
+      "input": null,
+      "output": "BlockListResponse",
+      "tag": "文档",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "getBlock",
+      "method": "GET",
+      "path": "/blocks/{blockId}",
+      "input": null,
+      "output": "BlockResponse",
+      "tag": "文档",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "listBlockRevisions",
+      "method": "GET",
+      "path": "/blocks/{blockId}/revisions",
+      "input": null,
+      "output": "BlockRevisionListResponse",
+      "tag": "文档",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "saveBlockDraft",
+      "method": "POST",
+      "path": "/blocks/{blockId}/revisions",
+      "input": "BlockEdit",
+      "output": "BlockRevisionResponse",
+      "tag": "文档",
+      "capability": "documents.edit",
+      "gates": []
+    },
+    {
+      "operationId": "adoptBlockCandidate",
+      "method": "POST",
+      "path": "/blocks/{blockId}/revisions/{revisionId}/adopt",
+      "input": "AdoptCandidate",
+      "output": "BlockResponse",
+      "tag": "文档",
+      "capability": "documents.edit",
+      "gates": []
+    },
+    {
+      "operationId": "discardBlockCandidate",
+      "method": "POST",
+      "path": "/blocks/{blockId}/revisions/{revisionId}/discard",
+      "input": "ReasonMutation",
+      "output": "BlockResponse",
+      "tag": "文档",
+      "capability": "documents.edit",
+      "gates": []
+    },
+    {
+      "operationId": "generateBlock",
+      "method": "POST",
+      "path": "/blocks/{blockId}/generate",
+      "input": "BlockGenerate",
+      "output": "JobAcceptedResponse",
+      "tag": "文档",
+      "capability": "assistant.write",
+      "gates": [
+        "D01"
+      ]
+    },
+    {
+      "operationId": "generateDocumentBlocks",
+      "method": "POST",
+      "path": "/documents/{documentId}/generation-jobs",
+      "input": "DocumentGenerate",
+      "output": "JobAcceptedResponse",
+      "tag": "文档",
+      "capability": "assistant.write",
+      "gates": [
+        "D01"
+      ]
+    },
+    {
+      "operationId": "listRelations",
+      "method": "GET",
+      "path": "/projects/{projectId}/relations",
+      "input": null,
+      "output": "RelationListResponse",
+      "tag": "关系",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "listImpacts",
+      "method": "GET",
+      "path": "/projects/{projectId}/impacts",
+      "input": null,
+      "output": "ImpactListResponse",
+      "tag": "关系",
+      "capability": "projects.read",
+      "gates": []
+    },
+    {
+      "operationId": "resolveImpact",
+      "method": "POST",
+      "path": "/impacts/{impactId}/resolve",
+      "input": "ReasonMutation",
+      "output": "ImpactListResponse",
+      "tag": "关系",
+      "capability": "documents.edit",
+      "gates": []
+    },
+    {
+      "operationId": "listReviews",
+      "method": "GET",
+      "path": "/projects/{projectId}/reviews",
+      "input": null,
+      "output": "ReviewListResponse",
+      "tag": "审核",
+      "capability": "reviews.read",
+      "gates": []
+    },
+    {
+      "operationId": "createReview",
+      "method": "POST",
+      "path": "/reviews",
+      "input": "ReviewCreate",
+      "output": "ReviewResponse",
+      "tag": "审核",
+      "capability": "reviews.submit",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "decideReview",
+      "method": "POST",
+      "path": "/reviews/{reviewId}/decision",
+      "input": "ReviewDecision",
+      "output": "ReviewResponse",
+      "tag": "审核",
+      "capability": "reviews.decide",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "exportDocument",
+      "method": "POST",
+      "path": "/documents/{documentId}/exports",
+      "input": "ExportRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "交付",
+      "capability": "documents.export",
+      "gates": [
+        "D06"
+      ]
+    },
+    {
+      "operationId": "listDeliveries",
+      "method": "GET",
+      "path": "/projects/{projectId}/deliveries",
+      "input": null,
+      "output": "DeliveryListResponse",
+      "tag": "交付",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "createDelivery",
+      "method": "POST",
+      "path": "/projects/{projectId}/deliveries",
+      "input": "DeliveryRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "交付",
+      "capability": "deliveries.publish",
+      "gates": [
+        "D06",
+        "D09"
+      ]
+    },
+    {
+      "operationId": "getDelivery",
+      "method": "GET",
+      "path": "/deliveries/{deliveryId}",
+      "input": null,
+      "output": "DeliveryResponse",
+      "tag": "交付",
+      "capability": "documents.read",
+      "gates": []
+    },
+    {
+      "operationId": "listJobs",
+      "method": "GET",
+      "path": "/jobs",
+      "input": null,
+      "output": "JobListResponse",
+      "tag": "任务",
+      "capability": "jobs.read",
+      "gates": []
+    },
+    {
+      "operationId": "getJob",
+      "method": "GET",
+      "path": "/jobs/{jobId}",
+      "input": null,
+      "output": "JobResponse",
+      "tag": "任务",
+      "capability": "jobs.read",
+      "gates": []
+    },
+    {
+      "operationId": "streamJobEvents",
+      "method": "GET",
+      "path": "/jobs/{jobId}/events",
+      "input": null,
+      "output": "JobEvent",
+      "tag": "任务",
+      "capability": "jobs.read",
+      "gates": []
+    },
+    {
+      "operationId": "pauseJob",
+      "method": "POST",
+      "path": "/jobs/{jobId}/pause",
+      "input": "Mutation",
+      "output": "JobResponse",
+      "tag": "任务",
+      "capability": "jobs.control",
+      "gates": []
+    },
+    {
+      "operationId": "resumeJob",
+      "method": "POST",
+      "path": "/jobs/{jobId}/resume",
+      "input": "Mutation",
+      "output": "JobResponse",
+      "tag": "任务",
+      "capability": "jobs.control",
+      "gates": []
+    },
+    {
+      "operationId": "cancelJob",
+      "method": "POST",
+      "path": "/jobs/{jobId}/cancel",
+      "input": "Mutation",
+      "output": "JobResponse",
+      "tag": "任务",
+      "capability": "jobs.control",
+      "gates": []
+    },
+    {
+      "operationId": "verifyJobOutcome",
+      "method": "POST",
+      "path": "/jobs/{jobId}/verify",
+      "input": "VerifyJob",
+      "output": "JobResponse",
+      "tag": "任务",
+      "capability": "jobs.verify",
+      "gates": []
+    },
+    {
+      "operationId": "listConversations",
+      "method": "GET",
+      "path": "/conversations",
+      "input": null,
+      "output": "ConversationListResponse",
+      "tag": "助手",
+      "capability": "assistant.read",
+      "gates": []
+    },
+    {
+      "operationId": "createConversation",
+      "method": "POST",
+      "path": "/conversations",
+      "input": "ConversationCreate",
+      "output": "ConversationResponse",
+      "tag": "助手",
+      "capability": "assistant.read",
+      "gates": []
+    },
+    {
+      "operationId": "getConversation",
+      "method": "GET",
+      "path": "/conversations/{conversationId}",
+      "input": null,
+      "output": "ConversationResponse",
+      "tag": "助手",
+      "capability": "assistant.read",
+      "gates": []
+    },
+    {
+      "operationId": "listMessages",
+      "method": "GET",
+      "path": "/conversations/{conversationId}/messages",
+      "input": null,
+      "output": "MessageListResponse",
+      "tag": "助手",
+      "capability": "assistant.read",
+      "gates": []
+    },
+    {
+      "operationId": "sendMessage",
+      "method": "POST",
+      "path": "/conversations/{conversationId}/messages",
+      "input": "MessageCreate",
+      "output": "JobAcceptedResponse",
+      "tag": "助手",
+      "capability": "assistant.ask",
+      "gates": [
+        "D01"
+      ]
+    },
+    {
+      "operationId": "startAssistantTask",
+      "method": "POST",
+      "path": "/conversations/{conversationId}/jobs",
+      "input": "ConversationJobRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "助手",
+      "capability": "assistant.write",
+      "gates": [
+        "D01"
+      ]
+    },
+    {
+      "operationId": "approveActionScope",
+      "method": "POST",
+      "path": "/action-approvals",
+      "input": "ActionApprovalRequest",
+      "output": "ActionApprovalResponse",
+      "tag": "工具",
+      "capability": "actions.approve",
+      "gates": [
+        "D09",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "listTestCases",
+      "method": "GET",
+      "path": "/projects/{projectId}/test-cases",
+      "input": null,
+      "output": "TestCaseListResponse",
+      "tag": "测试",
+      "capability": "tests.read",
+      "gates": []
+    },
+    {
+      "operationId": "createTestCase",
+      "method": "POST",
+      "path": "/projects/{projectId}/test-cases",
+      "input": "TestCaseCreate",
+      "output": "TestCaseResponse",
+      "tag": "测试",
+      "capability": "tests.edit",
+      "gates": []
+    },
+    {
+      "operationId": "approveTestCase",
+      "method": "POST",
+      "path": "/test-cases/{caseId}/approve",
+      "input": "ReasonMutation",
+      "output": "TestCaseResponse",
+      "tag": "测试",
+      "capability": "tests.approve",
+      "gates": [
+        "D09"
+      ]
+    },
+    {
+      "operationId": "startTestRun",
+      "method": "POST",
+      "path": "/test-cases/{caseId}/runs",
+      "input": "RunRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "测试",
+      "capability": "tests.execute",
+      "gates": [
+        "D04",
+        "D05",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "listTestRuns",
+      "method": "GET",
+      "path": "/projects/{projectId}/runs",
+      "input": null,
+      "output": "TestRunListResponse",
+      "tag": "测试",
+      "capability": "tests.read",
+      "gates": []
+    },
+    {
+      "operationId": "getTestRun",
+      "method": "GET",
+      "path": "/runs/{runId}",
+      "input": null,
+      "output": "TestRunResponse",
+      "tag": "测试",
+      "capability": "tests.read",
+      "gates": []
+    },
+    {
+      "operationId": "listTestSteps",
+      "method": "GET",
+      "path": "/runs/{runId}/steps",
+      "input": null,
+      "output": "TestStepListResponse",
+      "tag": "测试",
+      "capability": "tests.read",
+      "gates": []
+    },
+    {
+      "operationId": "listRunEvidence",
+      "method": "GET",
+      "path": "/runs/{runId}/evidence",
+      "input": null,
+      "output": "EvidenceListResponse",
+      "tag": "测试",
+      "capability": "evidence.read",
+      "gates": []
+    },
+    {
+      "operationId": "importEvidence",
+      "method": "POST",
+      "path": "/evidence/import",
+      "input": "EvidenceImport",
+      "output": "EvidenceResponse",
+      "tag": "测试",
+      "capability": "evidence.manage",
+      "gates": []
+    },
+    {
+      "operationId": "startManualCapture",
+      "method": "POST",
+      "path": "/projects/{projectId}/capture-jobs",
+      "input": "CaptureRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "采集",
+      "capability": "capture.execute",
+      "gates": [
+        "D05",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "getBrowserControl",
+      "method": "GET",
+      "path": "/jobs/{jobId}/browser-control",
+      "input": null,
+      "output": "BrowserControlResponse",
+      "tag": "采集",
+      "capability": "tools.takeover",
+      "gates": []
+    },
+    {
+      "operationId": "takeOverBrowser",
+      "method": "POST",
+      "path": "/jobs/{jobId}/takeover",
+      "input": "Mutation",
+      "output": "BrowserControlResponse",
+      "tag": "采集",
+      "capability": "tools.takeover",
+      "gates": [
+        "D05",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "releaseBrowserControl",
+      "method": "POST",
+      "path": "/jobs/{jobId}/release-control",
+      "input": "Mutation",
+      "output": "BrowserControlResponse",
+      "tag": "采集",
+      "capability": "tools.takeover",
+      "gates": []
+    },
+    {
+      "operationId": "listRoleDefinitions",
+      "method": "GET",
+      "path": "/roles",
+      "input": null,
+      "output": "RoleListResponse",
+      "tag": "用户",
+      "capability": "users.read",
+      "gates": []
+    },
+    {
+      "operationId": "listEffectiveRules",
+      "method": "GET",
+      "path": "/system/rules",
+      "input": null,
+      "output": "RuleListResponse",
+      "tag": "系统",
+      "capability": "system.manage",
+      "gates": []
+    },
+    {
+      "operationId": "getEnvironment",
+      "method": "GET",
+      "path": "/system/environments/{environmentId}",
+      "input": null,
+      "output": "EnvironmentProfileResponse",
+      "tag": "系统",
+      "capability": "system.environments.read",
+      "gates": []
+    },
+    {
+      "operationId": "verifyEnvironment",
+      "method": "POST",
+      "path": "/system/environments/{environmentId}/verify",
+      "input": "Mutation",
+      "output": "EnvironmentVerificationResponse",
+      "tag": "系统",
+      "capability": "system.environments.manage",
+      "gates": [
+        "D04",
+        "D05",
+        "D06",
+        "D10"
+      ]
+    },
+    {
+      "operationId": "updateTemplateVersionDraft",
+      "method": "PATCH",
+      "path": "/template-versions/{versionId}",
+      "input": "TemplateVersionPatch",
+      "output": "TemplateVersionResponse",
+      "tag": "系统",
+      "capability": "templates.manage",
+      "gates": []
+    },
+    {
+      "operationId": "getAuditEvent",
+      "method": "GET",
+      "path": "/system/audit-events/{eventId}",
+      "input": null,
+      "output": "AuditEventResponse",
+      "tag": "系统",
+      "capability": "audit.read",
+      "gates": []
+    },
+    {
+      "operationId": "exportAuditEvents",
+      "method": "POST",
+      "path": "/system/audit-exports",
+      "input": "AuditExportRequest",
+      "output": "JobAcceptedResponse",
+      "tag": "系统",
+      "capability": "audit.export",
+      "gates": [
+        "D09",
+        "D11"
+      ]
+    },
+    {
+      "operationId": "approveTemplateFormat",
+      "method": "POST",
+      "path": "/template-versions/{versionId}/format-approval",
+      "input": "TemplateFormatApproval",
+      "output": "TemplateVersionResponse",
+      "tag": "系统",
+      "capability": "templates.format.approve",
+      "gates": [
+        "D06",
+        "D09"
+      ]
+    },
+    {
+      "operationId": "approveExportFormat",
+      "method": "POST",
+      "path": "/jobs/{jobId}/format-approval",
+      "input": "ExportFormatApproval",
+      "output": "JobResponse",
+      "tag": "交付",
+      "capability": "documents.format.approve",
+      "gates": [
+        "D06",
+        "D09"
+      ]
+    }
+  ]
+}

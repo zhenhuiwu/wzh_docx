@@ -1,0 +1,11 @@
+{
+  "sourceArchive": "agent-browser-1.0.0 (1).zip",
+  "archiveSha256": "b1897941bb8658957d3fa7265eff73531dbacfee6fa86f84dd8e59572b3babd2",
+  "archiveEntriesChecked": 12,
+  "copied": [
+    "SKILL.md",
+    "_meta.json"
+  ],
+  "excluded": "Shell templates and executable installation are not included",
+  "runtime": "Existing project Playwright Chromium; no agent-browser CLI installation"
+}

@@ -1,0 +1,90 @@
+[
+  {
+    "id": "T01",
+    "url": "https://vuejs.org/guide/typescript/overview",
+    "status": 200,
+    "title": "Using Vue with TypeScript | Vue.js",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实 Vue 官方文档提供 TypeScript 使用说明；不据此锁定具体版本。"
+  },
+  {
+    "id": "T02",
+    "url": "https://fastapi.tiangolo.com/features/",
+    "status": 200,
+    "title": "Features - FastAPI",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实 FastAPI 官方功能说明包含接口描述相关能力；部署与兼容性仍需实测。"
+  },
+  {
+    "id": "T03",
+    "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+    "status": 200,
+    "title": "Effective context engineering for AI agents \\ Anthropic",
+    "checked_at": "2026-09-24",
+    "verification_note": "参考外部记忆、上下文选择与长任务管理原则；不能证明本地模型具有同样能力。"
+  },
+  {
+    "id": "T04",
+    "url": "https://docxtpl.readthedocs.io/en/latest/",
+    "status": 200,
+    "title": "Welcome to python-docx-template’s documentation! — python-docx-template 0.20.x documentation",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实标签的 run 和段落边界限制、富文本样式注意事项及图片机制。"
+  },
+  {
+    "id": "T05",
+    "url": "https://support.microsoft.com/en-us/topic/considerations-for-server-side-automation-of-office-48bcfe93-8a89-47f1-0bce-017433ad79e2",
+    "status": 200,
+    "title": "Considerations for server-side Automation of Office | Microsoft Support",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实常规无人值守服务器端 Office 自动化的官方支持边界；其他部署形式应另外核查。"
+  },
+  {
+    "id": "T06",
+    "url": "https://json-schema.org/understanding-json-schema/reference/object",
+    "status": 200,
+    "title": "JSON Schema - object",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实对象 schema 的必填字段和额外字段约束；语义真实性不由 schema 保证。"
+  },
+  {
+    "id": "T07",
+    "url": "https://www.postgresql.org/docs/current/explicit-locking.html",
+    "status": 200,
+    "title": "PostgreSQL: Documentation: 18: 13.3. Explicit Locking",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实数据库锁与应用约定的关系；调度正确性仍需在应用中实现。"
+  },
+  {
+    "id": "T08",
+    "url": "https://github.com/microsoft/playwright-mcp",
+    "status": 200,
+    "title": "GitHub - microsoft/playwright-mcp: Playwright MCP server · GitHub",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实微软维护的 Playwright MCP 支持结构化浏览器观察和交互；不保证任意页面可操作。"
+  },
+  {
+    "id": "T09",
+    "url": "https://playwright.dev/docs/auth",
+    "status": 200,
+    "title": "Authentication | Playwright",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实认证状态属于敏感数据及后端状态对账户复用的限制。"
+  },
+  {
+    "id": "T10",
+    "url": "https://playwright.dev/docs/trace-viewer",
+    "status": 200,
+    "title": "Trace viewer | Playwright",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实浏览器动作与状态的 trace 查看能力；内网与敏感数据要求由本系统另外落实。"
+  },
+  {
+    "id": "T11",
+    "url": "https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html",
+    "status": 200,
+    "title": "Understanding Success Criterion 1.4.3: Contrast (Minimum) | WAI | W3C",
+    "checked_at": "2026-09-24",
+    "verification_note": "核实普通文字与大字的对比度门槛；本次没有完成真实组件无障碍验收。"
+  }
+]

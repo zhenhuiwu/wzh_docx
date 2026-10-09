@@ -1,0 +1,792 @@
+"""Projects and members. Visibility is membership, except system administrators."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import date
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.db import connect
+from app.errors import AppError
+from app.identity import require_csrf, require_permission, require_session
+from app.models import format_timestamp
+
+router = APIRouter()
+
+_STATUSES = {"not_started", "active", "paused", "completed"}
+_ROLES = {"owner", "editor", "reviewer", "viewer"}
+_SORTS = {
+    "updatedAt_desc": "p.updated_at desc, p.name asc",
+    "updatedAt_asc": "p.updated_at asc, p.name asc",
+    "name_asc": "p.name asc",
+}
+
+
+class ProjectCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str = ""
+    organization: str = ""
+    department: str = ""
+    group: str = ""
+    clientContact: str = ""
+    ownerId: str
+    periodStart: str | None = None
+    periodEnd: str | None = None
+    status: str
+
+
+class ProjectPatchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expectedRevision: int = Field(ge=0)
+    name: str | None = None
+    description: str | None = None
+    organization: str | None = None
+    department: str | None = None
+    group: str | None = None
+    clientContact: str | None = None
+    ownerId: str | None = None
+    periodStart: str | None = None
+    periodEnd: str | None = None
+    status: str | None = None
+
+
+class ReasonBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expectedRevision: int = Field(ge=0)
+    reason: str
+
+
+class MemberBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    userId: str
+    role: str
+    expectedProjectRevision: int = Field(ge=0)
+
+
+def _parse_uuid(value: str, field: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError:
+        raise AppError(
+            422,
+            "VALIDATION_FAILED",
+            "标识不正确。",
+            [{"field": field, "message": "需要有效标识。"}],
+        ) from None
+
+
+def _date(value: str | None, field: str) -> date | None:
+    if value is None or value == "":
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise AppError(
+            422,
+            "VALIDATION_FAILED",
+            "日期不正确。",
+            [{"field": field, "message": "使用 YYYY-MM-DD。"}],
+        ) from None
+
+
+def _period(start: date | None, end: date | None) -> None:
+    if start and end and end < start:
+        raise AppError(422, "VALIDATION_FAILED", "结束日期不能早于开始日期。")
+
+
+def _text(value: str, limit: int, field: str, required: bool = False) -> str:
+    cleaned = value.strip()
+    if required and not cleaned:
+        raise AppError(
+            422,
+            "VALIDATION_FAILED",
+            "名称不能为空。",
+            [{"field": field, "message": "请填写。"}],
+        )
+    if len(cleaned) > limit:
+        raise AppError(422, "VALIDATION_FAILED", "内容超过长度。")
+    return cleaned
+
+
+def _reason(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > 1000:
+        raise AppError(
+            422,
+            "VALIDATION_FAILED",
+            "请填写原因。",
+            [{"field": "reason", "message": "原因不能为空。"}],
+        )
+    return cleaned
+
+
+def _is_admin(roles: tuple[str, ...]) -> bool:
+    return "system_admin" in roles
+
+
+def project_role(connection, project_id: UUID, user_id: UUID) -> str | None:
+    row = connection.execute(
+        """
+        select role from project_members
+        where project_id = %s and user_id = %s
+        """,
+        (project_id, user_id),
+    ).fetchone()
+    return None if row is None else str(row["role"])
+
+
+def require_project_owner(connection, actor, project_id: UUID) -> None:
+    if _is_admin(actor.roles):
+        return
+    if project_role(connection, project_id, actor.user_id) != "owner":
+        raise AppError(403, "FORBIDDEN", "只有项目负责人可以修改这个项目。")
+
+
+def require_project_editor(connection, actor, project_id: UUID) -> None:
+    if _is_admin(actor.roles):
+        return
+    if project_role(connection, project_id, actor.user_id) not in {"owner", "editor"}:
+        raise AppError(403, "FORBIDDEN", "只有项目的编写人员可以修改文档。")
+
+
+def _public(row: dict) -> dict[str, object]:
+    archived = row["archived_at"]
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "description": row["description"],
+        "organization": row["organization"],
+        "department": row["department"],
+        "group": row["group_name"],
+        "clientContact": row["client_contact"],
+        "ownerId": str(row["owner_id"]),
+        "ownerName": row["owner_name"],
+        "periodStart": None if row["period_start"] is None else row["period_start"].isoformat(),
+        "periodEnd": None if row["period_end"] is None else row["period_end"].isoformat(),
+        "status": row["status"],
+        "archivedAt": None if archived is None else format_timestamp(archived),
+        "revision": row["revision"],
+        "createdAt": format_timestamp(row["created_at"]),
+        "updatedAt": format_timestamp(row["updated_at"]),
+        "softwareVersion": row["software_version"],
+    }
+
+
+def _visible_sql(admin: bool) -> str:
+    if admin:
+        return "true"
+    return """
+        exists (
+          select 1 from project_members m
+          where m.project_id = p.id and m.user_id = %s
+        )
+    """
+
+
+def _load(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict[str, object]:
+    params: list[object] = [project_id]
+    visibility = "true"
+    if not admin:
+        visibility = _visible_sql(False)
+        params.append(user_id)
+    row = connection.execute(
+        f"""
+        select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
+               p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
+               p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
+               p.software_version
+        from projects p
+        join users owner on owner.id = p.owner_id
+        where p.id = %s and {visibility}
+        """,
+        params,
+    ).fetchone()
+    if row is None:
+        raise AppError(404, "NOT_FOUND", "没有这个项目。")
+    return _public(row)
+
+
+def _owner_count(connection, project_id: UUID, exclude: UUID | None = None) -> int:
+    row = connection.execute(
+        """
+        select count(*) as total
+        from project_members
+        where project_id = %s and role = 'owner'
+          and (%s::uuid is null or user_id <> %s)
+        """,
+        (project_id, exclude, exclude),
+    ).fetchone()
+    return int(row["total"]) if row else 0
+
+
+def _active_owner(connection, owner_id: UUID) -> None:
+    row = connection.execute(
+        "select status from users where id = %s",
+        (owner_id,),
+    ).fetchone()
+    if row is None or row["status"] != "active":
+        raise AppError(422, "VALIDATION_FAILED", "负责人需要是启用中的账号。")
+
+
+def _like(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _envelope(request: Request, project: dict[str, object]) -> dict[str, object]:
+    return {"data": project, "requestId": request.state.request_id}
+
+
+def _check_revision(current: int, expected: int) -> None:
+    if current != expected:
+        raise AppError(
+            409,
+            "REVISION_CONFLICT",
+            "这个项目刚被改过，请重新读取后再保存。",
+            current_revision=current,
+        )
+
+
+def _block_archive_if_jobs(connection, project_id: UUID) -> None:
+    row = connection.execute(
+        """
+        select count(*) as total
+        from jobs
+        where project_id = %s and status in
+          ('queued', 'running', 'pause_requested', 'paused', 'cancel_requested',
+           'waiting_input', 'needs_verification')
+        """,
+        (project_id,),
+    ).fetchone()
+    if row and int(row["total"]) > 0:
+        raise AppError(409, "INVALID_TRANSITION", "还有未处理的运行任务，暂时不能归档。")
+
+
+@router.get("/projects")
+def list_projects(
+    request: Request,
+    page: int = 1,
+    pageSize: int = 10,
+    sort: str = "updatedAt_desc",
+    name: str = "",
+    department: str = "",
+    ownerId: str | None = None,
+    status: str | None = None,
+    archived: bool = False,
+) -> dict[str, object]:
+    actor = require_permission(request, "projects.read")
+    if page < 1 or not 1 <= pageSize <= 50 or sort not in _SORTS:
+        raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
+    if status is not None and status not in _STATUSES:
+        raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
+    admin = _is_admin(actor.roles)
+    filters = ["p.archived_at is null" if not archived else "p.archived_at is not null"]
+    params: list[object] = []
+    if not admin:
+        filters.append(_visible_sql(False))
+        params.append(actor.user_id)
+    if name.strip():
+        filters.append("p.name ilike %s escape '\\'")
+        params.append(_like(name.strip()))
+    if department.strip():
+        filters.append("p.department ilike %s escape '\\'")
+        params.append(_like(department.strip()))
+    if ownerId:
+        filters.append("p.owner_id = %s")
+        params.append(_parse_uuid(ownerId, "ownerId"))
+    if status:
+        filters.append("p.status = %s")
+        params.append(status)
+    where = " and ".join(filters)
+    with connect() as connection:
+        total_row = connection.execute(
+            f"select count(*) as total from projects p where {where}",
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            f"""
+            select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
+                   p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
+                   p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
+                   p.software_version
+            from projects p
+            join users owner on owner.id = p.owner_id
+            where {where}
+            order by {_SORTS[sort]}
+            limit %s offset %s
+            """,
+            [*params, pageSize, (page - 1) * pageSize],
+        ).fetchall()
+    total = int(total_row["total"]) if total_row else 0
+    return {
+        "data": {
+            "items": [_public(row) for row in rows],
+            "page": page,
+            "pageSize": pageSize,
+            "total": total,
+        },
+        "requestId": request.state.request_id,
+    }
+
+
+@router.get("/project-owners")
+def list_project_owners(request: Request, page: int = 1, pageSize: int = 50) -> dict[str, object]:
+    actor = require_permission(request, "projects.create")
+    if page < 1 or not 1 <= pageSize <= 50:
+        raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
+    filters = "status = 'active'"
+    params: list[object] = []
+    if not _is_admin(actor.roles):
+        filters += " AND id = %s"
+        params.append(actor.user_id)
+    with connect() as connection:
+        total = connection.execute(f"SELECT COUNT(*) AS total FROM users WHERE {filters}", params).fetchone()["total"]
+        rows = connection.execute(
+            f"SELECT id, name, account FROM users WHERE {filters} ORDER BY name, account, id LIMIT %s OFFSET %s",
+            [*params, pageSize, (page - 1) * pageSize],
+        ).fetchall()
+    return {
+        "data": {"items": [{"id": str(row["id"]), "name": row["name"], "account": row["account"]} for row in rows],
+                 "total": total, "page": page, "pageSize": pageSize},
+        "requestId": request.state.request_id,
+    }
+
+
+@router.post("/projects", status_code=201)
+def create_project(request: Request, body: ProjectCreateBody) -> dict[str, object]:
+    actor = require_permission(request, "projects.create")
+    key = request.headers.get("idempotency-key", "").strip()
+    if not key or len(key) > 128:
+        raise AppError(
+            422,
+            "VALIDATION_FAILED",
+            "缺少本次请求的稳定键。",
+            [{"field": "Idempotency-Key", "message": "需要填写。"}],
+        )
+    if body.status not in _STATUSES:
+        raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
+    project_name = _text(body.name, 120, "name", required=True)
+    description = _text(body.description, 2000, "description")
+    organization = _text(body.organization, 120, "organization")
+    department = _text(body.department, 120, "department")
+    group_name = _text(body.group, 120, "group")
+    client_contact = _text(body.clientContact, 120, "clientContact")
+    owner_id = _parse_uuid(body.ownerId, "ownerId")
+    if not _is_admin(actor.roles) and owner_id != actor.user_id:
+        raise AppError(403, "FORBIDDEN", "请将自己设置为项目负责人。")
+    start = _date(body.periodStart, "periodStart")
+    end = _date(body.periodEnd, "periodEnd")
+    _period(start, end)
+    payload = json.dumps(
+        {
+            "name": project_name,
+            "ownerId": str(owner_id),
+            "status": body.status,
+            "organization": organization,
+            "department": department,
+            "group": group_name,
+            "clientContact": client_contact,
+            "description": description,
+            "periodStart": None if start is None else start.isoformat(),
+            "periodEnd": None if end is None else end.isoformat(),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    request_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """
+            select request_hash, result_project_id
+            from idempotency_keys
+            where user_id = %s and idempotency_key = %s
+            """,
+            (actor.user_id, key),
+        ).fetchone()
+        if existing:
+            if existing["request_hash"] != request_hash or existing["result_project_id"] is None:
+                raise AppError(409, "IDEMPOTENCY_CONFLICT", "同一个请求键不能改成另一份内容。")
+            return _envelope(
+                request,
+                _load(connection, existing["result_project_id"], actor.user_id, _is_admin(actor.roles)),
+            )
+        _active_owner(connection, owner_id)
+        project_id = uuid4()
+        with connection.transaction():
+            connection.execute(
+                """
+                insert into projects (
+                  id, name, description, organization, department, group_name, client_contact,
+                  owner_id, period_start, period_end, status
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    project_id,
+                    project_name,
+                    description,
+                    organization,
+                    department,
+                    group_name,
+                    client_contact,
+                    owner_id,
+                    start,
+                    end,
+                    body.status,
+                ),
+            )
+            connection.execute(
+                """
+                insert into project_members (project_id, user_id, role)
+                values (%s, %s, 'owner')
+                """,
+                (project_id, owner_id),
+            )
+            connection.execute(
+                """
+                insert into idempotency_keys (
+                  user_id, idempotency_key, request_hash, result_project_id
+                )
+                values (%s, %s, %s, %s)
+                """,
+                (actor.user_id, key, request_hash, project_id),
+            )
+            created = _load(connection, project_id, actor.user_id, True)
+        connection.commit()
+    return _envelope(request, created)
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str, request: Request) -> dict[str, object]:
+    actor = require_permission(request, "projects.read")
+    target = _parse_uuid(project_id, "projectId")
+    with connect() as connection:
+        project = _load(connection, target, actor.user_id, _is_admin(actor.roles))
+    return _envelope(request, project)
+
+
+@router.patch("/projects/{project_id}")
+def update_project(project_id: str, request: Request, body: ProjectPatchBody) -> dict[str, object]:
+    actor = require_permission(request, "projects.manage")
+    target = _parse_uuid(project_id, "projectId")
+    admin = _is_admin(actor.roles)
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            current = _load(connection, target, actor.user_id, admin)
+            require_project_owner(connection, actor, target)
+            _check_revision(int(current["revision"]), body.expectedRevision)
+            name = current["name"] if body.name is None else _text(body.name, 120, "name", True)
+            description = current["description"] if body.description is None else _text(body.description, 2000, "description")
+            organization = current["organization"] if body.organization is None else _text(body.organization, 120, "organization")
+            department = current["department"] if body.department is None else _text(body.department, 120, "department")
+            group_name = current["group"] if body.group is None else _text(body.group, 120, "group")
+            client_contact = current["clientContact"] if body.clientContact is None else _text(body.clientContact, 120, "clientContact")
+            status = current["status"] if body.status is None else body.status
+            if status not in _STATUSES:
+                raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
+            owner_id = UUID(str(current["ownerId"])) if body.ownerId is None else _parse_uuid(body.ownerId, "ownerId")
+            if body.periodStart is None and "periodStart" not in body.model_fields_set:
+                start = None if current["periodStart"] is None else date.fromisoformat(str(current["periodStart"]))
+            else:
+                start = _date(body.periodStart, "periodStart")
+            if body.periodEnd is None and "periodEnd" not in body.model_fields_set:
+                end = None if current["periodEnd"] is None else date.fromisoformat(str(current["periodEnd"]))
+            else:
+                end = _date(body.periodEnd, "periodEnd")
+            _period(start, end)
+            if body.ownerId is not None:
+                _active_owner(connection, owner_id)
+                if _owner_count(connection, target, exclude=UUID(str(current["ownerId"]))) == 0 and owner_id != UUID(str(current["ownerId"])):
+                    connection.execute(
+                        """
+                        update project_members
+                        set role = 'editor', revision = revision + 1
+                        where project_id = %s and user_id = %s and role = 'owner'
+                        """,
+                        (target, current["ownerId"]),
+                    )
+                connection.execute(
+                    """
+                    insert into project_members (project_id, user_id, role)
+                    values (%s, %s, 'owner')
+                    on conflict (project_id, user_id)
+                    do update set role = 'owner', revision = project_members.revision + 1
+                    """,
+                    (target, owner_id),
+                )
+            connection.execute(
+                """
+                update projects
+                set name = %s, description = %s, organization = %s, department = %s,
+                    group_name = %s, client_contact = %s, owner_id = %s, period_start = %s, period_end = %s,
+                    status = %s, revision = revision + 1, updated_at = now()
+                where id = %s
+                """,
+                (
+                    name,
+                    description,
+                    organization,
+                    department,
+                    group_name,
+                    client_contact,
+                    owner_id,
+                    start,
+                    end,
+                    status,
+                    target,
+                ),
+            )
+            updated = _load(connection, target, actor.user_id, admin)
+    return _envelope(request, updated)
+
+
+@router.post("/projects/{project_id}/archive")
+def archive_project(project_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
+    actor = require_permission(request, "projects.manage")
+    target = _parse_uuid(project_id, "projectId")
+    _reason(body.reason)
+    admin = _is_admin(actor.roles)
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            current = _load(connection, target, actor.user_id, admin)
+            require_project_owner(connection, actor, target)
+            _check_revision(int(current["revision"]), body.expectedRevision)
+            if current["archivedAt"] is None:
+                _block_archive_if_jobs(connection, target)
+                connection.execute(
+                    """
+                    update projects
+                    set archived_at = now(), revision = revision + 1, updated_at = now()
+                    where id = %s
+                    """,
+                    (target,),
+                )
+            updated = _load(connection, target, actor.user_id, admin)
+    return _envelope(request, updated)
+
+
+@router.post("/projects/{project_id}/unarchive")
+def unarchive_project(project_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
+    actor = require_permission(request, "projects.manage")
+    target = _parse_uuid(project_id, "projectId")
+    _reason(body.reason)
+    admin = _is_admin(actor.roles)
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            current = _load(connection, target, actor.user_id, admin)
+            require_project_owner(connection, actor, target)
+            _check_revision(int(current["revision"]), body.expectedRevision)
+            connection.execute(
+                """
+                update projects
+                set archived_at = null, revision = revision + 1, updated_at = now()
+                where id = %s
+                """,
+                (target,),
+            )
+            updated = _load(connection, target, actor.user_id, admin)
+    return _envelope(request, updated)
+
+
+def _members(connection, project_id: UUID) -> dict[str, object]:
+    project = connection.execute(
+        "select revision from projects where id = %s",
+        (project_id,),
+    ).fetchone()
+    rows = connection.execute(
+        """
+        select m.user_id, u.name, m.role, m.revision
+        from project_members m
+        join users u on u.id = m.user_id
+        where m.project_id = %s
+        order by u.name, m.user_id
+        """,
+        (project_id,),
+    ).fetchall()
+    return {
+        "items": [
+            {
+                "userId": str(row["user_id"]),
+                "name": row["name"],
+                "role": row["role"],
+                "revision": row["revision"],
+            }
+            for row in rows
+        ],
+        "projectRevision": project["revision"] if project else 0,
+    }
+
+
+def _can_manage_members(connection, actor, project_id: UUID) -> None:
+    if _is_admin(actor.roles):
+        return
+    row = connection.execute(
+        """
+        select role from project_members
+        where project_id = %s and user_id = %s
+        """,
+        (project_id, actor.user_id),
+    ).fetchone()
+    if row is None or row["role"] != "owner":
+        raise AppError(403, "FORBIDDEN", "只有项目负责人可以调整成员。")
+
+
+@router.get("/projects/{project_id}/members")
+def list_members(
+    project_id: str,
+    request: Request,
+    name: str = "",
+    account: str = "",
+    role: str | None = None,
+) -> dict[str, object]:
+    actor = require_permission(request, "projects.read")
+    target = _parse_uuid(project_id, "projectId")
+    if role is not None and role not in _ROLES:
+        raise AppError(422, "VALIDATION_FAILED", "项目角色不正确。")
+    with connect() as connection:
+        _load(connection, target, actor.user_id, _is_admin(actor.roles))
+        filters = ["m.project_id = %s"]
+        params: list[object] = [target]
+        if name.strip():
+            filters.append("u.name ilike %s escape '\\'")
+            params.append(_like(name.strip()))
+        if account.strip():
+            filters.append("u.account_key like %s escape '\\'")
+            params.append(_like(account.strip().casefold()))
+        if role:
+            filters.append("m.role = %s")
+            params.append(role)
+        rows = connection.execute(
+            f"""
+            select m.user_id, u.name, m.role, m.revision, p.revision as project_revision
+            from project_members m
+            join users u on u.id = m.user_id
+            join projects p on p.id = m.project_id
+            where {" and ".join(filters)}
+            order by u.name, m.user_id
+            """,
+            params,
+        ).fetchall()
+        revision = rows[0]["project_revision"] if rows else connection.execute(
+            "select revision from projects where id = %s",
+            (target,),
+        ).fetchone()["revision"]
+    return {
+        "data": {
+            "items": [
+                {
+                    "userId": str(row["user_id"]),
+                    "name": row["name"],
+                    "role": row["role"],
+                    "revision": row["revision"],
+                }
+                for row in rows
+            ],
+            "projectRevision": revision,
+        },
+        "requestId": request.state.request_id,
+    }
+
+
+@router.put("/projects/{project_id}/members/{user_id}")
+def set_member(project_id: str, user_id: str, request: Request, body: MemberBody) -> dict[str, object]:
+    actor = require_session(request)
+    require_csrf(request, actor)
+    target = _parse_uuid(project_id, "projectId")
+    member_id = _parse_uuid(user_id, "userId")
+    if body.role not in _ROLES or _parse_uuid(body.userId, "userId") != member_id:
+        raise AppError(422, "VALIDATION_FAILED", "成员信息不正确。")
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _can_manage_members(connection, actor, target)
+            current = connection.execute(
+                "select revision from projects where id = %s",
+                (target,),
+            ).fetchone()
+            _check_revision(current["revision"], body.expectedProjectRevision)
+            _active_owner(connection, member_id)
+            if body.role != "owner" and _owner_count(connection, target, exclude=member_id) == 0:
+                existing = connection.execute(
+                    """
+                    select role from project_members
+                    where project_id = %s and user_id = %s
+                    """,
+                    (target, member_id),
+                ).fetchone()
+                if existing and existing["role"] == "owner":
+                    raise AppError(409, "INVALID_TRANSITION", "不能取消最后一个负责人。请先移交。")
+            connection.execute(
+                """
+                insert into project_members (project_id, user_id, role)
+                values (%s, %s, %s)
+                on conflict (project_id, user_id)
+                do update set role = excluded.role, revision = project_members.revision + 1
+                """,
+                (target, member_id, body.role),
+            )
+            if body.role == "owner":
+                connection.execute(
+                    """
+                    update projects
+                    set owner_id = %s, revision = revision + 1, updated_at = now()
+                    where id = %s
+                    """,
+                    (member_id, target),
+                )
+            else:
+                connection.execute(
+                    """
+                    update projects
+                    set revision = revision + 1, updated_at = now()
+                    where id = %s
+                    """,
+                    (target,),
+                )
+            payload = _members(connection, target)
+    return {"data": payload, "requestId": request.state.request_id}
+
+
+@router.delete("/projects/{project_id}/members/{user_id}")
+def remove_member(project_id: str, user_id: str, request: Request) -> dict[str, object]:
+    actor = require_session(request)
+    require_csrf(request, actor)
+    target = _parse_uuid(project_id, "projectId")
+    member_id = _parse_uuid(user_id, "userId")
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _can_manage_members(connection, actor, target)
+            existing = connection.execute(
+                """
+                select role from project_members
+                where project_id = %s and user_id = %s
+                """,
+                (target, member_id),
+            ).fetchone()
+            if existing and existing["role"] == "owner" and _owner_count(connection, target, exclude=member_id) == 0:
+                raise AppError(409, "INVALID_TRANSITION", "不能移除最后一个负责人。请先移交。")
+            connection.execute(
+                "delete from project_members where project_id = %s and user_id = %s",
+                (target, member_id),
+            )
+            connection.execute(
+                """
+                update projects
+                set revision = revision + 1, updated_at = now()
+                where id = %s
+                """,
+                (target,),
+            )
+            payload = _members(connection, target)
+    return {"data": payload, "requestId": request.state.request_id}

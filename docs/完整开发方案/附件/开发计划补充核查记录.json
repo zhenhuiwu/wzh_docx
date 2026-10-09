@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-27",
+  "scope": "开发计划补充后的文档静态检查，不是开发完成或业务验收",
+  "issues": [],
+  "markdownDocuments": 8,
+  "executionStages": [
+    "S0",
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8"
+  ],
+  "milestones": [
+    "M0",
+    "M1",
+    "M2",
+    "M3",
+    "M4"
+  ],
+  "originalWorkPackages": 12,
+  "originalAcceptanceCases": 48,
+  "unchangedSourceFiles": 48,
+  "protectedSourceFiles": 48,
+  "frontendModified": false,
+  "uiScreenshotsPerformed": false,
+  "scheduleType": "16周参考时间盒+2周风险缓冲，S0后重估，非承诺",
+  "scheduleOrigin": "批准开工日，不预设日历日期"
+}

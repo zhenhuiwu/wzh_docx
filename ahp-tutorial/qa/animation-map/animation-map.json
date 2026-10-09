@@ -1,0 +1,8343 @@
+{
+  "composition": "D:\\项目\\智能化\\ahp-tutorial",
+  "duration": 15,
+  "totalTweens": 65,
+  "mappedTweens": 62,
+  "skippedMicroTweens": 3,
+  "tweens": [
+    {
+      "index": 1,
+      "selector": "#part-161",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 0,
+      "end": 15,
+      "duration": 15,
+      "ease": "none",
+      "bboxes": [
+        {
+          "t": 3.75,
+          "x": 0,
+          "y": 1072,
+          "w": 478,
+          "h": 8,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 11.25,
+          "x": 0,
+          "y": 1072,
+          "w": 1438,
+          "h": 8,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "paced-slow",
+        "collision"
+      ],
+      "summary": "#part-161 animates scaleX over 15.00s (none). scales. width 478→1438px. ends at (0, 1072) 1438×8px. FLAGS: paced-slow. Overlaps another animated element."
+    },
+    {
+      "index": 2,
+      "selector": "#part-1",
+      "targets": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "start": 0.1,
+      "end": 3.6,
+      "duration": 3.5,
+      "ease": "sine.inOut",
+      "bboxes": [
+        {
+          "t": 0.975,
+          "x": 1817,
+          "y": 0,
+          "w": 103,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 2.725,
+          "x": 1775,
+          "y": 0,
+          "w": 145,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "paced-slow"
+      ],
+      "summary": "#part-1 animates scaleX+transformOrigin over 3.50s (sine.inOut). moves 42px left. scales. width 103→145px. ends at (1775, 0) 145×1080px. FLAGS: paced-slow."
+    },
+    {
+      "index": 3,
+      "selector": "#part-3",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 0.15,
+      "end": 0.6,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 0.262,
+          "x": 96,
+          "y": 85,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 0.487,
+          "x": 96,
+          "y": 94,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-3 animates y+opacity over 0.45s (sine.out). moves 9px down. opacity 0.3→0.9. ends at (96, 94) 1728×42px."
+    },
+    {
+      "index": 4,
+      "selector": "#part-9",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 0.18,
+      "end": 0.68,
+      "duration": 0.5,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 0.305,
+          "x": 84,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 0.561,
+          "visible": true
+        },
+        {
+          "t": 0.555,
+          "x": 95,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 0.9748,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-9 animates x+opacity over 0.50s (power2.out). moves 11px right. opacity 0.6→1.0. ends at (95, 315) 762×59px."
+    },
+    {
+      "index": 5,
+      "selector": "#part-6",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 0.25,
+      "end": 0.95,
+      "duration": 0.7,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 0.425,
+          "x": 96,
+          "y": 186,
+          "w": 890,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 0.775,
+          "x": 96,
+          "y": 186,
+          "w": 1697,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-6 animates scaleX over 0.70s (power2.out). scales. width 890→1697px. ends at (96, 186) 1697×2px."
+    },
+    {
+      "index": 6,
+      "selector": "#part-13",
+      "targets": 2,
+      "props": [
+        "y",
+        "rotation",
+        "opacity"
+      ],
+      "start": 0.3,
+      "end": 1.09,
+      "duration": 0.79,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 0.497,
+          "x": 96,
+          "y": 415,
+          "w": 763,
+          "h": 171,
+          "opacity": 0.8309,
+          "visible": true
+        },
+        {
+          "t": 0.893,
+          "x": 96,
+          "y": 406,
+          "w": 762,
+          "h": 166,
+          "opacity": 0.9997,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-13 animates y+rotation+opacity over 0.79s (expo.out). moves 9px up. opacity 0.8→1.0. ends at (96, 406) 762×166px."
+    },
+    {
+      "index": 7,
+      "selector": "#part-17",
+      "targets": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "start": 0.4,
+      "end": 0.95,
+      "duration": 0.55,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 0.538,
+          "x": 934,
+          "y": 239,
+          "w": 885,
+          "h": 670,
+          "opacity": 0.6706,
+          "visible": true
+        },
+        {
+          "t": 0.813,
+          "x": 930,
+          "y": 236,
+          "w": 894,
+          "h": 677,
+          "opacity": 0.9945,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-17 animates scale+opacity over 0.55s (power3.out). moves 4px left. opacity 0.7→1.0. scales. width 885→894px. height 670→677px. ends at (930, 236) 894×677px."
+    },
+    {
+      "index": 8,
+      "selector": "#part-18",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 0.6,
+      "end": 1.05,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 0.713,
+          "x": 979,
+          "y": 274,
+          "w": 795,
+          "h": 106,
+          "opacity": 0.5295,
+          "visible": true
+        },
+        {
+          "t": 0.938,
+          "x": 979,
+          "y": 285,
+          "w": 796,
+          "h": 106,
+          "opacity": 0.9826,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-18 animates y+opacity over 0.45s (power2.out). moves 11px down. opacity 0.5→1.0. ends at (979, 285) 796×106px."
+    },
+    {
+      "index": 9,
+      "selector": "#part-15",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 0.8,
+      "end": 1.3,
+      "duration": 0.5,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 0.925,
+          "x": 96,
+          "y": 788,
+          "w": 762,
+          "h": 64,
+          "opacity": 0.309,
+          "visible": true
+        },
+        {
+          "t": 1.175,
+          "x": 96,
+          "y": 773,
+          "w": 762,
+          "h": 64,
+          "opacity": 0.9135,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-15 animates y+opacity over 0.50s (sine.out). moves 15px up. opacity 0.3→0.9. ends at (96, 773) 762×64px."
+    },
+    {
+      "index": 10,
+      "selector": "#part-21",
+      "targets": 1,
+      "props": [
+        "scaleY",
+        "opacity"
+      ],
+      "start": 0.8,
+      "end": 1.15,
+      "duration": 0.35,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 0.887,
+          "x": 1099,
+          "y": 430,
+          "w": 676,
+          "h": 12,
+          "opacity": 0.2948,
+          "visible": true
+        },
+        {
+          "t": 1.063,
+          "x": 1099,
+          "y": 418,
+          "w": 676,
+          "h": 36,
+          "opacity": 0.866,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-21 animates scaleY+opacity over 0.35s (sine.out). moves 12px up. opacity 0.3→0.9. scales. height 12→36px. ends at (1099, 418) 676×36px."
+    },
+    {
+      "index": 11,
+      "selector": "#part-22",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 0.92,
+      "end": 1.42,
+      "duration": 0.5,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 1.045,
+          "x": 989,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 0.6423,
+          "visible": true
+        },
+        {
+          "t": 1.295,
+          "x": 979,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 0.9912,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-22 animates x+opacity over 0.50s (power3.out). moves 10px left. opacity 0.6→1.0. ends at (979, 481) 796×106px."
+    },
+    {
+      "index": 12,
+      "selector": "#part-28",
+      "targets": 1,
+      "props": [
+        "scaleY",
+        "opacity"
+      ],
+      "start": 1.08,
+      "end": 1.43,
+      "duration": 0.35,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 1.167,
+          "x": 1099,
+          "y": 624,
+          "w": 676,
+          "h": 16,
+          "opacity": 0.3792,
+          "visible": true
+        },
+        {
+          "t": 1.343,
+          "x": 1099,
+          "y": 613,
+          "w": 676,
+          "h": 38,
+          "opacity": 0.9074,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-28 animates scaleY+opacity over 0.35s (sine.out). moves 11px up. opacity 0.4→0.9. scales. height 16→38px. ends at (1099, 613) 676×38px."
+    },
+    {
+      "index": 13,
+      "selector": "#part-29",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 1.24,
+      "end": 1.69,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 1.353,
+          "x": 979,
+          "y": 687,
+          "w": 796,
+          "h": 106,
+          "opacity": 0.5021,
+          "visible": true
+        },
+        {
+          "t": 1.577,
+          "x": 979,
+          "y": 677,
+          "w": 796,
+          "h": 106,
+          "opacity": 0.9794,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-29 animates y+opacity over 0.45s (power2.out). moves 10px up. opacity 0.5→1.0. ends at (979, 677) 796×106px."
+    },
+    {
+      "index": 14,
+      "selector": "#part-34",
+      "targets": 1,
+      "props": [
+        "opacity"
+      ],
+      "start": 1.6,
+      "end": 2,
+      "duration": 0.4,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 1.7,
+          "x": 979,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 0.3827,
+          "visible": true
+        },
+        {
+          "t": 1.9,
+          "x": 979,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 0.9239,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-34 animates opacity over 0.40s (sine.out). opacity 0.4→0.9. ends at (979, 822) 796×42px."
+    },
+    {
+      "index": 15,
+      "selector": "#part-35",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 1.85,
+      "end": 2.3,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 1.963,
+          "x": 96,
+          "y": 952,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.459,
+          "visible": true
+        },
+        {
+          "t": 2.188,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.974,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-35 animates y+opacity over 0.45s (power2.out). moves 10px up. opacity 0.5→1.0. ends at (96, 942) 1728×42px."
+    },
+    {
+      "index": 16,
+      "selector": "#scene1",
+      "targets": 1,
+      "props": [
+        "x"
+      ],
+      "start": 3.6,
+      "end": 4.1,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 3.725,
+          "x": -25,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 3.975,
+          "x": -1842,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen",
+        "collision"
+      ],
+      "summary": "#scene1 animates x over 0.50s (power3.inOut). moves 1817px left. ends at (-1842, 0) 1920×1080px. FLAGS: offscreen. Overlaps another animated element."
+    },
+    {
+      "index": 17,
+      "selector": "#scene2",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 3.6,
+      "end": 4.1,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 3.725,
+          "x": 1895,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 3.975,
+          "x": 78,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#scene2 animates x+opacity over 0.50s (power3.inOut). moves 1817px left. ends at (78, 0) 1920×1080px. FLAGS: offscreen."
+    },
+    {
+      "index": 18,
+      "selector": "#part-39",
+      "targets": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "start": 3.7,
+      "end": 7.2,
+      "duration": 3.5,
+      "ease": "sine.inOut",
+      "bboxes": [
+        {
+          "t": 4.575,
+          "x": 1817,
+          "y": 0,
+          "w": 103,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 6.325,
+          "x": 1775,
+          "y": 0,
+          "w": 145,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "paced-slow"
+      ],
+      "summary": "#part-39 animates scaleX+transformOrigin over 3.50s (sine.inOut). moves 42px left. scales. width 103→145px. ends at (1775, 0) 145×1080px. FLAGS: paced-slow."
+    },
+    {
+      "index": 19,
+      "selector": "#part-41",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 3.75,
+      "end": 4.2,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 3.862,
+          "x": 1288,
+          "y": 85,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 4.088,
+          "x": 96,
+          "y": 94,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#part-41 animates y+opacity over 0.45s (sine.out). moves 9px down and 1192px left. opacity 0.3→0.9. ends at (96, 94) 1728×42px. FLAGS: offscreen."
+    },
+    {
+      "index": 20,
+      "selector": "#part-44",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 3.85,
+      "end": 4.55,
+      "duration": 0.7,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 4.025,
+          "x": 121,
+          "y": 186,
+          "w": 890,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 4.375,
+          "x": 96,
+          "y": 186,
+          "w": 1697,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-44 animates scaleX over 0.70s (power2.out). moves 25px left. scales. width 890→1697px. ends at (96, 186) 1697×2px."
+    },
+    {
+      "index": 21,
+      "selector": "#part-46",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 3.88,
+      "end": 4.48,
+      "duration": 0.6,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 4.03,
+          "x": 107,
+          "y": 236,
+          "w": 849,
+          "h": 114,
+          "opacity": 0.7476,
+          "visible": true
+        },
+        {
+          "t": 4.33,
+          "x": 96,
+          "y": 236,
+          "w": 849,
+          "h": 114,
+          "opacity": 0.9971,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-46 animates x+opacity over 0.60s (expo.out). moves 11px left. opacity 0.7→1.0. ends at (96, 236) 849×114px."
+    },
+    {
+      "index": 22,
+      "selector": "#part-48",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 4.02,
+      "end": 4.47,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 4.132,
+          "x": 1569,
+          "y": 278,
+          "w": 255,
+          "h": 59,
+          "opacity": 0.2756,
+          "visible": true
+        },
+        {
+          "t": 4.357,
+          "x": 1569,
+          "y": 266,
+          "w": 255,
+          "h": 59,
+          "opacity": 0.8884,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-48 animates y+opacity over 0.45s (sine.out). moves 12px up. opacity 0.3→0.9. ends at (1569, 266) 255×59px."
+    },
+    {
+      "index": 23,
+      "selector": "#part-52",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 4.1,
+      "end": 4.6,
+      "duration": 0.5,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 4.225,
+          "x": 96,
+          "y": 411,
+          "w": 914,
+          "h": 509,
+          "opacity": 0.5904,
+          "visible": true
+        },
+        {
+          "t": 4.475,
+          "x": 96,
+          "y": 399,
+          "w": 914,
+          "h": 509,
+          "opacity": 0.9949,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-52 animates y+opacity over 0.50s (power3.out). moves 12px up. opacity 0.6→1.0. ends at (96, 399) 914×509px."
+    },
+    {
+      "index": 24,
+      "selector": "#part-74",
+      "targets": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "start": 4.18,
+      "end": 4.83,
+      "duration": 0.65,
+      "ease": "back.out(1.15)",
+      "bboxes": [
+        {
+          "t": 4.342,
+          "x": 1125,
+          "y": 411,
+          "w": 681,
+          "h": 177,
+          "opacity": 0.7123,
+          "visible": true
+        },
+        {
+          "t": 4.668,
+          "x": 1103,
+          "y": 405,
+          "w": 723,
+          "h": 188,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-74 animates scale+opacity over 0.65s (back.out(1.15)). moves 6px up and 22px left. opacity 0.7→1.0. scales. width 681→723px. height 177→188px. ends at (1103, 405) 723×188px."
+    },
+    {
+      "index": 25,
+      "selector": "#part-54",
+      "targets": 16,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 4.25,
+      "end": 5.175,
+      "duration": 0.925,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 4.481,
+          "x": 145,
+          "y": 433,
+          "w": 240,
+          "h": 80,
+          "opacity": 0.9037,
+          "visible": true
+        },
+        {
+          "t": 4.944,
+          "x": 145,
+          "y": 431,
+          "w": 240,
+          "h": 80,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-54 animates y+opacity over 0.92s (power2.out). ends at (145, 431) 240×80px."
+    },
+    {
+      "index": 26,
+      "selector": "#part-75",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 4.57,
+      "end": 5.07,
+      "duration": 0.5,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 4.695,
+          "x": 1114,
+          "y": 617,
+          "w": 718,
+          "h": 65,
+          "opacity": 0.7355,
+          "visible": true
+        },
+        {
+          "t": 4.945,
+          "x": 1106,
+          "y": 617,
+          "w": 718,
+          "h": 65,
+          "opacity": 0.9979,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-75 animates x+opacity over 0.50s (expo.out). moves 8px left. opacity 0.7→1.0. ends at (1106, 617) 718×65px."
+    },
+    {
+      "index": 27,
+      "selector": "#part-77",
+      "targets": 2,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 4.88,
+      "end": 5.49,
+      "duration": 0.61,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 5.032,
+          "x": 1106,
+          "y": 717,
+          "w": 718,
+          "h": 48,
+          "opacity": 0.4067,
+          "visible": true
+        },
+        {
+          "t": 5.338,
+          "x": 1106,
+          "y": 706,
+          "w": 718,
+          "h": 48,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-77 animates y+opacity over 0.61s (sine.out). moves 11px up. opacity 0.4→1.0. ends at (1106, 706) 718×48px."
+    },
+    {
+      "index": 28,
+      "selector": "#part-70",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 5.1,
+      "end": 5.55,
+      "duration": 0.45,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 5.212,
+          "x": 154,
+          "y": 830,
+          "w": 816,
+          "h": 45,
+          "opacity": 0.634,
+          "visible": true
+        },
+        {
+          "t": 5.438,
+          "x": 145,
+          "y": 830,
+          "w": 816,
+          "h": 45,
+          "opacity": 0.9955,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-70 animates x+opacity over 0.45s (power3.out). moves 9px left. opacity 0.6→1.0. ends at (145, 830) 816×45px."
+    },
+    {
+      "index": 29,
+      "selector": "#part-79",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 5.15,
+      "end": 5.65,
+      "duration": 0.5,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 5.275,
+          "x": 1106,
+          "y": 826,
+          "w": 395,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 5.525,
+          "x": 1106,
+          "y": 826,
+          "w": 699,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-79 animates scaleX over 0.50s (power2.out). scales. width 395→699px. ends at (1106, 826) 699×2px."
+    },
+    {
+      "index": 30,
+      "selector": "#part-80",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 5.35,
+      "end": 5.8,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 5.462,
+          "x": 1106,
+          "y": 866,
+          "w": 718,
+          "h": 48,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 5.688,
+          "x": 1106,
+          "y": 854,
+          "w": 718,
+          "h": 48,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-80 animates y+opacity over 0.45s (sine.out). moves 12px up. opacity 0.3→0.9. ends at (1106, 854) 718×48px."
+    },
+    {
+      "index": 31,
+      "selector": "#part-81",
+      "targets": 1,
+      "props": [
+        "opacity"
+      ],
+      "start": 5.65,
+      "end": 6.1,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 5.763,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.459,
+          "visible": true
+        },
+        {
+          "t": 5.988,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.974,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-81 animates opacity over 0.45s (power2.out). opacity 0.5→1.0. ends at (96, 942) 1728×42px."
+    },
+    {
+      "index": 32,
+      "selector": "#scene2",
+      "targets": 1,
+      "props": [
+        "y"
+      ],
+      "start": 7.1,
+      "end": 7.6,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 7.225,
+          "x": 0,
+          "y": -14,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 7.475,
+          "x": 0,
+          "y": -1036,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#scene2 animates y over 0.50s (power3.inOut). moves 1022px up. ends at (0, -1036) 1920×1080px. FLAGS: offscreen."
+    },
+    {
+      "index": 33,
+      "selector": "#scene3",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 7.1,
+      "end": 7.6,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 7.225,
+          "x": 0,
+          "y": 1066,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 7.475,
+          "x": 0,
+          "y": 44,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#scene3 animates y+opacity over 0.50s (power3.inOut). moves 1022px up. ends at (0, 44) 1920×1080px. FLAGS: offscreen."
+    },
+    {
+      "index": 34,
+      "selector": "#part-85",
+      "targets": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "start": 7.2,
+      "end": 10.7,
+      "duration": 3.5,
+      "ease": "sine.inOut",
+      "bboxes": [
+        {
+          "t": 8.075,
+          "x": 1817,
+          "y": 0,
+          "w": 103,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 9.825,
+          "x": 1775,
+          "y": 0,
+          "w": 145,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "paced-slow"
+      ],
+      "summary": "#part-85 animates scaleX+transformOrigin over 3.50s (sine.inOut). moves 42px left. scales. width 103→145px. ends at (1775, 0) 145×1080px. FLAGS: paced-slow."
+    },
+    {
+      "index": 35,
+      "selector": "#part-87",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 7.25,
+      "end": 7.7,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 7.362,
+          "x": 96,
+          "y": 755,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 7.588,
+          "x": 96,
+          "y": 94,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-87 animates y+opacity over 0.45s (sine.out). moves 661px up. opacity 0.3→0.9. ends at (96, 94) 1728×42px."
+    },
+    {
+      "index": 36,
+      "selector": "#part-90",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 7.35,
+      "end": 8.05,
+      "duration": 0.7,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 7.525,
+          "x": 96,
+          "y": 200,
+          "w": 890,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 7.875,
+          "x": 96,
+          "y": 186,
+          "w": 1697,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-90 animates scaleX over 0.70s (power2.out). moves 14px up. scales. width 890→1697px. ends at (96, 186) 1697×2px."
+    },
+    {
+      "index": 37,
+      "selector": "#part-93",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 7.4,
+      "end": 7.8,
+      "duration": 0.4,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 7.5,
+          "x": 96,
+          "y": 278,
+          "w": 571,
+          "h": 59,
+          "opacity": 0.5781,
+          "visible": true
+        },
+        {
+          "t": 7.7,
+          "x": 96,
+          "y": 254,
+          "w": 571,
+          "h": 59,
+          "opacity": 0.9844,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-93 animates y+opacity over 0.40s (power2.out). moves 24px up. opacity 0.6→1.0. ends at (96, 254) 571×59px."
+    },
+    {
+      "index": 38,
+      "selector": "#part-97",
+      "targets": 2,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 7.52,
+      "end": 8.26,
+      "duration": 0.74,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 7.705,
+          "x": 90,
+          "y": 345,
+          "w": 571,
+          "h": 114,
+          "opacity": 0.8772,
+          "visible": true
+        },
+        {
+          "t": 8.075,
+          "x": 96,
+          "y": 345,
+          "w": 571,
+          "h": 114,
+          "opacity": 0.9998,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-97 animates x+opacity over 0.74s (expo.out). moves 6px right. opacity 0.9→1.0. ends at (96, 345) 571×114px."
+    },
+    {
+      "index": 39,
+      "selector": "#part-101",
+      "targets": 3,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 7.65,
+      "end": 8.4,
+      "duration": 0.75,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 7.838,
+          "x": 767,
+          "y": 299,
+          "w": 1061,
+          "h": 83,
+          "opacity": 0.8767,
+          "visible": true
+        },
+        {
+          "t": 8.213,
+          "x": 763,
+          "y": 299,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-101 animates x+opacity over 0.75s (power3.out). moves 4px left. opacity 0.9→1.0. ends at (763, 299) 1061×83px."
+    },
+    {
+      "index": 40,
+      "selector": "#part-104",
+      "targets": 3,
+      "props": [
+        "scaleX"
+      ],
+      "start": 7.85,
+      "end": 9.1,
+      "duration": 1.25,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 8.162,
+          "x": 892,
+          "y": 314,
+          "w": 292,
+          "h": 52,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 8.787,
+          "x": 892,
+          "y": 314,
+          "w": 446,
+          "h": 52,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-104 animates scaleX over 1.25s (power2.out). scales. width 292→446px. ends at (892, 314) 446×52px."
+    },
+    {
+      "index": 41,
+      "selector": "#part-99",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 8.05,
+      "end": 8.55,
+      "duration": 0.5,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 8.175,
+          "x": 96,
+          "y": 619,
+          "w": 571,
+          "h": 51,
+          "opacity": 0.3584,
+          "visible": true
+        },
+        {
+          "t": 8.425,
+          "x": 96,
+          "y": 608,
+          "w": 571,
+          "h": 51,
+          "opacity": 0.891,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-99 animates y+opacity over 0.50s (sine.out). moves 11px up. opacity 0.4→0.9. ends at (96, 608) 571×51px."
+    },
+    {
+      "index": 42,
+      "selector": "#part-105",
+      "targets": 3,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "start": 8.25,
+      "end": 9,
+      "duration": 0.75,
+      "ease": "back.out(1.1)",
+      "bboxes": [
+        {
+          "t": 8.438,
+          "x": 1660,
+          "y": 299,
+          "w": 163,
+          "h": 82,
+          "opacity": 0.9493,
+          "visible": true
+        },
+        {
+          "t": 8.813,
+          "x": 1659,
+          "y": 299,
+          "w": 165,
+          "h": 83,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-105 animates scale+opacity over 0.75s (back.out(1.1)). scales. ends at (1659, 299) 165×83px."
+    },
+    {
+      "index": 43,
+      "selector": "#part-116",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 9,
+      "end": 9.55,
+      "duration": 0.55,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 9.137,
+          "x": 96,
+          "y": 738,
+          "w": 1728,
+          "h": 171,
+          "opacity": 0.6706,
+          "visible": true
+        },
+        {
+          "t": 9.413,
+          "x": 96,
+          "y": 723,
+          "w": 1728,
+          "h": 171,
+          "opacity": 0.9945,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-116 animates y+opacity over 0.55s (power3.out). moves 15px up. opacity 0.7→1.0. ends at (96, 723) 1728×171px."
+    },
+    {
+      "index": 44,
+      "selector": "#part-117",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 9.12,
+      "end": 9.57,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 9.232,
+          "x": 126,
+          "y": 765,
+          "w": 280,
+          "h": 104,
+          "opacity": 0.2756,
+          "visible": true
+        },
+        {
+          "t": 9.457,
+          "x": 141,
+          "y": 758,
+          "w": 280,
+          "h": 104,
+          "opacity": 0.8884,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-117 animates x+opacity over 0.45s (sine.out). moves 7px up and 15px right. opacity 0.3→0.9. ends at (141, 758) 280×104px."
+    },
+    {
+      "index": 45,
+      "selector": "#part-120",
+      "targets": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "start": 9.32,
+      "end": 9.87,
+      "duration": 0.55,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 9.457,
+          "x": 753,
+          "y": 769,
+          "w": 266,
+          "h": 82,
+          "opacity": 0.7581,
+          "visible": true
+        },
+        {
+          "t": 9.733,
+          "x": 750,
+          "y": 768,
+          "w": 272,
+          "h": 84,
+          "opacity": 0.9968,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-120 animates scale+opacity over 0.55s (expo.out). opacity 0.8→1.0. scales. width 266→272px. ends at (750, 768) 272×84px."
+    },
+    {
+      "index": 46,
+      "selector": "#part-121",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 9.63,
+      "end": 10.08,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 9.742,
+          "x": 1348,
+          "y": 795,
+          "w": 428,
+          "h": 48,
+          "opacity": 0.5428,
+          "visible": true
+        },
+        {
+          "t": 9.968,
+          "x": 1348,
+          "y": 786,
+          "w": 428,
+          "h": 48,
+          "opacity": 0.984,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-121 animates y+opacity over 0.45s (power2.out). moves 9px up. opacity 0.5→1.0. ends at (1348, 786) 428×48px."
+    },
+    {
+      "index": 47,
+      "selector": "#part-123",
+      "targets": 1,
+      "props": [
+        "opacity"
+      ],
+      "start": 9.9,
+      "end": 10.3,
+      "duration": 0.4,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 10,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.3827,
+          "visible": true
+        },
+        {
+          "t": 10.2,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.9239,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-123 animates opacity over 0.40s (sine.out). opacity 0.4→0.9. ends at (96, 942) 1728×42px."
+    },
+    {
+      "index": 48,
+      "selector": "#scene3",
+      "targets": 1,
+      "props": [
+        "x"
+      ],
+      "start": 11.2,
+      "end": 11.7,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 11.325,
+          "x": -25,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 11.575,
+          "x": -1842,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#scene3 animates x over 0.50s (power3.inOut). moves 1817px left. ends at (-1842, 0) 1920×1080px. FLAGS: offscreen."
+    },
+    {
+      "index": 49,
+      "selector": "#scene4",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 11.2,
+      "end": 11.7,
+      "duration": 0.5,
+      "ease": "power3.inOut",
+      "bboxes": [
+        {
+          "t": 11.325,
+          "x": 1895,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 11.575,
+          "x": 78,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#scene4 animates x+opacity over 0.50s (power3.inOut). moves 1817px left. ends at (78, 0) 1920×1080px. FLAGS: offscreen."
+    },
+    {
+      "index": 50,
+      "selector": "#part-127",
+      "targets": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "start": 11.3,
+      "end": 14.8,
+      "duration": 3.5,
+      "ease": "sine.inOut",
+      "bboxes": [
+        {
+          "t": 12.175,
+          "x": 1817,
+          "y": 0,
+          "w": 103,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 13.925,
+          "x": 1775,
+          "y": 0,
+          "w": 145,
+          "h": 1080,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "paced-slow"
+      ],
+      "summary": "#part-127 animates scaleX+transformOrigin over 3.50s (sine.inOut). moves 42px left. scales. width 103→145px. ends at (1775, 0) 145×1080px. FLAGS: paced-slow."
+    },
+    {
+      "index": 51,
+      "selector": "#part-129",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 11.35,
+      "end": 11.8,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 11.462,
+          "x": 1288,
+          "y": 85,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 11.688,
+          "x": 96,
+          "y": 94,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [
+        "offscreen"
+      ],
+      "summary": "#part-129 animates y+opacity over 0.45s (sine.out). moves 9px down and 1192px left. opacity 0.3→0.9. ends at (96, 94) 1728×42px. FLAGS: offscreen."
+    },
+    {
+      "index": 52,
+      "selector": "#part-132",
+      "targets": 1,
+      "props": [
+        "scaleX"
+      ],
+      "start": 11.45,
+      "end": 12.15,
+      "duration": 0.7,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 11.625,
+          "x": 121,
+          "y": 186,
+          "w": 890,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 11.975,
+          "x": 96,
+          "y": 186,
+          "w": 1697,
+          "h": 2,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-132 animates scaleX over 0.70s (power2.out). moves 25px left. scales. width 890→1697px. ends at (96, 186) 1697×2px."
+    },
+    {
+      "index": 53,
+      "selector": "#part-135",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 11.5,
+      "end": 11.95,
+      "duration": 0.45,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 11.613,
+          "x": 109,
+          "y": 236,
+          "w": 816,
+          "h": 59,
+          "opacity": 0.5295,
+          "visible": true
+        },
+        {
+          "t": 11.837,
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 59,
+          "opacity": 0.9826,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-135 animates x+opacity over 0.45s (power2.out). moves 13px left. opacity 0.5→1.0. ends at (96, 236) 816×59px."
+    },
+    {
+      "index": 54,
+      "selector": "#part-139",
+      "targets": 2,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 11.62,
+      "end": 12.3,
+      "duration": 0.68,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 11.79,
+          "x": 96,
+          "y": 333,
+          "w": 816,
+          "h": 135,
+          "opacity": 0.843,
+          "visible": true
+        },
+        {
+          "t": 12.13,
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 135,
+          "opacity": 0.9997,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-139 animates y+opacity over 0.68s (expo.out). moves 6px up. opacity 0.8→1.0. ends at (96, 327) 816×135px."
+    },
+    {
+      "index": 55,
+      "selector": "#part-143",
+      "targets": 2,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 11.85,
+      "end": 12.52,
+      "duration": 0.67,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 12.018,
+          "x": 1016,
+          "y": 263,
+          "w": 816,
+          "h": 180,
+          "opacity": 0.7599,
+          "visible": true
+        },
+        {
+          "t": 12.352,
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 180,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-143 animates x+opacity over 0.67s (power3.out). moves 8px left. opacity 0.8→1.0. ends at (1008, 263) 816×180px."
+    },
+    {
+      "index": 56,
+      "selector": "#part-148",
+      "targets": 2,
+      "props": [
+        "scaleX"
+      ],
+      "start": 12.1,
+      "end": 13.12,
+      "duration": 1.02,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 12.355,
+          "x": 1008,
+          "y": 372,
+          "w": 298,
+          "h": 70,
+          "opacity": 1,
+          "visible": true
+        },
+        {
+          "t": 12.865,
+          "x": 1008,
+          "y": 372,
+          "w": 480,
+          "h": 70,
+          "opacity": 1,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-148 animates scaleX over 1.02s (power2.out). scales. width 298→480px. ends at (1008, 372) 480×70px."
+    },
+    {
+      "index": 57,
+      "selector": "#part-141",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 12.2,
+      "end": 12.65,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 12.313,
+          "x": 96,
+          "y": 643,
+          "w": 816,
+          "h": 51,
+          "opacity": 0.342,
+          "visible": true
+        },
+        {
+          "t": 12.537,
+          "x": 96,
+          "y": 631,
+          "w": 816,
+          "h": 51,
+          "opacity": 0.9182,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-141 animates y+opacity over 0.45s (sine.out). moves 12px up. opacity 0.3→0.9. ends at (96, 631) 816×51px."
+    },
+    {
+      "index": 58,
+      "selector": "#part-146",
+      "targets": 2,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 12.22,
+      "end": 12.89,
+      "duration": 0.67,
+      "ease": "expo.out",
+      "bboxes": [
+        {
+          "t": 12.388,
+          "x": 1668,
+          "y": 265,
+          "w": 156,
+          "h": 94,
+          "opacity": 0.871,
+          "visible": true
+        },
+        {
+          "t": 12.723,
+          "x": 1668,
+          "y": 263,
+          "w": 156,
+          "h": 94,
+          "opacity": 0.9999,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-146 animates y+opacity over 0.67s (expo.out). opacity 0.9→1.0. ends at (1668, 263) 156×94px."
+    },
+    {
+      "index": 59,
+      "selector": "#part-155",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 12.65,
+      "end": 13.15,
+      "duration": 0.5,
+      "ease": "power3.out",
+      "bboxes": [
+        {
+          "t": 12.775,
+          "x": 96,
+          "y": 725,
+          "w": 1728,
+          "h": 180,
+          "opacity": 0.6545,
+          "visible": true
+        },
+        {
+          "t": 13.025,
+          "x": 96,
+          "y": 714,
+          "w": 1728,
+          "h": 180,
+          "opacity": 0.9919,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-155 animates y+opacity over 0.50s (power3.out). moves 11px up. opacity 0.7→1.0. ends at (96, 714) 1728×180px."
+    },
+    {
+      "index": 60,
+      "selector": "#part-156",
+      "targets": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "start": 12.85,
+      "end": 13.3,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 12.962,
+          "x": 127,
+          "y": 748,
+          "w": 1630,
+          "h": 53,
+          "opacity": 0.2868,
+          "visible": true
+        },
+        {
+          "t": 13.188,
+          "x": 142,
+          "y": 747,
+          "w": 1630,
+          "h": 53,
+          "opacity": 0.8936,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-156 animates x+opacity over 0.45s (sine.out). moves 15px right. opacity 0.3→0.9. ends at (142, 747) 1630×53px."
+    },
+    {
+      "index": 61,
+      "selector": "#part-157",
+      "targets": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "start": 13.05,
+      "end": 13.55,
+      "duration": 0.5,
+      "ease": "power2.out",
+      "bboxes": [
+        {
+          "t": 13.175,
+          "x": 145,
+          "y": 823,
+          "w": 1630,
+          "h": 45,
+          "opacity": 0.5494,
+          "visible": true
+        },
+        {
+          "t": 13.425,
+          "x": 145,
+          "y": 816,
+          "w": 1630,
+          "h": 45,
+          "opacity": 0.973,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-157 animates y+opacity over 0.50s (power2.out). moves 7px up. opacity 0.5→1.0. ends at (145, 816) 1630×45px."
+    },
+    {
+      "index": 62,
+      "selector": "#part-158",
+      "targets": 1,
+      "props": [
+        "opacity"
+      ],
+      "start": 13.42,
+      "end": 13.87,
+      "duration": 0.45,
+      "ease": "sine.out",
+      "bboxes": [
+        {
+          "t": 13.532,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.2756,
+          "visible": true
+        },
+        {
+          "t": 13.758,
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.8884,
+          "visible": true
+        }
+      ],
+      "flags": [],
+      "summary": "#part-158 animates opacity over 0.45s (sine.out). opacity 0.3→0.9. ends at (96, 942) 1728×42px."
+    }
+  ],
+  "choreography": "Timeline (15.0s, each char ≈ 0.25s):\n  0s                                                    15s\n  ┼───────────────────────────────────────────────────────────┤\n  ████████████████████████████████████████████████████████████  #part-161 scaleX\n  ███████████████                                               #part-1 scaleX+transformOrigin\n  ███                                                           #part-3 y+opacity\n  ███                                                           #part-9 x+opacity\n   ███                                                          #part-6 scaleX\n   ████                                                         #part-13 y+rotation+opacity\n   ███                                                          #part-17 scale+opacity\n    ███                                                         #part-18 y+opacity\n     ███                                                        #part-15 y+opacity\n     ██                                                         #part-21 scaleY+opacity\n     ███                                                        #part-22 x+opacity\n      ██                                                        #part-28 scaleY+opacity\n      ███                                                       #part-29 y+opacity\n        ██                                                      #part-34 opacity\n         ███                                                    #part-35 y+opacity\n                ███                                             #scene1 x\n                ███                                             #scene2 x+opacity\n                ███████████████                                 #part-39 scaleX+transformOrigin\n                 ██                                             #part-41 y+opacity\n                 ████                                           #part-44 scaleX\n                 ███                                            #part-46 x+opacity\n                  ██                                            #part-48 y+opacity\n                  ███                                           #part-52 y+opacity\n                  ████                                          #part-74 scale+opacity\n                   ████                                         #part-54 y+opacity\n                    ███                                         #part-75 x+opacity\n                     ███                                        #part-77 y+opacity\n                      ███                                       #part-70 x+opacity\n                      ███                                       #part-79 scaleX\n                       ███                                      #part-80 y+opacity\n                        ███                                     #part-81 opacity\n                              ███                               #scene2 y\n                              ███                               #scene3 y+opacity\n                              ███████████████                   #part-85 scaleX+transformOrigin\n                               ██                               #part-87 y+opacity\n                               ████                             #part-90 scaleX\n                               ███                              #part-93 y+opacity\n                                ████                            #part-97 x+opacity\n                                ████                            #part-101 x+opacity\n                                 ██████                         #part-104 scaleX\n                                  ███                           #part-99 y+opacity\n                                   ███                          #part-105 scale+opacity\n                                      ███                       #part-116 y+opacity\n                                      ███                       #part-117 x+opacity\n                                       ███                      #part-120 scale+opacity\n                                        ███                     #part-121 y+opacity\n                                         ███                    #part-123 opacity\n                                              ███               #scene3 x\n                                              ███               #scene4 x+opacity\n                                               ███████████████  #part-127 scaleX+transformOrigin\n                                               ███              #part-129 y+opacity\n                                               ████             #part-132 scaleX\n                                                ██              #part-135 x+opacity\n                                                ████            #part-139 y+opacity\n                                                 ████           #part-143 x+opacity\n                                                  █████         #part-148 scaleX\n                                                  ███           #part-141 y+opacity\n                                                  ████          #part-146 y+opacity\n                                                    ███         #part-155 y+opacity\n                                                     ███        #part-156 x+opacity\n                                                      ███       #part-157 y+opacity\n                                                       ███      #part-158 opacity",
+  "density": [
+    {
+      "t": 0,
+      "activeTweens": 7
+    },
+    {
+      "t": 0.5,
+      "activeTweens": 11
+    },
+    {
+      "t": 1,
+      "activeTweens": 9
+    },
+    {
+      "t": 1.5,
+      "activeTweens": 5
+    },
+    {
+      "t": 2,
+      "activeTweens": 4
+    },
+    {
+      "t": 2.5,
+      "activeTweens": 2
+    },
+    {
+      "t": 3,
+      "activeTweens": 2
+    },
+    {
+      "t": 3.5,
+      "activeTweens": 8
+    },
+    {
+      "t": 4,
+      "activeTweens": 11
+    },
+    {
+      "t": 4.5,
+      "activeTweens": 8
+    },
+    {
+      "t": 5,
+      "activeTweens": 8
+    },
+    {
+      "t": 5.5,
+      "activeTweens": 6
+    },
+    {
+      "t": 6,
+      "activeTweens": 3
+    },
+    {
+      "t": 6.5,
+      "activeTweens": 2
+    },
+    {
+      "t": 7,
+      "activeTweens": 8
+    },
+    {
+      "t": 7.5,
+      "activeTweens": 10
+    },
+    {
+      "t": 8,
+      "activeTweens": 8
+    },
+    {
+      "t": 8.5,
+      "activeTweens": 6
+    },
+    {
+      "t": 9,
+      "activeTweens": 7
+    },
+    {
+      "t": 9.5,
+      "activeTweens": 7
+    },
+    {
+      "t": 10,
+      "activeTweens": 4
+    },
+    {
+      "t": 10.5,
+      "activeTweens": 2
+    },
+    {
+      "t": 11,
+      "activeTweens": 7
+    },
+    {
+      "t": 11.5,
+      "activeTweens": 9
+    },
+    {
+      "t": 12,
+      "activeTweens": 8
+    },
+    {
+      "t": 12.5,
+      "activeTweens": 8
+    },
+    {
+      "t": 13,
+      "activeTweens": 7
+    },
+    {
+      "t": 13.5,
+      "activeTweens": 4
+    },
+    {
+      "t": 14,
+      "activeTweens": 2
+    },
+    {
+      "t": 14.5,
+      "activeTweens": 2
+    }
+  ],
+  "staggers": [
+    {
+      "elements": [
+        "#part-1",
+        "#part-39",
+        "#part-85",
+        "#part-127"
+      ],
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "count": 4,
+      "intervals": [
+        3.6,
+        3.5,
+        4.1
+      ],
+      "avgInterval": 3.733,
+      "consistent": true,
+      "note": "4 elements stagger at 3733ms intervals"
+    },
+    {
+      "elements": [
+        "#part-3",
+        "#part-18",
+        "#part-15",
+        "#part-29",
+        "#part-35"
+      ],
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "count": 5,
+      "intervals": [
+        0.45,
+        0.2,
+        0.44,
+        0.61
+      ],
+      "avgInterval": 0.425,
+      "consistent": false,
+      "note": "5 elements stagger with uneven intervals (450ms, 200ms, 440ms, 610ms)"
+    },
+    {
+      "elements": [
+        "#scene2",
+        "#part-75",
+        "#part-70"
+      ],
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "count": 3,
+      "intervals": [
+        0.97,
+        0.53
+      ],
+      "avgInterval": 0.75,
+      "consistent": true,
+      "note": "3 elements stagger at 750ms intervals"
+    },
+    {
+      "elements": [
+        "#part-41",
+        "#part-48",
+        "#part-52",
+        "#part-80"
+      ],
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "count": 4,
+      "intervals": [
+        0.27,
+        0.08,
+        1.25
+      ],
+      "avgInterval": 0.533,
+      "consistent": false,
+      "note": "4 elements stagger with uneven intervals (270ms, 80ms, 1250ms)"
+    },
+    {
+      "elements": [
+        "#scene3",
+        "#part-87",
+        "#part-99"
+      ],
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "count": 3,
+      "intervals": [
+        0.15,
+        0.8
+      ],
+      "avgInterval": 0.475,
+      "consistent": false,
+      "note": "3 elements stagger with uneven intervals (150ms, 800ms)"
+    },
+    {
+      "elements": [
+        "#scene4",
+        "#part-135",
+        "#part-156"
+      ],
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "count": 3,
+      "intervals": [
+        0.3,
+        1.35
+      ],
+      "avgInterval": 0.825,
+      "consistent": false,
+      "note": "3 elements stagger with uneven intervals (300ms, 1350ms)"
+    },
+    {
+      "elements": [
+        "#part-141",
+        "#part-155",
+        "#part-157"
+      ],
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "count": 3,
+      "intervals": [
+        0.45,
+        0.4
+      ],
+      "avgInterval": 0.425,
+      "consistent": true,
+      "note": "3 elements stagger at 425ms intervals"
+    }
+  ],
+  "elements": {
+    "#part-161": {
+      "firstAppears": 0,
+      "lastAnimates": 15,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 0,
+        "y": 1072,
+        "w": 1438,
+        "h": 8
+      }
+    },
+    "#part-1": {
+      "firstAppears": 0.1,
+      "lastAnimates": 3.6,
+      "tweenCount": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1775,
+        "y": 0,
+        "w": 145,
+        "h": 1080
+      }
+    },
+    "#part-3": {
+      "firstAppears": 0.15,
+      "lastAnimates": 0.6,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 94,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#part-9": {
+      "firstAppears": 0.18,
+      "lastAnimates": 0.68,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 95,
+        "y": 315,
+        "w": 762,
+        "h": 59
+      }
+    },
+    "#part-6": {
+      "firstAppears": 0.25,
+      "lastAnimates": 0.95,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 186,
+        "w": 1697,
+        "h": 2
+      }
+    },
+    "#part-13": {
+      "firstAppears": 0.3,
+      "lastAnimates": 1.09,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "rotation",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 406,
+        "w": 762,
+        "h": 166
+      }
+    },
+    "#part-17": {
+      "firstAppears": 0.4,
+      "lastAnimates": 0.95,
+      "tweenCount": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 930,
+        "y": 236,
+        "w": 894,
+        "h": 677
+      }
+    },
+    "#part-18": {
+      "firstAppears": 0.6,
+      "lastAnimates": 1.05,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 979,
+        "y": 285,
+        "w": 796,
+        "h": 106
+      }
+    },
+    "#part-15": {
+      "firstAppears": 0.8,
+      "lastAnimates": 1.3,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 773,
+        "w": 762,
+        "h": 64
+      }
+    },
+    "#part-21": {
+      "firstAppears": 0.8,
+      "lastAnimates": 1.15,
+      "tweenCount": 1,
+      "props": [
+        "scaleY",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1099,
+        "y": 418,
+        "w": 676,
+        "h": 36
+      }
+    },
+    "#part-22": {
+      "firstAppears": 0.92,
+      "lastAnimates": 1.42,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 979,
+        "y": 481,
+        "w": 796,
+        "h": 106
+      }
+    },
+    "#part-28": {
+      "firstAppears": 1.08,
+      "lastAnimates": 1.43,
+      "tweenCount": 1,
+      "props": [
+        "scaleY",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1099,
+        "y": 613,
+        "w": 676,
+        "h": 38
+      }
+    },
+    "#part-29": {
+      "firstAppears": 1.24,
+      "lastAnimates": 1.69,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 979,
+        "y": 677,
+        "w": 796,
+        "h": 106
+      }
+    },
+    "#part-34": {
+      "firstAppears": 1.6,
+      "lastAnimates": 2,
+      "tweenCount": 1,
+      "props": [
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 979,
+        "y": 822,
+        "w": 796,
+        "h": 42
+      }
+    },
+    "#part-35": {
+      "firstAppears": 1.85,
+      "lastAnimates": 2.3,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 942,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#scene1": {
+      "firstAppears": 3.6,
+      "lastAnimates": 4.1,
+      "tweenCount": 1,
+      "props": [
+        "x"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": -1842,
+        "y": 0,
+        "w": 1920,
+        "h": 1080
+      }
+    },
+    "#scene2": {
+      "firstAppears": 3.6,
+      "lastAnimates": 7.6,
+      "tweenCount": 2,
+      "props": [
+        "x",
+        "opacity",
+        "y"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 0,
+        "y": -1036,
+        "w": 1920,
+        "h": 1080
+      }
+    },
+    "#part-39": {
+      "firstAppears": 3.7,
+      "lastAnimates": 7.2,
+      "tweenCount": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1775,
+        "y": 0,
+        "w": 145,
+        "h": 1080
+      }
+    },
+    "#part-41": {
+      "firstAppears": 3.75,
+      "lastAnimates": 4.2,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 94,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#part-44": {
+      "firstAppears": 3.85,
+      "lastAnimates": 4.55,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 186,
+        "w": 1697,
+        "h": 2
+      }
+    },
+    "#part-46": {
+      "firstAppears": 3.88,
+      "lastAnimates": 4.48,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 236,
+        "w": 849,
+        "h": 114
+      }
+    },
+    "#part-48": {
+      "firstAppears": 4.02,
+      "lastAnimates": 4.47,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1569,
+        "y": 266,
+        "w": 255,
+        "h": 59
+      }
+    },
+    "#part-52": {
+      "firstAppears": 4.1,
+      "lastAnimates": 4.6,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 399,
+        "w": 914,
+        "h": 509
+      }
+    },
+    "#part-74": {
+      "firstAppears": 4.18,
+      "lastAnimates": 4.83,
+      "tweenCount": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1103,
+        "y": 405,
+        "w": 723,
+        "h": 188
+      }
+    },
+    "#part-54": {
+      "firstAppears": 4.25,
+      "lastAnimates": 5.175,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 145,
+        "y": 431,
+        "w": 240,
+        "h": 80
+      }
+    },
+    "#part-75": {
+      "firstAppears": 4.57,
+      "lastAnimates": 5.07,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1106,
+        "y": 617,
+        "w": 718,
+        "h": 65
+      }
+    },
+    "#part-77": {
+      "firstAppears": 4.88,
+      "lastAnimates": 5.49,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1106,
+        "y": 706,
+        "w": 718,
+        "h": 48
+      }
+    },
+    "#part-70": {
+      "firstAppears": 5.1,
+      "lastAnimates": 5.55,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 145,
+        "y": 830,
+        "w": 816,
+        "h": 45
+      }
+    },
+    "#part-79": {
+      "firstAppears": 5.15,
+      "lastAnimates": 5.65,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1106,
+        "y": 826,
+        "w": 699,
+        "h": 2
+      }
+    },
+    "#part-80": {
+      "firstAppears": 5.35,
+      "lastAnimates": 5.8,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1106,
+        "y": 854,
+        "w": 718,
+        "h": 48
+      }
+    },
+    "#part-81": {
+      "firstAppears": 5.65,
+      "lastAnimates": 6.1,
+      "tweenCount": 1,
+      "props": [
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 942,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#scene3": {
+      "firstAppears": 7.1,
+      "lastAnimates": 11.7,
+      "tweenCount": 2,
+      "props": [
+        "y",
+        "opacity",
+        "x"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": -1842,
+        "y": 0,
+        "w": 1920,
+        "h": 1080
+      }
+    },
+    "#part-85": {
+      "firstAppears": 7.2,
+      "lastAnimates": 10.7,
+      "tweenCount": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1775,
+        "y": 0,
+        "w": 145,
+        "h": 1080
+      }
+    },
+    "#part-87": {
+      "firstAppears": 7.25,
+      "lastAnimates": 7.7,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 94,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#part-90": {
+      "firstAppears": 7.35,
+      "lastAnimates": 8.05,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 186,
+        "w": 1697,
+        "h": 2
+      }
+    },
+    "#part-93": {
+      "firstAppears": 7.4,
+      "lastAnimates": 7.8,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 254,
+        "w": 571,
+        "h": 59
+      }
+    },
+    "#part-97": {
+      "firstAppears": 7.52,
+      "lastAnimates": 8.26,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 345,
+        "w": 571,
+        "h": 114
+      }
+    },
+    "#part-101": {
+      "firstAppears": 7.65,
+      "lastAnimates": 8.4,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 763,
+        "y": 299,
+        "w": 1061,
+        "h": 83
+      }
+    },
+    "#part-104": {
+      "firstAppears": 7.85,
+      "lastAnimates": 9.1,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 892,
+        "y": 314,
+        "w": 446,
+        "h": 52
+      }
+    },
+    "#part-99": {
+      "firstAppears": 8.05,
+      "lastAnimates": 8.55,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 608,
+        "w": 571,
+        "h": 51
+      }
+    },
+    "#part-105": {
+      "firstAppears": 8.25,
+      "lastAnimates": 9,
+      "tweenCount": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1659,
+        "y": 299,
+        "w": 165,
+        "h": 83
+      }
+    },
+    "#part-116": {
+      "firstAppears": 9,
+      "lastAnimates": 9.55,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 723,
+        "w": 1728,
+        "h": 171
+      }
+    },
+    "#part-117": {
+      "firstAppears": 9.12,
+      "lastAnimates": 9.57,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 141,
+        "y": 758,
+        "w": 280,
+        "h": 104
+      }
+    },
+    "#part-120": {
+      "firstAppears": 9.32,
+      "lastAnimates": 9.87,
+      "tweenCount": 1,
+      "props": [
+        "scale",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 750,
+        "y": 768,
+        "w": 272,
+        "h": 84
+      }
+    },
+    "#part-121": {
+      "firstAppears": 9.63,
+      "lastAnimates": 10.08,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1348,
+        "y": 786,
+        "w": 428,
+        "h": 48
+      }
+    },
+    "#part-123": {
+      "firstAppears": 9.9,
+      "lastAnimates": 10.3,
+      "tweenCount": 1,
+      "props": [
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 942,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#scene4": {
+      "firstAppears": 11.2,
+      "lastAnimates": 11.7,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 78,
+        "y": 0,
+        "w": 1920,
+        "h": 1080
+      }
+    },
+    "#part-127": {
+      "firstAppears": 11.3,
+      "lastAnimates": 14.8,
+      "tweenCount": 1,
+      "props": [
+        "scaleX",
+        "transformOrigin"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1775,
+        "y": 0,
+        "w": 145,
+        "h": 1080
+      }
+    },
+    "#part-129": {
+      "firstAppears": 11.35,
+      "lastAnimates": 11.8,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 94,
+        "w": 1728,
+        "h": 42
+      }
+    },
+    "#part-132": {
+      "firstAppears": 11.45,
+      "lastAnimates": 12.15,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 186,
+        "w": 1697,
+        "h": 2
+      }
+    },
+    "#part-135": {
+      "firstAppears": 11.5,
+      "lastAnimates": 11.95,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 236,
+        "w": 816,
+        "h": 59
+      }
+    },
+    "#part-139": {
+      "firstAppears": 11.62,
+      "lastAnimates": 12.3,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 327,
+        "w": 816,
+        "h": 135
+      }
+    },
+    "#part-143": {
+      "firstAppears": 11.85,
+      "lastAnimates": 12.52,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1008,
+        "y": 263,
+        "w": 816,
+        "h": 180
+      }
+    },
+    "#part-148": {
+      "firstAppears": 12.1,
+      "lastAnimates": 13.12,
+      "tweenCount": 1,
+      "props": [
+        "scaleX"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1008,
+        "y": 372,
+        "w": 480,
+        "h": 70
+      }
+    },
+    "#part-141": {
+      "firstAppears": 12.2,
+      "lastAnimates": 12.65,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 631,
+        "w": 816,
+        "h": 51
+      }
+    },
+    "#part-146": {
+      "firstAppears": 12.22,
+      "lastAnimates": 12.89,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 1668,
+        "y": 263,
+        "w": 156,
+        "h": 94
+      }
+    },
+    "#part-155": {
+      "firstAppears": 12.65,
+      "lastAnimates": 13.15,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 714,
+        "w": 1728,
+        "h": 180
+      }
+    },
+    "#part-156": {
+      "firstAppears": 12.85,
+      "lastAnimates": 13.3,
+      "tweenCount": 1,
+      "props": [
+        "x",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 142,
+        "y": 747,
+        "w": 1630,
+        "h": 53
+      }
+    },
+    "#part-157": {
+      "firstAppears": 13.05,
+      "lastAnimates": 13.55,
+      "tweenCount": 1,
+      "props": [
+        "y",
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 145,
+        "y": 816,
+        "w": 1630,
+        "h": 45
+      }
+    },
+    "#part-158": {
+      "firstAppears": 13.42,
+      "lastAnimates": 13.87,
+      "tweenCount": 1,
+      "props": [
+        "opacity"
+      ],
+      "endsVisible": true,
+      "finalPosition": {
+        "x": 96,
+        "y": 942,
+        "w": 1728,
+        "h": 42
+      }
+    }
+  },
+  "deadZones": [],
+  "snapshots": [
+    {
+      "t": 0,
+      "visibleElements": 80,
+      "animatingNow": [
+        "#part-161"
+      ],
+      "elements": [
+        {
+          "id": "root",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "scene1",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-1",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-2",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-4",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-5",
+          "x": 1562,
+          "y": 80,
+          "w": 262,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-7",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 658,
+          "opacity": 1
+        },
+        {
+          "id": "part-8",
+          "x": 96,
+          "y": 315,
+          "w": 762,
+          "h": 520,
+          "opacity": 1
+        },
+        {
+          "id": "part-10",
+          "x": 68,
+          "y": 315,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-11",
+          "x": 131,
+          "y": 320,
+          "w": 128,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-12",
+          "x": 96,
+          "y": 406,
+          "w": 762,
+          "h": 333,
+          "opacity": 1
+        },
+        {
+          "id": "part-16",
+          "x": 336,
+          "y": 801,
+          "w": 320,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-19",
+          "x": 991,
+          "y": 300,
+          "w": 97,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-20",
+          "x": 1111,
+          "y": 269,
+          "w": 652,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-23",
+          "x": 1020,
+          "y": 514,
+          "w": 97,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-24",
+          "x": 1140,
+          "y": 483,
+          "w": 652,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-25",
+          "x": 1140,
+          "y": 483,
+          "w": 207,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-26",
+          "x": 1363,
+          "y": 483,
+          "w": 207,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-27",
+          "x": 1585,
+          "y": 483,
+          "w": 207,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-30",
+          "x": 991,
+          "y": 726,
+          "w": 97,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-31",
+          "x": 1111,
+          "y": 694,
+          "w": 652,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-32",
+          "x": 1111,
+          "y": 694,
+          "w": 318,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-33",
+          "x": 1445,
+          "y": 694,
+          "w": 318,
+          "h": 103,
+          "opacity": 1
+        },
+        {
+          "id": "part-36",
+          "x": 96,
+          "y": 960,
+          "w": 224,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-37",
+          "x": 1543,
+          "y": 960,
+          "w": 281,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-39",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-40",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-42",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-43",
+          "x": 1519,
+          "y": 80,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-45",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-47",
+          "x": 466,
+          "y": 237,
+          "w": 425,
+          "h": 111,
+          "opacity": 1
+        },
+        {
+          "id": "part-49",
+          "x": 1569,
+          "y": 284,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-50",
+          "x": 1632,
+          "y": 289,
+          "w": 192,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-51",
+          "x": 96,
+          "y": 398,
+          "w": 1728,
+          "h": 496,
+          "opacity": 1
+        },
+        {
+          "id": "part-53",
+          "x": 145,
+          "y": 463,
+          "w": 816,
+          "h": 366,
+          "opacity": 1
+        },
+        {
+          "id": "part-71",
+          "x": 170,
+          "y": 872,
+          "w": 24,
+          "h": 24,
+          "opacity": 1
+        },
+        {
+          "id": "part-72",
+          "x": 218,
+          "y": 862,
+          "w": 270,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-73",
+          "x": 1106,
+          "y": 406,
+          "w": 718,
+          "h": 494,
+          "opacity": 1
+        },
+        {
+          "id": "part-76",
+          "x": 1106,
+          "y": 706,
+          "w": 718,
+          "h": 96,
+          "opacity": 1
+        },
+        {
+          "id": "part-82",
+          "x": 96,
+          "y": 942,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-83",
+          "x": 1459,
+          "y": 942,
+          "w": 365,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-85",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-86",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-88",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-89",
+          "x": 1519,
+          "y": 80,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-91",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 439,
+          "opacity": 1
+        },
+        {
+          "id": "part-92",
+          "x": 96,
+          "y": 254,
+          "w": 571,
+          "h": 403,
+          "opacity": 1
+        },
+        {
+          "id": "part-94",
+          "x": 96,
+          "y": 279,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-95",
+          "x": 159,
+          "y": 285,
+          "w": 225,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-96",
+          "x": 96,
+          "y": 345,
+          "w": 571,
+          "h": 229,
+          "opacity": 1
+        },
+        {
+          "id": "part-100",
+          "x": 763,
+          "y": 299,
+          "w": 1061,
+          "h": 314,
+          "opacity": 1
+        },
+        {
+          "id": "part-102",
+          "x": 795,
+          "y": 310,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-103",
+          "x": 924,
+          "y": 314,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-107",
+          "x": 795,
+          "y": 426,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-108",
+          "x": 924,
+          "y": 430,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-112",
+          "x": 795,
+          "y": 541,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-113",
+          "x": 924,
+          "y": 545,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-118",
+          "x": 119,
+          "y": 803,
+          "w": 280,
+          "h": 54,
+          "opacity": 1
+        },
+        {
+          "id": "part-119",
+          "x": 119,
+          "y": 865,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-122",
+          "x": 1572,
+          "y": 854,
+          "w": 204,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-124",
+          "x": 96,
+          "y": 942,
+          "w": 336,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-125",
+          "x": 1460,
+          "y": 942,
+          "w": 364,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-127",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-128",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-130",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-131",
+          "x": 1549,
+          "y": 80,
+          "w": 275,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-133",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 430,
+          "opacity": 1
+        },
+        {
+          "id": "part-134",
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 444,
+          "opacity": 1
+        },
+        {
+          "id": "part-136",
+          "x": 71,
+          "y": 236,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-137",
+          "x": 134,
+          "y": 242,
+          "w": 289,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-138",
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 270,
+          "opacity": 1
+        },
+        {
+          "id": "part-142",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 391,
+          "opacity": 1
+        },
+        {
+          "id": "part-144",
+          "x": 1043,
+          "y": 263,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-145",
+          "x": 1043,
+          "y": 279,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-147",
+          "x": 1043,
+          "y": 372,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-150",
+          "x": 1043,
+          "y": 474,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-151",
+          "x": 1043,
+          "y": 491,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-153",
+          "x": 1043,
+          "y": 584,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-159",
+          "x": 96,
+          "y": 942,
+          "w": 358,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-160",
+          "x": 1431,
+          "y": 942,
+          "w": 393,
+          "h": 42,
+          "opacity": 1
+        }
+      ]
+    },
+    {
+      "t": 3.75,
+      "visibleElements": 96,
+      "animatingNow": [
+        "#part-161",
+        "#scene1",
+        "#scene2",
+        "#part-39",
+        "#part-41"
+      ],
+      "elements": [
+        {
+          "id": "root",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "scene1",
+          "x": -78,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-1",
+          "x": 1688,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-2",
+          "x": -78,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-3",
+          "x": 18,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-4",
+          "x": 18,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-5",
+          "x": 1484,
+          "y": 96,
+          "w": 262,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-6",
+          "x": 18,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-7",
+          "x": 18,
+          "y": 236,
+          "w": 1728,
+          "h": 658,
+          "opacity": 1
+        },
+        {
+          "id": "part-8",
+          "x": 18,
+          "y": 315,
+          "w": 762,
+          "h": 520,
+          "opacity": 1
+        },
+        {
+          "id": "part-9",
+          "x": 18,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-10",
+          "x": 18,
+          "y": 315,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-11",
+          "x": 82,
+          "y": 320,
+          "w": 128,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-12",
+          "x": 18,
+          "y": 406,
+          "w": 762,
+          "h": 333,
+          "opacity": 1
+        },
+        {
+          "id": "part-13",
+          "x": 18,
+          "y": 406,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-14",
+          "x": 18,
+          "y": 572,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-15",
+          "x": 18,
+          "y": 770,
+          "w": 762,
+          "h": 64,
+          "opacity": 1
+        },
+        {
+          "id": "part-16",
+          "x": 258,
+          "y": 776,
+          "w": 320,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-17",
+          "x": 852,
+          "y": 236,
+          "w": 894,
+          "h": 677,
+          "opacity": 1
+        },
+        {
+          "id": "part-18",
+          "x": 901,
+          "y": 285,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-19",
+          "x": 901,
+          "y": 317,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-20",
+          "x": 1025,
+          "y": 285,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-21",
+          "x": 1021,
+          "y": 415,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-22",
+          "x": 901,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-23",
+          "x": 901,
+          "y": 513,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-24",
+          "x": 1025,
+          "y": 481,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-25",
+          "x": 1025,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-26",
+          "x": 1254,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-27",
+          "x": 1484,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-28",
+          "x": 1021,
+          "y": 611,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-29",
+          "x": 901,
+          "y": 676,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-30",
+          "x": 901,
+          "y": 708,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-31",
+          "x": 1025,
+          "y": 676,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-32",
+          "x": 1025,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-33",
+          "x": 1369,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-34",
+          "x": 901,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-35",
+          "x": 18,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-36",
+          "x": 18,
+          "y": 942,
+          "w": 224,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-37",
+          "x": 1466,
+          "y": 942,
+          "w": 281,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene2",
+          "x": 1842,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-39",
+          "x": 3668,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-40",
+          "x": 1842,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-42",
+          "x": 1938,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-43",
+          "x": 3361,
+          "y": 80,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-45",
+          "x": 1938,
+          "y": 236,
+          "w": 1728,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-47",
+          "x": 2308,
+          "y": 237,
+          "w": 425,
+          "h": 111,
+          "opacity": 1
+        },
+        {
+          "id": "part-49",
+          "x": 3411,
+          "y": 284,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-50",
+          "x": 3474,
+          "y": 289,
+          "w": 192,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-51",
+          "x": 1938,
+          "y": 398,
+          "w": 1728,
+          "h": 496,
+          "opacity": 1
+        },
+        {
+          "id": "part-53",
+          "x": 1987,
+          "y": 463,
+          "w": 816,
+          "h": 366,
+          "opacity": 1
+        },
+        {
+          "id": "part-71",
+          "x": 2012,
+          "y": 872,
+          "w": 24,
+          "h": 24,
+          "opacity": 1
+        },
+        {
+          "id": "part-72",
+          "x": 2060,
+          "y": 862,
+          "w": 270,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-73",
+          "x": 2948,
+          "y": 406,
+          "w": 718,
+          "h": 494,
+          "opacity": 1
+        },
+        {
+          "id": "part-76",
+          "x": 2948,
+          "y": 706,
+          "w": 718,
+          "h": 96,
+          "opacity": 1
+        },
+        {
+          "id": "part-82",
+          "x": 1938,
+          "y": 942,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-83",
+          "x": 3302,
+          "y": 942,
+          "w": 365,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-85",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-86",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-88",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-89",
+          "x": 1519,
+          "y": 80,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-91",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 439,
+          "opacity": 1
+        },
+        {
+          "id": "part-92",
+          "x": 96,
+          "y": 254,
+          "w": 571,
+          "h": 403,
+          "opacity": 1
+        },
+        {
+          "id": "part-94",
+          "x": 96,
+          "y": 279,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-95",
+          "x": 159,
+          "y": 285,
+          "w": 225,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-96",
+          "x": 96,
+          "y": 345,
+          "w": 571,
+          "h": 229,
+          "opacity": 1
+        },
+        {
+          "id": "part-100",
+          "x": 763,
+          "y": 299,
+          "w": 1061,
+          "h": 314,
+          "opacity": 1
+        },
+        {
+          "id": "part-102",
+          "x": 795,
+          "y": 310,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-103",
+          "x": 924,
+          "y": 314,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-107",
+          "x": 795,
+          "y": 426,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-108",
+          "x": 924,
+          "y": 430,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-112",
+          "x": 795,
+          "y": 541,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-113",
+          "x": 924,
+          "y": 545,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-118",
+          "x": 119,
+          "y": 803,
+          "w": 280,
+          "h": 54,
+          "opacity": 1
+        },
+        {
+          "id": "part-119",
+          "x": 119,
+          "y": 865,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-122",
+          "x": 1572,
+          "y": 854,
+          "w": 204,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-124",
+          "x": 96,
+          "y": 942,
+          "w": 336,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-125",
+          "x": 1460,
+          "y": 942,
+          "w": 364,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-127",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-128",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-130",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-131",
+          "x": 1549,
+          "y": 80,
+          "w": 275,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-133",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 430,
+          "opacity": 1
+        },
+        {
+          "id": "part-134",
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 444,
+          "opacity": 1
+        },
+        {
+          "id": "part-136",
+          "x": 71,
+          "y": 236,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-137",
+          "x": 134,
+          "y": 242,
+          "w": 289,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-138",
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 270,
+          "opacity": 1
+        },
+        {
+          "id": "part-142",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 391,
+          "opacity": 1
+        },
+        {
+          "id": "part-144",
+          "x": 1043,
+          "y": 263,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-145",
+          "x": 1043,
+          "y": 279,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-147",
+          "x": 1043,
+          "y": 372,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-150",
+          "x": 1043,
+          "y": 474,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-151",
+          "x": 1043,
+          "y": 491,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-153",
+          "x": 1043,
+          "y": 584,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-159",
+          "x": 96,
+          "y": 942,
+          "w": 358,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-160",
+          "x": 1431,
+          "y": 942,
+          "w": 393,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-161",
+          "x": 0,
+          "y": 1072,
+          "w": 478,
+          "h": 8,
+          "opacity": 1
+        }
+      ]
+    },
+    {
+      "t": 7.5,
+      "visibleElements": 128,
+      "animatingNow": [
+        "#part-161",
+        "#scene2",
+        "#scene3",
+        "#part-85",
+        "#part-87",
+        "#part-90",
+        "#part-93"
+      ],
+      "elements": [
+        {
+          "id": "root",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-1",
+          "x": -155,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-2",
+          "x": -1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-3",
+          "x": -1824,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-4",
+          "x": -1824,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-5",
+          "x": -358,
+          "y": 96,
+          "w": 262,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-6",
+          "x": -1824,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-7",
+          "x": -1824,
+          "y": 236,
+          "w": 1728,
+          "h": 658,
+          "opacity": 1
+        },
+        {
+          "id": "part-8",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 520,
+          "opacity": 1
+        },
+        {
+          "id": "part-9",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-10",
+          "x": -1824,
+          "y": 315,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-11",
+          "x": -1761,
+          "y": 320,
+          "w": 128,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-12",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 333,
+          "opacity": 1
+        },
+        {
+          "id": "part-13",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-14",
+          "x": -1824,
+          "y": 572,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-15",
+          "x": -1824,
+          "y": 770,
+          "w": 762,
+          "h": 64,
+          "opacity": 1
+        },
+        {
+          "id": "part-16",
+          "x": -1584,
+          "y": 776,
+          "w": 320,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-17",
+          "x": -990,
+          "y": 236,
+          "w": 894,
+          "h": 677,
+          "opacity": 1
+        },
+        {
+          "id": "part-18",
+          "x": -941,
+          "y": 285,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-19",
+          "x": -941,
+          "y": 317,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-20",
+          "x": -817,
+          "y": 285,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-21",
+          "x": -821,
+          "y": 415,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-22",
+          "x": -941,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-23",
+          "x": -941,
+          "y": 513,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-24",
+          "x": -817,
+          "y": 481,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-25",
+          "x": -817,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-26",
+          "x": -588,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-27",
+          "x": -358,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-28",
+          "x": -821,
+          "y": 611,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-29",
+          "x": -941,
+          "y": 676,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-30",
+          "x": -941,
+          "y": 708,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-31",
+          "x": -817,
+          "y": 676,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-32",
+          "x": -817,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-33",
+          "x": -473,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-34",
+          "x": -941,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-35",
+          "x": -1824,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-36",
+          "x": -1824,
+          "y": 942,
+          "w": 224,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-37",
+          "x": -377,
+          "y": 942,
+          "w": 281,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene2",
+          "x": 0,
+          "y": -1066,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-39",
+          "x": 1765,
+          "y": -1066,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-40",
+          "x": 0,
+          "y": -1066,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-41",
+          "x": 96,
+          "y": -970,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-42",
+          "x": 96,
+          "y": -970,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-43",
+          "x": 1519,
+          "y": -970,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-44",
+          "x": 96,
+          "y": -880,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-45",
+          "x": 96,
+          "y": -830,
+          "w": 1728,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-46",
+          "x": 96,
+          "y": -830,
+          "w": 849,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-47",
+          "x": 521,
+          "y": -829,
+          "w": 425,
+          "h": 111,
+          "opacity": 1
+        },
+        {
+          "id": "part-48",
+          "x": 1569,
+          "y": -802,
+          "w": 255,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-49",
+          "x": 1569,
+          "y": -802,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-50",
+          "x": 1632,
+          "y": -797,
+          "w": 192,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-51",
+          "x": 96,
+          "y": -668,
+          "w": 1728,
+          "h": 496,
+          "opacity": 1
+        },
+        {
+          "id": "part-52",
+          "x": 96,
+          "y": -668,
+          "w": 914,
+          "h": 509,
+          "opacity": 1
+        },
+        {
+          "id": "part-53",
+          "x": 145,
+          "y": -635,
+          "w": 816,
+          "h": 366,
+          "opacity": 1
+        },
+        {
+          "id": "part-54",
+          "x": 145,
+          "y": -635,
+          "w": 240,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-55",
+          "x": 385,
+          "y": -635,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-56",
+          "x": 577,
+          "y": -635,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-57",
+          "x": 769,
+          "y": -635,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-58",
+          "x": 145,
+          "y": -548,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-59",
+          "x": 385,
+          "y": -555,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-60",
+          "x": 577,
+          "y": -555,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-61",
+          "x": 769,
+          "y": -555,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-62",
+          "x": 145,
+          "y": -452,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-63",
+          "x": 385,
+          "y": -459,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-64",
+          "x": 577,
+          "y": -459,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-65",
+          "x": 769,
+          "y": -459,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-66",
+          "x": 145,
+          "y": -357,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-67",
+          "x": 385,
+          "y": -364,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-68",
+          "x": 577,
+          "y": -364,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-69",
+          "x": 769,
+          "y": -364,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-70",
+          "x": 145,
+          "y": -237,
+          "w": 816,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-71",
+          "x": 145,
+          "y": -226,
+          "w": 24,
+          "h": 24,
+          "opacity": 1
+        },
+        {
+          "id": "part-72",
+          "x": 193,
+          "y": -237,
+          "w": 270,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-73",
+          "x": 1106,
+          "y": -660,
+          "w": 718,
+          "h": 494,
+          "opacity": 1
+        },
+        {
+          "id": "part-74",
+          "x": 1106,
+          "y": -660,
+          "w": 718,
+          "h": 187,
+          "opacity": 1
+        },
+        {
+          "id": "part-75",
+          "x": 1106,
+          "y": -449,
+          "w": 718,
+          "h": 65,
+          "opacity": 1
+        },
+        {
+          "id": "part-76",
+          "x": 1106,
+          "y": -360,
+          "w": 718,
+          "h": 96,
+          "opacity": 1
+        },
+        {
+          "id": "part-77",
+          "x": 1106,
+          "y": -360,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-78",
+          "x": 1106,
+          "y": -312,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-79",
+          "x": 1106,
+          "y": -240,
+          "w": 718,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-80",
+          "x": 1106,
+          "y": -214,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-81",
+          "x": 96,
+          "y": -124,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-82",
+          "x": 96,
+          "y": -124,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-83",
+          "x": 1459,
+          "y": -124,
+          "w": 365,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene3",
+          "x": 0,
+          "y": 14,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-85",
+          "x": 1825,
+          "y": 14,
+          "w": 95,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-86",
+          "x": 0,
+          "y": 14,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-87",
+          "x": 96,
+          "y": 106,
+          "w": 1728,
+          "h": 42,
+          "opacity": 0.77
+        },
+        {
+          "id": "part-88",
+          "x": 96,
+          "y": 106,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-89",
+          "x": 1519,
+          "y": 106,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-90",
+          "x": 96,
+          "y": 200,
+          "w": 890,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-91",
+          "x": 96,
+          "y": 250,
+          "w": 1728,
+          "h": 439,
+          "opacity": 1
+        },
+        {
+          "id": "part-92",
+          "x": 96,
+          "y": 268,
+          "w": 571,
+          "h": 403,
+          "opacity": 1
+        },
+        {
+          "id": "part-93",
+          "x": 96,
+          "y": 278,
+          "w": 571,
+          "h": 59,
+          "opacity": 0.58
+        },
+        {
+          "id": "part-94",
+          "x": 96,
+          "y": 278,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-95",
+          "x": 159,
+          "y": 284,
+          "w": 225,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-96",
+          "x": 96,
+          "y": 359,
+          "w": 571,
+          "h": 229,
+          "opacity": 1
+        },
+        {
+          "id": "part-100",
+          "x": 763,
+          "y": 313,
+          "w": 1061,
+          "h": 314,
+          "opacity": 1
+        },
+        {
+          "id": "part-102",
+          "x": 795,
+          "y": 324,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-103",
+          "x": 924,
+          "y": 328,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-107",
+          "x": 795,
+          "y": 439,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-108",
+          "x": 924,
+          "y": 443,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-112",
+          "x": 795,
+          "y": 555,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-113",
+          "x": 924,
+          "y": 559,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-118",
+          "x": 119,
+          "y": 817,
+          "w": 280,
+          "h": 54,
+          "opacity": 1
+        },
+        {
+          "id": "part-119",
+          "x": 119,
+          "y": 879,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-122",
+          "x": 1572,
+          "y": 868,
+          "w": 204,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-124",
+          "x": 96,
+          "y": 956,
+          "w": 336,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-125",
+          "x": 1460,
+          "y": 956,
+          "w": 364,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-127",
+          "x": 1806,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-128",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-130",
+          "x": 96,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-131",
+          "x": 1549,
+          "y": 80,
+          "w": 275,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-133",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 430,
+          "opacity": 1
+        },
+        {
+          "id": "part-134",
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 444,
+          "opacity": 1
+        },
+        {
+          "id": "part-136",
+          "x": 71,
+          "y": 236,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-137",
+          "x": 134,
+          "y": 242,
+          "w": 289,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-138",
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 270,
+          "opacity": 1
+        },
+        {
+          "id": "part-142",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 391,
+          "opacity": 1
+        },
+        {
+          "id": "part-144",
+          "x": 1043,
+          "y": 263,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-145",
+          "x": 1043,
+          "y": 279,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-147",
+          "x": 1043,
+          "y": 372,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-150",
+          "x": 1043,
+          "y": 474,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-151",
+          "x": 1043,
+          "y": 491,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-153",
+          "x": 1043,
+          "y": 584,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-159",
+          "x": 96,
+          "y": 942,
+          "w": 358,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-160",
+          "x": 1431,
+          "y": 942,
+          "w": 393,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-161",
+          "x": 0,
+          "y": 1072,
+          "w": 960,
+          "h": 8,
+          "opacity": 1
+        }
+      ]
+    },
+    {
+      "t": 11.25,
+      "visibleElements": 145,
+      "animatingNow": [
+        "#part-161",
+        "#scene3",
+        "#scene4"
+      ],
+      "elements": [
+        {
+          "id": "root",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-1",
+          "x": -155,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-2",
+          "x": -1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-3",
+          "x": -1824,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-4",
+          "x": -1824,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-5",
+          "x": -358,
+          "y": 96,
+          "w": 262,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-6",
+          "x": -1824,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-7",
+          "x": -1824,
+          "y": 236,
+          "w": 1728,
+          "h": 658,
+          "opacity": 1
+        },
+        {
+          "id": "part-8",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 520,
+          "opacity": 1
+        },
+        {
+          "id": "part-9",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-10",
+          "x": -1824,
+          "y": 315,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-11",
+          "x": -1761,
+          "y": 320,
+          "w": 128,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-12",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 333,
+          "opacity": 1
+        },
+        {
+          "id": "part-13",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-14",
+          "x": -1824,
+          "y": 572,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-15",
+          "x": -1824,
+          "y": 770,
+          "w": 762,
+          "h": 64,
+          "opacity": 1
+        },
+        {
+          "id": "part-16",
+          "x": -1584,
+          "y": 776,
+          "w": 320,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-17",
+          "x": -990,
+          "y": 236,
+          "w": 894,
+          "h": 677,
+          "opacity": 1
+        },
+        {
+          "id": "part-18",
+          "x": -941,
+          "y": 285,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-19",
+          "x": -941,
+          "y": 317,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-20",
+          "x": -817,
+          "y": 285,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-21",
+          "x": -821,
+          "y": 415,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-22",
+          "x": -941,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-23",
+          "x": -941,
+          "y": 513,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-24",
+          "x": -817,
+          "y": 481,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-25",
+          "x": -817,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-26",
+          "x": -588,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-27",
+          "x": -358,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-28",
+          "x": -821,
+          "y": 611,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-29",
+          "x": -941,
+          "y": 676,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-30",
+          "x": -941,
+          "y": 708,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-31",
+          "x": -817,
+          "y": 676,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-32",
+          "x": -817,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-33",
+          "x": -473,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-34",
+          "x": -941,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-35",
+          "x": -1824,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-36",
+          "x": -1824,
+          "y": 942,
+          "w": 224,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-37",
+          "x": -377,
+          "y": 942,
+          "w": 281,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-39",
+          "x": 1765,
+          "y": -1080,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-40",
+          "x": 0,
+          "y": -1080,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-41",
+          "x": 96,
+          "y": -984,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-42",
+          "x": 96,
+          "y": -984,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-43",
+          "x": 1519,
+          "y": -984,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-44",
+          "x": 96,
+          "y": -894,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-45",
+          "x": 96,
+          "y": -844,
+          "w": 1728,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-46",
+          "x": 96,
+          "y": -844,
+          "w": 849,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-47",
+          "x": 521,
+          "y": -843,
+          "w": 425,
+          "h": 111,
+          "opacity": 1
+        },
+        {
+          "id": "part-48",
+          "x": 1569,
+          "y": -816,
+          "w": 255,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-49",
+          "x": 1569,
+          "y": -816,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-50",
+          "x": 1632,
+          "y": -811,
+          "w": 192,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-51",
+          "x": 96,
+          "y": -682,
+          "w": 1728,
+          "h": 496,
+          "opacity": 1
+        },
+        {
+          "id": "part-52",
+          "x": 96,
+          "y": -682,
+          "w": 914,
+          "h": 509,
+          "opacity": 1
+        },
+        {
+          "id": "part-53",
+          "x": 145,
+          "y": -649,
+          "w": 816,
+          "h": 366,
+          "opacity": 1
+        },
+        {
+          "id": "part-54",
+          "x": 145,
+          "y": -649,
+          "w": 240,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-55",
+          "x": 385,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-56",
+          "x": 577,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-57",
+          "x": 769,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-58",
+          "x": 145,
+          "y": -561,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-59",
+          "x": 385,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-60",
+          "x": 577,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-61",
+          "x": 769,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-62",
+          "x": 145,
+          "y": -466,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-63",
+          "x": 385,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-64",
+          "x": 577,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-65",
+          "x": 769,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-66",
+          "x": 145,
+          "y": -371,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-67",
+          "x": 385,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-68",
+          "x": 577,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-69",
+          "x": 769,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-70",
+          "x": 145,
+          "y": -250,
+          "w": 816,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-71",
+          "x": 145,
+          "y": -240,
+          "w": 24,
+          "h": 24,
+          "opacity": 1
+        },
+        {
+          "id": "part-72",
+          "x": 193,
+          "y": -250,
+          "w": 270,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-73",
+          "x": 1106,
+          "y": -674,
+          "w": 718,
+          "h": 494,
+          "opacity": 1
+        },
+        {
+          "id": "part-74",
+          "x": 1106,
+          "y": -674,
+          "w": 718,
+          "h": 187,
+          "opacity": 1
+        },
+        {
+          "id": "part-75",
+          "x": 1106,
+          "y": -463,
+          "w": 718,
+          "h": 65,
+          "opacity": 1
+        },
+        {
+          "id": "part-76",
+          "x": 1106,
+          "y": -374,
+          "w": 718,
+          "h": 96,
+          "opacity": 1
+        },
+        {
+          "id": "part-77",
+          "x": 1106,
+          "y": -374,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-78",
+          "x": 1106,
+          "y": -326,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-79",
+          "x": 1106,
+          "y": -254,
+          "w": 718,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-80",
+          "x": 1106,
+          "y": -228,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-81",
+          "x": 96,
+          "y": -138,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-82",
+          "x": 96,
+          "y": -138,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-83",
+          "x": 1459,
+          "y": -138,
+          "w": 365,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene3",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-85",
+          "x": 1765,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-86",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-87",
+          "x": 96,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-88",
+          "x": 96,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-89",
+          "x": 1518,
+          "y": 96,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-90",
+          "x": 96,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-91",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 439,
+          "opacity": 1
+        },
+        {
+          "id": "part-92",
+          "x": 96,
+          "y": 254,
+          "w": 571,
+          "h": 403,
+          "opacity": 1
+        },
+        {
+          "id": "part-93",
+          "x": 96,
+          "y": 254,
+          "w": 571,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-94",
+          "x": 96,
+          "y": 254,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-95",
+          "x": 159,
+          "y": 260,
+          "w": 225,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-96",
+          "x": 96,
+          "y": 345,
+          "w": 571,
+          "h": 229,
+          "opacity": 1
+        },
+        {
+          "id": "part-97",
+          "x": 96,
+          "y": 345,
+          "w": 571,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-98",
+          "x": 96,
+          "y": 459,
+          "w": 571,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-99",
+          "x": 96,
+          "y": 606,
+          "w": 571,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-100",
+          "x": 763,
+          "y": 299,
+          "w": 1061,
+          "h": 314,
+          "opacity": 1
+        },
+        {
+          "id": "part-101",
+          "x": 763,
+          "y": 299,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-102",
+          "x": 763,
+          "y": 310,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-103",
+          "x": 892,
+          "y": 314,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-104",
+          "x": 892,
+          "y": 314,
+          "w": 446,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-105",
+          "x": 1659,
+          "y": 299,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-106",
+          "x": 763,
+          "y": 414,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-107",
+          "x": 763,
+          "y": 426,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-108",
+          "x": 892,
+          "y": 430,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-109",
+          "x": 892,
+          "y": 430,
+          "w": 223,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-110",
+          "x": 1659,
+          "y": 414,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-111",
+          "x": 763,
+          "y": 529,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-112",
+          "x": 763,
+          "y": 541,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-113",
+          "x": 892,
+          "y": 545,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-114",
+          "x": 892,
+          "y": 545,
+          "w": 74,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-115",
+          "x": 1659,
+          "y": 529,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-116",
+          "x": 96,
+          "y": 723,
+          "w": 1728,
+          "h": 171,
+          "opacity": 1
+        },
+        {
+          "id": "part-117",
+          "x": 144,
+          "y": 758,
+          "w": 280,
+          "h": 104,
+          "opacity": 1
+        },
+        {
+          "id": "part-118",
+          "x": 144,
+          "y": 758,
+          "w": 280,
+          "h": 54,
+          "opacity": 1
+        },
+        {
+          "id": "part-119",
+          "x": 144,
+          "y": 820,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-120",
+          "x": 750,
+          "y": 768,
+          "w": 272,
+          "h": 84,
+          "opacity": 1
+        },
+        {
+          "id": "part-121",
+          "x": 1348,
+          "y": 786,
+          "w": 428,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-122",
+          "x": 1572,
+          "y": 789,
+          "w": 204,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-123",
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-124",
+          "x": 96,
+          "y": 942,
+          "w": 336,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-125",
+          "x": 1460,
+          "y": 942,
+          "w": 364,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene4",
+          "x": 1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-127",
+          "x": 3725,
+          "y": 0,
+          "w": 94,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-128",
+          "x": 1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-130",
+          "x": 2016,
+          "y": 80,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-131",
+          "x": 3469,
+          "y": 80,
+          "w": 275,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-133",
+          "x": 2016,
+          "y": 236,
+          "w": 1728,
+          "h": 430,
+          "opacity": 1
+        },
+        {
+          "id": "part-134",
+          "x": 2016,
+          "y": 236,
+          "w": 816,
+          "h": 444,
+          "opacity": 1
+        },
+        {
+          "id": "part-136",
+          "x": 1991,
+          "y": 236,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-137",
+          "x": 2054,
+          "y": 242,
+          "w": 289,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-138",
+          "x": 2016,
+          "y": 327,
+          "w": 816,
+          "h": 270,
+          "opacity": 1
+        },
+        {
+          "id": "part-142",
+          "x": 2928,
+          "y": 263,
+          "w": 816,
+          "h": 391,
+          "opacity": 1
+        },
+        {
+          "id": "part-144",
+          "x": 2963,
+          "y": 263,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-145",
+          "x": 2963,
+          "y": 279,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-147",
+          "x": 2963,
+          "y": 372,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-150",
+          "x": 2963,
+          "y": 474,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-151",
+          "x": 2963,
+          "y": 491,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-153",
+          "x": 2963,
+          "y": 584,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-159",
+          "x": 2016,
+          "y": 942,
+          "w": 358,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-160",
+          "x": 3351,
+          "y": 942,
+          "w": 393,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-161",
+          "x": 0,
+          "y": 1072,
+          "w": 1438,
+          "h": 8,
+          "opacity": 1
+        }
+      ]
+    },
+    {
+      "t": 14.9,
+      "visibleElements": 160,
+      "animatingNow": [
+        "#part-161"
+      ],
+      "elements": [
+        {
+          "id": "root",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-1",
+          "x": -155,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-2",
+          "x": -1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-3",
+          "x": -1824,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-4",
+          "x": -1824,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-5",
+          "x": -358,
+          "y": 96,
+          "w": 262,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-6",
+          "x": -1824,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-7",
+          "x": -1824,
+          "y": 236,
+          "w": 1728,
+          "h": 658,
+          "opacity": 1
+        },
+        {
+          "id": "part-8",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 520,
+          "opacity": 1
+        },
+        {
+          "id": "part-9",
+          "x": -1824,
+          "y": 315,
+          "w": 762,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-10",
+          "x": -1824,
+          "y": 315,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-11",
+          "x": -1761,
+          "y": 320,
+          "w": 128,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-12",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 333,
+          "opacity": 1
+        },
+        {
+          "id": "part-13",
+          "x": -1824,
+          "y": 406,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-14",
+          "x": -1824,
+          "y": 572,
+          "w": 762,
+          "h": 166,
+          "opacity": 1
+        },
+        {
+          "id": "part-15",
+          "x": -1824,
+          "y": 770,
+          "w": 762,
+          "h": 64,
+          "opacity": 1
+        },
+        {
+          "id": "part-16",
+          "x": -1584,
+          "y": 776,
+          "w": 320,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-17",
+          "x": -990,
+          "y": 236,
+          "w": 894,
+          "h": 677,
+          "opacity": 1
+        },
+        {
+          "id": "part-18",
+          "x": -941,
+          "y": 285,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-19",
+          "x": -941,
+          "y": 317,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-20",
+          "x": -817,
+          "y": 285,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-21",
+          "x": -821,
+          "y": 415,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-22",
+          "x": -941,
+          "y": 481,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-23",
+          "x": -941,
+          "y": 513,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-24",
+          "x": -817,
+          "y": 481,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-25",
+          "x": -817,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-26",
+          "x": -588,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-27",
+          "x": -358,
+          "y": 481,
+          "w": 213,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-28",
+          "x": -821,
+          "y": 611,
+          "w": 676,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-29",
+          "x": -941,
+          "y": 676,
+          "w": 796,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-30",
+          "x": -941,
+          "y": 708,
+          "w": 100,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-31",
+          "x": -817,
+          "y": 676,
+          "w": 672,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-32",
+          "x": -817,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-33",
+          "x": -473,
+          "y": 676,
+          "w": 328,
+          "h": 106,
+          "opacity": 1
+        },
+        {
+          "id": "part-34",
+          "x": -941,
+          "y": 822,
+          "w": 796,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-35",
+          "x": -1824,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-36",
+          "x": -1824,
+          "y": 942,
+          "w": 224,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-37",
+          "x": -377,
+          "y": 942,
+          "w": 281,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-39",
+          "x": 1765,
+          "y": -1080,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-40",
+          "x": 0,
+          "y": -1080,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-41",
+          "x": 96,
+          "y": -984,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-42",
+          "x": 96,
+          "y": -984,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-43",
+          "x": 1519,
+          "y": -984,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-44",
+          "x": 96,
+          "y": -894,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-45",
+          "x": 96,
+          "y": -844,
+          "w": 1728,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-46",
+          "x": 96,
+          "y": -844,
+          "w": 849,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-47",
+          "x": 521,
+          "y": -843,
+          "w": 425,
+          "h": 111,
+          "opacity": 1
+        },
+        {
+          "id": "part-48",
+          "x": 1569,
+          "y": -816,
+          "w": 255,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-49",
+          "x": 1569,
+          "y": -816,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-50",
+          "x": 1632,
+          "y": -811,
+          "w": 192,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-51",
+          "x": 96,
+          "y": -682,
+          "w": 1728,
+          "h": 496,
+          "opacity": 1
+        },
+        {
+          "id": "part-52",
+          "x": 96,
+          "y": -682,
+          "w": 914,
+          "h": 509,
+          "opacity": 1
+        },
+        {
+          "id": "part-53",
+          "x": 145,
+          "y": -649,
+          "w": 816,
+          "h": 366,
+          "opacity": 1
+        },
+        {
+          "id": "part-54",
+          "x": 145,
+          "y": -649,
+          "w": 240,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-55",
+          "x": 385,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-56",
+          "x": 577,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-57",
+          "x": 769,
+          "y": -649,
+          "w": 192,
+          "h": 80,
+          "opacity": 1
+        },
+        {
+          "id": "part-58",
+          "x": 145,
+          "y": -561,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-59",
+          "x": 385,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-60",
+          "x": 577,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-61",
+          "x": 769,
+          "y": -569,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-62",
+          "x": 145,
+          "y": -466,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-63",
+          "x": 385,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-64",
+          "x": 577,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-65",
+          "x": 769,
+          "y": -473,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-66",
+          "x": 145,
+          "y": -371,
+          "w": 240,
+          "h": 81,
+          "opacity": 1
+        },
+        {
+          "id": "part-67",
+          "x": 385,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-68",
+          "x": 577,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-69",
+          "x": 769,
+          "y": -378,
+          "w": 192,
+          "h": 95,
+          "opacity": 1
+        },
+        {
+          "id": "part-70",
+          "x": 145,
+          "y": -250,
+          "w": 816,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-71",
+          "x": 145,
+          "y": -240,
+          "w": 24,
+          "h": 24,
+          "opacity": 1
+        },
+        {
+          "id": "part-72",
+          "x": 193,
+          "y": -250,
+          "w": 270,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-73",
+          "x": 1106,
+          "y": -674,
+          "w": 718,
+          "h": 494,
+          "opacity": 1
+        },
+        {
+          "id": "part-74",
+          "x": 1106,
+          "y": -674,
+          "w": 718,
+          "h": 187,
+          "opacity": 1
+        },
+        {
+          "id": "part-75",
+          "x": 1106,
+          "y": -463,
+          "w": 718,
+          "h": 65,
+          "opacity": 1
+        },
+        {
+          "id": "part-76",
+          "x": 1106,
+          "y": -374,
+          "w": 718,
+          "h": 96,
+          "opacity": 1
+        },
+        {
+          "id": "part-77",
+          "x": 1106,
+          "y": -374,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-78",
+          "x": 1106,
+          "y": -326,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-79",
+          "x": 1106,
+          "y": -254,
+          "w": 718,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-80",
+          "x": 1106,
+          "y": -228,
+          "w": 718,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-81",
+          "x": 96,
+          "y": -138,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-82",
+          "x": 96,
+          "y": -138,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-83",
+          "x": 1459,
+          "y": -138,
+          "w": 365,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-85",
+          "x": -155,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-86",
+          "x": -1920,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-87",
+          "x": -1824,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-88",
+          "x": -1824,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-89",
+          "x": -401,
+          "y": 96,
+          "w": 305,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-90",
+          "x": -1824,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-91",
+          "x": -1824,
+          "y": 236,
+          "w": 1728,
+          "h": 439,
+          "opacity": 1
+        },
+        {
+          "id": "part-92",
+          "x": -1824,
+          "y": 254,
+          "w": 571,
+          "h": 403,
+          "opacity": 1
+        },
+        {
+          "id": "part-93",
+          "x": -1824,
+          "y": 254,
+          "w": 571,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-94",
+          "x": -1824,
+          "y": 254,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-95",
+          "x": -1761,
+          "y": 260,
+          "w": 225,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-96",
+          "x": -1824,
+          "y": 345,
+          "w": 571,
+          "h": 229,
+          "opacity": 1
+        },
+        {
+          "id": "part-97",
+          "x": -1824,
+          "y": 345,
+          "w": 571,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-98",
+          "x": -1824,
+          "y": 459,
+          "w": 571,
+          "h": 114,
+          "opacity": 1
+        },
+        {
+          "id": "part-99",
+          "x": -1824,
+          "y": 606,
+          "w": 571,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-100",
+          "x": -1157,
+          "y": 299,
+          "w": 1061,
+          "h": 314,
+          "opacity": 1
+        },
+        {
+          "id": "part-101",
+          "x": -1157,
+          "y": 299,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-102",
+          "x": -1157,
+          "y": 310,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-103",
+          "x": -1028,
+          "y": 314,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-104",
+          "x": -1028,
+          "y": 314,
+          "w": 446,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-105",
+          "x": -261,
+          "y": 299,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-106",
+          "x": -1157,
+          "y": 414,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-107",
+          "x": -1157,
+          "y": 426,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-108",
+          "x": -1028,
+          "y": 430,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-109",
+          "x": -1028,
+          "y": 430,
+          "w": 223,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-110",
+          "x": -261,
+          "y": 414,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-111",
+          "x": -1157,
+          "y": 529,
+          "w": 1061,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-112",
+          "x": -1157,
+          "y": 541,
+          "w": 105,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-113",
+          "x": -1028,
+          "y": 545,
+          "w": 743,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-114",
+          "x": -1028,
+          "y": 545,
+          "w": 74,
+          "h": 52,
+          "opacity": 1
+        },
+        {
+          "id": "part-115",
+          "x": -261,
+          "y": 529,
+          "w": 165,
+          "h": 83,
+          "opacity": 1
+        },
+        {
+          "id": "part-116",
+          "x": -1824,
+          "y": 723,
+          "w": 1728,
+          "h": 171,
+          "opacity": 1
+        },
+        {
+          "id": "part-117",
+          "x": -1776,
+          "y": 758,
+          "w": 280,
+          "h": 104,
+          "opacity": 1
+        },
+        {
+          "id": "part-118",
+          "x": -1776,
+          "y": 758,
+          "w": 280,
+          "h": 54,
+          "opacity": 1
+        },
+        {
+          "id": "part-119",
+          "x": -1776,
+          "y": 820,
+          "w": 280,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-120",
+          "x": -1170,
+          "y": 768,
+          "w": 272,
+          "h": 84,
+          "opacity": 1
+        },
+        {
+          "id": "part-121",
+          "x": -572,
+          "y": 786,
+          "w": 428,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-122",
+          "x": -348,
+          "y": 789,
+          "w": 204,
+          "h": 41,
+          "opacity": 1
+        },
+        {
+          "id": "part-123",
+          "x": -1824,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-124",
+          "x": -1824,
+          "y": 942,
+          "w": 336,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-125",
+          "x": -460,
+          "y": 942,
+          "w": 364,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "scene4",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-127",
+          "x": 1765,
+          "y": 0,
+          "w": 155,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-128",
+          "x": 0,
+          "y": 0,
+          "w": 1920,
+          "h": 1080,
+          "opacity": 1
+        },
+        {
+          "id": "part-129",
+          "x": 96,
+          "y": 96,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-130",
+          "x": 96,
+          "y": 96,
+          "w": 209,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-131",
+          "x": 1549,
+          "y": 96,
+          "w": 275,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-132",
+          "x": 96,
+          "y": 186,
+          "w": 1728,
+          "h": 2,
+          "opacity": 1
+        },
+        {
+          "id": "part-133",
+          "x": 96,
+          "y": 236,
+          "w": 1728,
+          "h": 430,
+          "opacity": 1
+        },
+        {
+          "id": "part-134",
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 444,
+          "opacity": 1
+        },
+        {
+          "id": "part-135",
+          "x": 96,
+          "y": 236,
+          "w": 816,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-136",
+          "x": 96,
+          "y": 236,
+          "w": 39,
+          "h": 59,
+          "opacity": 1
+        },
+        {
+          "id": "part-137",
+          "x": 159,
+          "y": 242,
+          "w": 289,
+          "h": 48,
+          "opacity": 1
+        },
+        {
+          "id": "part-138",
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 270,
+          "opacity": 1
+        },
+        {
+          "id": "part-139",
+          "x": 96,
+          "y": 327,
+          "w": 816,
+          "h": 135,
+          "opacity": 1
+        },
+        {
+          "id": "part-140",
+          "x": 96,
+          "y": 462,
+          "w": 816,
+          "h": 135,
+          "opacity": 1
+        },
+        {
+          "id": "part-141",
+          "x": 96,
+          "y": 629,
+          "w": 816,
+          "h": 51,
+          "opacity": 1
+        },
+        {
+          "id": "part-142",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 391,
+          "opacity": 1
+        },
+        {
+          "id": "part-143",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 180,
+          "opacity": 1
+        },
+        {
+          "id": "part-144",
+          "x": 1008,
+          "y": 263,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-145",
+          "x": 1008,
+          "y": 279,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-146",
+          "x": 1668,
+          "y": 263,
+          "w": 156,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-147",
+          "x": 1008,
+          "y": 372,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-148",
+          "x": 1008,
+          "y": 372,
+          "w": 481,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-149",
+          "x": 1008,
+          "y": 474,
+          "w": 816,
+          "h": 180,
+          "opacity": 1
+        },
+        {
+          "id": "part-150",
+          "x": 1008,
+          "y": 474,
+          "w": 816,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-151",
+          "x": 1008,
+          "y": 491,
+          "w": 120,
+          "h": 60,
+          "opacity": 1
+        },
+        {
+          "id": "part-152",
+          "x": 1668,
+          "y": 474,
+          "w": 156,
+          "h": 94,
+          "opacity": 1
+        },
+        {
+          "id": "part-153",
+          "x": 1008,
+          "y": 584,
+          "w": 816,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-154",
+          "x": 1008,
+          "y": 584,
+          "w": 335,
+          "h": 70,
+          "opacity": 1
+        },
+        {
+          "id": "part-155",
+          "x": 96,
+          "y": 714,
+          "w": 1728,
+          "h": 180,
+          "opacity": 1
+        },
+        {
+          "id": "part-156",
+          "x": 145,
+          "y": 747,
+          "w": 1630,
+          "h": 53,
+          "opacity": 1
+        },
+        {
+          "id": "part-157",
+          "x": 145,
+          "y": 816,
+          "w": 1630,
+          "h": 45,
+          "opacity": 1
+        },
+        {
+          "id": "part-158",
+          "x": 96,
+          "y": 942,
+          "w": 1728,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-159",
+          "x": 96,
+          "y": 942,
+          "w": 358,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-160",
+          "x": 1431,
+          "y": 942,
+          "w": 393,
+          "h": 42,
+          "opacity": 1
+        },
+        {
+          "id": "part-161",
+          "x": 0,
+          "y": 1072,
+          "w": 1907,
+          "h": 8,
+          "opacity": 1
+        }
+      ]
+    }
+  ]
+}

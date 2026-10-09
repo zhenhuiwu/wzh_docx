@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, height=1080">
+  <title>层次分析法 · 15 秒教学</title>
+  <link rel="stylesheet" href="tokens.css">
+  <script src="gsap.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+    body { font-family: var(--font); color: var(--ink); background: var(--desk); }
+    h1, h2, p { margin: 0; }
+    #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+    .scene { position: absolute; inset: 0; width: 1920px; height: 1080px; background: var(--desk); overflow: hidden; }
+    .scene:not(:first-child) { opacity: 0; }
+    .scene-content { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; padding: calc(var(--space-7) * 2); gap: var(--space-7); }
+    .masthead { display: flex; align-items: center; justify-content: space-between; font-size: calc(var(--text-md) * 1.75); color: var(--ink-secondary); letter-spacing: .09em; }
+    .masthead strong { font-weight: 700; color: var(--ink); letter-spacing: .02em; }
+    .rule { height: 2px; background: var(--rule-strong); transform-origin: left; }
+    .eyebrow { display: flex; align-items: center; gap: var(--space-5); font-size: calc(var(--text-md) * 2); color: var(--stamp-press); font-weight: 700; }
+    .step { font-variant-numeric: tabular-nums; border-bottom: 3px solid var(--stamp); padding-bottom: var(--space-2); }
+    .main { flex: 1; min-height: 0; }
+    .muted { color: var(--ink-secondary); }
+    .blue { color: var(--stamp-press); }
+    .foot { display: flex; align-items: center; justify-content: space-between; font-size: calc(var(--text-md) * 1.75); color: var(--ink-secondary); }
+    .foot b { color: var(--ink); font-weight: 400; }
+    .decor { position: absolute; right: 0; top: 0; width: 7%; height: 100%; background: var(--stamp-wash); pointer-events: none; }
+    .split { display: grid; grid-template-columns: .92fr 1.08fr; gap: calc(var(--space-7) * 1.5); align-items: center; }
+    .intro-copy { display: flex; flex-direction: column; gap: var(--space-6); }
+    h1 { font-size: calc(var(--text-md) * 8); font-weight: 900; line-height: 1.3; letter-spacing: -.04em; }
+    h1 span { display: block; }
+    .intro-note { font-size: calc(var(--text-md) * 2.5); line-height: 1.6; }
+    .tree { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-5); padding: var(--space-7); background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius-sheet); }
+    .tree-level { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: var(--space-5); }
+    .level-label { font-size: calc(var(--text-md) * 1.75); color: var(--ink-secondary); }
+    .node { padding: var(--space-5) var(--space-4); text-align: center; border: 2px solid var(--inset-border); font-size: calc(var(--text-md) * 2.25); background: var(--desk); border-radius: var(--radius-control); }
+    .node.goal { background: var(--stamp); color: var(--on-stamp); border-color: var(--stamp); }
+    .node-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); }
+    .node-row.two { grid-template-columns: repeat(2, 1fr); }
+    .tree-connector { margin-left: calc(var(--space-7) * 2.5); text-align: center; color: var(--stamp); font-size: calc(var(--text-md) * 2); line-height: 1.3; }
+    .tree-caption { margin-top: var(--space-4); text-align: right; font-size: calc(var(--text-md) * 1.75); color: var(--ink-secondary); }
+    h2 { font-size: calc(var(--text-md) * 5.5); font-weight: 900; letter-spacing: -.035em; line-height: 1.3; }
+    .scene-title { display: flex; justify-content: space-between; align-items: center; gap: var(--space-7); }
+    .matrix-layout { display: grid; grid-template-columns: 1.12fr .88fr; align-items: center; gap: calc(var(--space-7) * 2); }
+    .matrix-panel { background: var(--sheet); padding: var(--space-6) var(--space-7); border: 1px solid var(--rule); border-radius: var(--radius-sheet); }
+    .matrix { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; text-align: center; align-items: center; font-variant-numeric: tabular-nums; }
+    .matrix > span { padding: var(--space-4); font-size: calc(var(--text-md) * 2.6); }
+    .matrix .label { font-size: calc(var(--text-md) * 2); color: var(--ink-secondary); }
+    .matrix .cell { border-top: 1px solid var(--rule); }
+    .matrix .selected { background: var(--stamp-wash); color: var(--stamp-press); font-weight: 700; }
+    .matrix-note { display: flex; align-items: center; gap: var(--space-5); font-size: calc(var(--text-md) * 1.875); margin-top: var(--space-6); color: var(--ink-secondary); }
+    .matrix-note i { display: inline-block; width: 24px; height: 24px; background: var(--stamp-wash); border: 1px solid var(--stamp); }
+    .scale-copy { display: flex; flex-direction: column; gap: var(--space-5); }
+    .scale-number { font-size: calc(var(--text-md) * 9); font-weight: 900; color: var(--stamp-press); letter-spacing: -.065em; line-height: 1.3; }
+    .scale-label { font-size: calc(var(--text-md) * 2.7); font-weight: 700; }
+    .scale-note { font-size: calc(var(--text-md) * 1.875); line-height: 1.6; color: var(--ink-secondary); }
+    .weight-layout { display: grid; grid-template-columns: .7fr 1.3fr; align-items: center; gap: calc(var(--space-7) * 2); }
+    .weight-title { display: flex; flex-direction: column; gap: var(--space-6); }
+    .weight-title h2 span { display: block; }
+    .weight-title p { font-size: calc(var(--text-md) * 2); line-height: 1.6; color: var(--ink-secondary); }
+    .weights { display: flex; flex-direction: column; gap: var(--space-6); }
+    .weight-row { display: grid; grid-template-columns: 105px 1fr 165px; align-items: center; gap: var(--space-5); font-size: calc(var(--text-md) * 2.5); }
+    .weight-row strong { font-size: calc(var(--text-md) * 4); font-variant-numeric: tabular-nums; text-align: right; line-height: 1.3; }
+    .bar-track { height: 52px; background: var(--inset); overflow: hidden; border-radius: var(--radius-sheet); }
+    .bar { height: 100%; background: var(--stamp); transform-origin: left; }
+    .bar.secondary { background: var(--ink-secondary); }
+    .bar.tertiary { background: var(--ink-tertiary); }
+    .check-band { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); background: var(--sheet); padding: var(--space-6) var(--space-7); border-top: 3px solid var(--stamp); }
+    .check-copy { display: flex; flex-direction: column; gap: var(--space-2); }
+    .check-copy strong { font-size: calc(var(--text-md) * 2.25); }
+    .check-copy span { font-size: calc(var(--text-md) * 1.75); color: var(--ink-secondary); }
+    .cr { font-size: calc(var(--text-md) * 3.5); font-weight: 700; color: var(--stamp-press); }
+    .check-result { font-size: calc(var(--text-md) * 2); }
+    .result-layout { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--space-7) * 2); align-items: center; }
+    .result-copy { display: flex; flex-direction: column; gap: var(--space-6); }
+    .result-copy h2 { font-size: calc(var(--text-md) * 6.5); }
+    .result-copy h2 span { display: block; }
+    .result-copy p { font-size: calc(var(--text-md) * 2.125); color: var(--ink-secondary); }
+    .ranking { display: flex; flex-direction: column; gap: var(--space-6); }
+    .rank-row { display: flex; flex-direction: column; gap: var(--space-4); }
+    .rank-label { display: flex; justify-content: space-between; align-items: center; font-size: calc(var(--text-md) * 2.5); }
+    .rank-label strong { font-size: calc(var(--text-md) * 4.5); line-height: 1.3; font-variant-numeric: tabular-nums; }
+    .rank-bar { height: 70px; background: var(--inset); }
+    .formula { background: var(--sheet); padding: var(--space-6) var(--space-7); display: flex; flex-direction: column; gap: var(--space-4); border: 1px solid var(--rule); }
+    .formula-title { font-size: calc(var(--text-md) * 2.2); font-weight: 700; }
+    .formula-example { font-size: calc(var(--text-md) * 1.875); color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+    .timeline { position: absolute; bottom: 0; left: 0; width: 100%; height: 8px; background: var(--stamp); transform-origin: left; z-index: 20; }
+  </style>
+</head>
+<body>
+<div data-hf-id="hf-lqm8" id="root" data-composition-id="ahp" data-start="0" data-duration="15" data-width="1920" data-height="1080">
+  <section data-hf-id="hf-4u6f" class="scene" id="scene1">
+    <div data-hf-id="hf-2iau" class="decor" data-layout-ignore=""></div>
+    <div data-hf-id="hf-cn5c" class="scene-content">
+      <div data-hf-id="hf-ukjd" class="masthead"><strong data-hf-id="hf-xdqa">评估方法 · AHP</strong><span data-hf-id="hf-e6le">15 秒认识一种方法</span></div><div data-hf-id="hf-a46i" class="rule"></div>
+      <div data-hf-id="hf-woxz" class="main split">
+        <div data-hf-id="hf-3wp0" class="intro-copy"><div data-hf-id="hf-rk6h" class="eyebrow"><span data-hf-id="hf-kf04" class="step">01</span><span data-hf-id="hf-9mkv">建立层次</span></div><h1 data-hf-id="hf-m3fm"><span data-hf-id="hf-j0iw">层次</span><span data-hf-id="hf-6sme" class="blue">分析法</span></h1><p data-hf-id="hf-ja4r" class="intro-note">把复杂评估，<span data-hf-id="hf-gg7v">拆成清晰的层次。</span></p></div>
+        <div data-hf-id="hf-4g4g" class="tree">
+          <div data-hf-id="hf-2nbd" class="tree-level tree-goal"><span data-hf-id="hf-27ir" class="level-label">目标层</span><div data-hf-id="hf-eqsj" class="node goal">选出合适的供应商</div></div>
+          <div data-hf-id="hf-6w61" class="tree-connector connector1">↓</div>
+          <div data-hf-id="hf-u05j" class="tree-level tree-criteria"><span data-hf-id="hf-2bit" class="level-label">准则层</span><div data-hf-id="hf-fbsz" class="node-row"><div data-hf-id="hf-yf55" class="node">质量</div><div data-hf-id="hf-5evs" class="node">成本</div><div data-hf-id="hf-nukw" class="node">交付</div></div></div>
+          <div data-hf-id="hf-9fx4" class="tree-connector connector2">↓</div>
+          <div data-hf-id="hf-jemq" class="tree-level tree-options"><span data-hf-id="hf-zaz9" class="level-label">方案层</span><div data-hf-id="hf-f9mh" class="node-row two"><div data-hf-id="hf-g6lh" class="node">方案甲</div><div data-hf-id="hf-itgk" class="node">方案乙</div></div></div>
+          <p data-hf-id="hf-6gw8" class="tree-caption">一个目标 · 多项准则 · 多个方案</p>
+        </div>
+      </div>
+      <div data-hf-id="hf-mlgk" class="foot"><b data-hf-id="hf-mem5">先分层，再比较。</b><span data-hf-id="hf-g7tv">教学示例 / 供应商评估</span></div>
+    </div>
+  </section>
+  <section data-hf-id="hf-tyos" class="scene" id="scene2">
+    <div data-hf-id="hf-a3l6" class="decor" data-layout-ignore=""></div>
+    <div data-hf-id="hf-o0eg" class="scene-content">
+      <div data-hf-id="hf-4thp" class="masthead"><strong data-hf-id="hf-85ye">评估方法 · AHP</strong><span data-hf-id="hf-skxf">从判断到可计算的关系</span></div><div data-hf-id="hf-ya9a" class="rule"></div>
+      <div data-hf-id="hf-47ed" class="scene-title"><h2 data-hf-id="hf-kqi6">两两比较，<span data-hf-id="hf-n2t3" class="blue">重要多少？</span></h2><div data-hf-id="hf-xl25" class="eyebrow"><span data-hf-id="hf-j831" class="step">02</span><span data-hf-id="hf-5vng">构造判断矩阵</span></div></div>
+      <div data-hf-id="hf-yhjh" class="main matrix-layout">
+        <div data-hf-id="hf-2p8u" class="matrix-panel"><div data-hf-id="hf-mht7" class="matrix">
+          <span data-hf-id="hf-ew8r" class="label">行 ÷ 列</span><span data-hf-id="hf-kh9s" class="label">质量</span><span data-hf-id="hf-nur5" class="label">成本</span><span data-hf-id="hf-lwsp" class="label">交付</span>
+          <span data-hf-id="hf-59dy" class="label cell">质量</span><span data-hf-id="hf-ljtc" class="cell">1</span><span data-hf-id="hf-feou" class="cell selected">2</span><span data-hf-id="hf-iro5" class="cell">6</span>
+          <span data-hf-id="hf-8ayz" class="label cell">成本</span><span data-hf-id="hf-fy9m" class="cell selected">1/2</span><span data-hf-id="hf-ui5k" class="cell">1</span><span data-hf-id="hf-kr7a" class="cell">3</span>
+          <span data-hf-id="hf-2uv7" class="label cell">交付</span><span data-hf-id="hf-cuf5" class="cell">1/6</span><span data-hf-id="hf-bni2" class="cell">1/3</span><span data-hf-id="hf-tb8h" class="cell">1</span>
+        </div><div data-hf-id="hf-jx9k" class="matrix-note"><i data-hf-id="hf-wt6k"></i><span data-hf-id="hf-s2c8">反向比较，取倒数。</span></div></div>
+        <div data-hf-id="hf-fqb0" class="scale-copy"><div data-hf-id="hf-cx1g" class="scale-number">1—9</div><p data-hf-id="hf-3u6d" class="scale-label">标度表达相对重要性</p><div data-hf-id="hf-54o5" class="scale-note scale-definition"><p data-hf-id="hf-wzp9">1：同等重要</p><p data-hf-id="hf-cw5y">9：极端重要</p></div><div data-hf-id="hf-zg63" class="rule scale-rule"></div><p data-hf-id="hf-e7ml" class="scale-note scale-example">示例：质量相对成本 = 2</p></div>
+      </div>
+      <div data-hf-id="hf-3ly4" class="foot"><b data-hf-id="hf-vlhc">每次只比较两个因素。</b><span data-hf-id="hf-a7lw">示例数值 / 可按专家判断调整</span></div>
+    </div>
+  </section>
+  <section data-hf-id="hf-uqcl" class="scene" id="scene3">
+    <div data-hf-id="hf-ahw7" class="decor" data-layout-ignore=""></div>
+    <div data-hf-id="hf-mthd" class="scene-content">
+      <div data-hf-id="hf-60es" class="masthead"><strong data-hf-id="hf-8k9f">评估方法 · AHP</strong><span data-hf-id="hf-dwq3">权重，需要经得起检验</span></div><div data-hf-id="hf-yokb" class="rule"></div>
+      <div data-hf-id="hf-maa4" class="main weight-layout">
+        <div data-hf-id="hf-jmsd" class="weight-title"><div data-hf-id="hf-yrz8" class="eyebrow"><span data-hf-id="hf-jme2" class="step">03</span><span data-hf-id="hf-nl1a">求权重 · 做检验</span></div><h2 data-hf-id="hf-2l5r"><span data-hf-id="hf-h2yq">从判断</span><span data-hf-id="hf-oxun" class="blue">到权重</span></h2><p data-hf-id="hf-bgex">归一化后，权重之和为 1。</p></div>
+        <div data-hf-id="hf-95rn" class="weights">
+          <div data-hf-id="hf-iztb" class="weight-row"><span data-hf-id="hf-zobw">质量</span><div data-hf-id="hf-2kxp" class="bar-track"><div data-hf-id="hf-0ory" class="bar" style="width:60%"></div></div><strong data-hf-id="hf-0av3" class="blue">60%</strong></div>
+          <div data-hf-id="hf-h3an" class="weight-row"><span data-hf-id="hf-h9jx">成本</span><div data-hf-id="hf-dok1" class="bar-track"><div data-hf-id="hf-yy0t" class="bar secondary" style="width:30%"></div></div><strong data-hf-id="hf-wwm4">30%</strong></div>
+          <div data-hf-id="hf-gozm" class="weight-row"><span data-hf-id="hf-5wud">交付</span><div data-hf-id="hf-evh4" class="bar-track"><div data-hf-id="hf-5kcx" class="bar tertiary" style="width:10%"></div></div><strong data-hf-id="hf-c1qq">10%</strong></div>
+        </div>
+      </div>
+      <div data-hf-id="hf-l0ww" class="check-band"><div data-hf-id="hf-wtbe" class="check-copy"><strong data-hf-id="hf-f3uf">一致性检验</strong><span data-hf-id="hf-ds2k">检查比较判断是否自洽</span></div><div data-hf-id="hf-19sl" class="cr">CR &lt; 0.10</div><div data-hf-id="hf-wffz" class="check-result">常用可接受阈值<span data-hf-id="hf-yj9b" class="blue"> · 本例 CR = 0</span></div></div>
+      <div data-hf-id="hf-2f11" class="foot"><b data-hf-id="hf-wpk9">不通过，就回看比较判断。</b><span data-hf-id="hf-r1kv">数值均来自上一幕的示例矩阵</span></div>
+    </div>
+  </section>
+  <section data-hf-id="hf-di2a" class="scene" id="scene4">
+    <div data-hf-id="hf-aw78" class="decor" data-layout-ignore=""></div>
+    <div data-hf-id="hf-n7se" class="scene-content">
+      <div data-hf-id="hf-5m3r" class="masthead"><strong data-hf-id="hf-8ykg">评估方法 · AHP</strong><span data-hf-id="hf-1h0b">让评估过程可以解释</span></div><div data-hf-id="hf-z2vc" class="rule"></div>
+      <div data-hf-id="hf-f1v5" class="main result-layout">
+        <div data-hf-id="hf-g3jv" class="result-copy"><div data-hf-id="hf-ydo7" class="eyebrow"><span data-hf-id="hf-llx7" class="step">04</span><span data-hf-id="hf-i0bq">加权汇总 · 综合排序</span></div><h2 data-hf-id="hf-gavz"><span data-hf-id="hf-o7cs">综合比较，</span><span data-hf-id="hf-5w6s" class="blue">方案甲优先。</span></h2><p data-hf-id="hf-tt7d">各准则下的方案优先度，按权重汇总。</p></div>
+        <div data-hf-id="hf-99om" class="ranking">
+          <div data-hf-id="hf-tiv1" class="rank-row"><div data-hf-id="hf-kvuj" class="rank-label"><span data-hf-id="hf-mh86">方案甲</span><strong data-hf-id="hf-jclr" class="blue">59%</strong></div><div data-hf-id="hf-t7fe" class="rank-bar"><div data-hf-id="hf-i4wu" class="bar" style="width:59%"></div></div></div>
+          <div data-hf-id="hf-23td" class="rank-row"><div data-hf-id="hf-8jqz" class="rank-label"><span data-hf-id="hf-kil7">方案乙</span><strong data-hf-id="hf-bi4c">41%</strong></div><div data-hf-id="hf-mhha" class="rank-bar"><div data-hf-id="hf-3ei9" class="bar secondary" style="width:41%"></div></div></div>
+        </div>
+      </div>
+      <div data-hf-id="hf-oty6" class="formula"><div data-hf-id="hf-6eph" class="formula-title">综合优先度 = Σ（准则权重 × 方案局部优先度）</div><div data-hf-id="hf-lmze" class="formula-example">方案甲：0.6 × 0.7 + 0.3 × 0.4 + 0.1 × 0.5 = 0.59</div></div>
+      <div data-hf-id="hf-2tc2" class="foot"><b data-hf-id="hf-8bpb">分层 → 比较 → 检验 → 排序</b><span data-hf-id="hf-4507">教学示例 / 排序取决于具体判断</span></div>
+    </div>
+  </section>
+  <div data-hf-id="hf-2apo" class="timeline" data-layout-ignore=""></div>
+<audio data-hf-id="hf-yf5f" id="narration1" src="voice1.wav" data-start="0.25" data-duration="3.1" data-track-index="2" data-volume="1"></audio>
+<audio data-hf-id="hf-slut" id="narration2" src="voice2.wav" data-start="3.95" data-duration="2.8" data-track-index="2" data-volume="1"></audio>
+<audio data-hf-id="hf-pue8" id="narration3" src="voice3.wav" data-start="7.5" data-duration="3.3" data-track-index="2" data-volume="1"></audio>
+<audio data-hf-id="hf-c4y5" id="narration4" src="voice4.wav" data-start="11.65" data-duration="2.95" data-track-index="2" data-volume="1"></audio>
+</div>
+<script>
+  const tl = gsap.timeline({ paused: true });
+  window.__timelines = window.__timelines || {};
+  window.__timelines['ahp'] = tl;
+  const starts = [0, 3.6, 7.1, 11.2];
+  starts.forEach((start, i) => {
+    const scene = '#scene' + (i + 1);
+    tl.from(scene + ' .masthead', { y: -16, opacity: 0, duration: .45, ease: 'sine.out' }, start + .15);
+    tl.from(scene + ' .scene-content > .rule', { scaleX: 0, duration: .7, ease: 'power2.out' }, start + .25);
+    tl.fromTo(scene + ' .decor', { scaleX: .7 }, { scaleX: 1.15, duration: 3.5, ease: 'sine.inOut', transformOrigin: 'right center' }, start + .1);
+  });
+  // All content remains visible until its scene is carried away by the transition.
+  [[1,2,3.6,'x',1920],[2,3,7.1,'y',1080],[3,4,11.2,'x',1920]].forEach(([a,b,start,axis,distance]) => {
+    tl.to('#scene' + a, { [axis]: -distance, duration: .5, ease: 'power3.inOut' }, start);
+    tl.fromTo('#scene' + b, { [axis]: distance, opacity: 1 }, { [axis]: 0, opacity: 1, duration: .5, ease: 'power3.inOut', immediateRender: false }, start);
+    tl.set('#scene' + a, { opacity: 0 }, start + .5);
+  });
+  tl.from('#scene1 .eyebrow', { x: -28, opacity: 0, duration: .5, ease: 'power2.out' }, .18);
+  tl.from('#scene1 h1 span', { y: 70, rotation: 2, opacity: 0, duration: .65, stagger: .14, ease: 'expo.out' }, .3);
+  tl.from('#scene1 .intro-note', { y: 25, opacity: 0, duration: .5, ease: 'sine.out' }, .8);
+  tl.from('#scene1 .tree', { scale: .97, opacity: 0, duration: .55, ease: 'power3.out' }, .4);
+  tl.from('#scene1 .tree-goal', { y: -25, opacity: 0, duration: .45, ease: 'power2.out' }, .6);
+  tl.from('#scene1 .connector1', { scaleY: 0, opacity: 0, duration: .35, ease: 'sine.out' }, .8);
+  tl.from('#scene1 .tree-criteria', { x: 30, opacity: 0, duration: .5, ease: 'power3.out' }, .92);
+  tl.from('#scene1 .connector2', { scaleY: 0, opacity: 0, duration: .35, ease: 'sine.out' }, 1.08);
+  tl.from('#scene1 .tree-options', { y: 22, opacity: 0, duration: .45, ease: 'power2.out' }, 1.24);
+  tl.from('#scene1 .tree-caption', { opacity: 0, duration: .4, ease: 'sine.out' }, 1.6);
+  tl.from('#scene1 .foot', { y: 18, opacity: 0, duration: .45, ease: 'power2.out' }, 1.85);
+
+  tl.from('#scene2 h2', { x: -55, opacity: 0, duration: .6, ease: 'expo.out' }, 3.88);
+  tl.from('#scene2 .eyebrow', { y: 20, opacity: 0, duration: .45, ease: 'sine.out' }, 4.02);
+  tl.from('#scene2 .matrix-panel', { y: 32, opacity: 0, duration: .5, ease: 'power3.out' }, 4.1);
+  tl.from('#scene2 .matrix > span', { y: 15, opacity: 0, duration: .4, stagger: .035, ease: 'power2.out' }, 4.25);
+  tl.from('#scene2 .scale-number', { scale: .82, opacity: 0, duration: .65, ease: 'back.out(1.15)' }, 4.18);
+  tl.from('#scene2 .scale-label', { x: 30, opacity: 0, duration: .5, ease: 'expo.out' }, 4.57);
+  tl.from('#scene2 .scale-definition p', { y: 18, opacity: 0, duration: .45, stagger: .16, ease: 'sine.out' }, 4.88);
+  tl.from('#scene2 .scale-rule', { scaleX: 0, duration: .5, ease: 'power2.out' }, 5.15);
+  tl.from('#scene2 .matrix-note', { x: 25, opacity: 0, duration: .45, ease: 'power3.out' }, 5.1);
+  tl.from('#scene2 .scale-example', { y: 20, opacity: 0, duration: .45, ease: 'sine.out' }, 5.35);
+  tl.from('#scene2 .foot', { opacity: 0, duration: .45, ease: 'power2.out' }, 5.65);
+
+  tl.from('#scene3 .eyebrow', { y: 25, opacity: 0, duration: .4, ease: 'power2.out' }, 7.4);
+  tl.from('#scene3 h2 span', { x: -45, opacity: 0, duration: .6, stagger: .14, ease: 'expo.out' }, 7.52);
+  tl.from('#scene3 .weight-title p', { y: 20, opacity: 0, duration: .5, ease: 'sine.out' }, 8.05);
+  tl.from('#scene3 .weight-row', { x: 32, opacity: 0, duration: .45, stagger: .15, ease: 'power3.out' }, 7.65);
+  tl.from('#scene3 .bar', { scaleX: 0, duration: .95, stagger: .15, ease: 'power2.out' }, 7.85);
+  tl.from('#scene3 .weight-row strong', { scale: .8, opacity: 0, duration: .45, stagger: .15, ease: 'back.out(1.1)' }, 8.25);
+  tl.from('#scene3 .check-band', { y: 45, opacity: 0, duration: .55, ease: 'power3.out' }, 9.0);
+  tl.from('#scene3 .check-copy', { x: -25, opacity: 0, duration: .45, ease: 'sine.out' }, 9.12);
+  tl.from('#scene3 .cr', { scale: .9, opacity: 0, duration: .55, ease: 'expo.out' }, 9.32);
+  tl.from('#scene3 .check-result', { y: 20, opacity: 0, duration: .45, ease: 'power2.out' }, 9.63);
+  tl.from('#scene3 .foot', { opacity: 0, duration: .4, ease: 'sine.out' }, 9.9);
+
+  tl.from('#scene4 .eyebrow', { x: -25, opacity: 0, duration: .45, ease: 'power2.out' }, 11.5);
+  tl.from('#scene4 h2 span', { y: 40, opacity: 0, duration: .55, stagger: .13, ease: 'expo.out' }, 11.62);
+  tl.from('#scene4 .result-copy p', { y: 20, opacity: 0, duration: .45, ease: 'sine.out' }, 12.2);
+  tl.from('#scene4 .rank-row', { x: 35, opacity: 0, duration: .5, stagger: .17, ease: 'power3.out' }, 11.85);
+  tl.from('#scene4 .bar', { scaleX: 0, duration: .85, stagger: .17, ease: 'power2.out' }, 12.1);
+  tl.from('#scene4 .rank-label strong', { y: 15, opacity: 0, duration: .5, stagger: .17, ease: 'expo.out' }, 12.22);
+  tl.from('#scene4 .formula', { y: 30, opacity: 0, duration: .5, ease: 'power3.out' }, 12.65);
+  tl.from('#scene4 .formula-title', { x: -25, opacity: 0, duration: .45, ease: 'sine.out' }, 12.85);
+  tl.from('#scene4 .formula-example', { y: 15, opacity: 0, duration: .5, ease: 'power2.out' }, 13.05);
+  tl.from('#scene4 .foot', { opacity: 0, duration: .45, ease: 'sine.out' }, 13.42);
+  tl.from('.timeline', { scaleX: 0, duration: 15, ease: 'none' }, 0);
+  tl.seek(0);
+</script>
+</body>
+</html>

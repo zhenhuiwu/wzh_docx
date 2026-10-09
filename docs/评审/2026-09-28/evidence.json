@@ -1,0 +1,43 @@
+{
+  "date": "2026-09-28",
+  "scope": "实际登录页+当前源码+实现方留存内页截图",
+  "freshInternalUiTested": false,
+  "businessWritesPerformed": false,
+  "backendTestsRun": false,
+  "frontendBuild": "npm --prefix D:/项目/智能化/web run build，exit 0",
+  "evidence": [
+    {
+      "source": "C:/Users/15827/AppData/Local/Temp/doc-workbench-login/dev17-home-1440.png",
+      "copy": "D:/项目/智能化/docs/评审/2026-09-28/screenshots/existing-dev17-home-1440.png",
+      "origin": "实现方已留存截图；本轮读取图片并核对代码，不是本轮登录后重测",
+      "sourceModifiedAt": "2026-09-28T01:32:31.544Z",
+      "sha256": "366b1a98a5475e1ed780b9f8306f3a8cb57faf4505ad8a4790772599c0c44c48"
+    },
+    {
+      "source": "C:/Users/15827/AppData/Local/Temp/doc-workbench-login/dev17-home-768.png",
+      "copy": "D:/项目/智能化/docs/评审/2026-09-28/screenshots/existing-dev17-home-768.png",
+      "origin": "实现方已留存截图；本轮读取图片并核对代码，不是本轮登录后重测",
+      "sourceModifiedAt": "2026-09-28T01:32:32.027Z",
+      "sha256": "483290d42388d17026ac8ebe46cb9e42287b78a1850522f4b193b5b7cf56d600"
+    },
+    {
+      "source": "C:/Users/15827/AppData/Local/Temp/doc-workbench-login/dev17-home-375.png",
+      "copy": "D:/项目/智能化/docs/评审/2026-09-28/screenshots/existing-dev17-home-375.png",
+      "origin": "实现方已留存截图；本轮读取图片并核对代码，不是本轮登录后重测",
+      "sourceModifiedAt": "2026-09-28T01:32:32.263Z",
+      "sha256": "9cc5b3aa3c68348bc7f4d5f7b86d09f92a8bbca767d717054ac258d757540d94"
+    },
+    {
+      "source": "C:/Users/15827/AppData/Local/Temp/doc-workbench-login/dev06-preview-375.png",
+      "copy": "D:/项目/智能化/docs/评审/2026-09-28/screenshots/existing-dev06-preview-375.png",
+      "origin": "实现方已留存截图；本轮读取图片并核对代码，不是本轮登录后重测",
+      "sourceModifiedAt": "2026-09-27T16:52:15.384Z",
+      "sha256": "4f044ada2e755856b0fa37fd2ead75e052b640b22dd5cedcdc5e8451a10eea30"
+    }
+  ],
+  "frontendLogicReproduction": "4个场景通过原组件逻辑、Vue响应式与内存API替身验证；未操作真实业务",
+  "findings": {
+    "P1": 8,
+    "P2": 5
+  }
+}

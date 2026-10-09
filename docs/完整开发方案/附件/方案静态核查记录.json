@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-27",
+  "scope": "设计文档静态核查，不是业务功能或截图验收",
+  "issues": [],
+  "markdown_documents": 7,
+  "total_document_characters": 53254,
+  "acceptance_scenarios": 48,
+  "work_packages": 12,
+  "pending_decisions": 14,
+  "verified_official_sources": 12,
+  "protected_source_files": 48,
+  "unchanged_source_files": 48,
+  "templates_matching_original_inventory": 20,
+  "ui_tokens_checked": 27,
+  "frontend_modified": false,
+  "business_runtime_tested": false,
+  "screenshot_acceptance_performed": false,
+  "static_contrast_sample": {
+    "foreground_token": "--on-stamp",
+    "background_token": "--stamp",
+    "ratio": 4.504,
+    "note": "只测此对纯色变量，不等同于实际按钮或全页视觉验收；未修改CSS"
+  }
+}

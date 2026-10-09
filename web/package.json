@@ -1,0 +1,29 @@
+{
+  "name": "doc-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.16",
+    "pdfjs-dist": "^6.3.289",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "vue": "^3.5.22",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.6",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "~5.9.2",
+    "vite": "^7.1.7",
+    "vue-tsc": "^3.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

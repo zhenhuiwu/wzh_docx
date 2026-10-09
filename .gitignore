@@ -1,0 +1,45 @@
+# Local configuration and business data
+.env
+.env.*
+!.env.example
+!.env.sample
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+/data/
+/server/data/
+/logs/
+logs/
+/release/
+
+# Dependencies and generated artifacts
+node_modules/
+.venv/
+.uv-cache/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.tsbuildinfo
+*.log
+*.exe
+*.dll
+*.zip
+/deploy/.build/
+
+# Local verification output and editor state
+**/.qa*/
+**/.qa/
+.qa*
+/qa/
+.idea/
+.vscode/
+.claude/
+Thumbs.db
+Desktop.ini
