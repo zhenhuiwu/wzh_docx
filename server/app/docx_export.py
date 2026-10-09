@@ -480,7 +480,8 @@ def diagram_images(images: list[dict]) -> dict[str, bytes | dict]:
 
 
 def _insert_block(doc, target, anchor, style_override: str | None = None, image_sources: dict[str, bytes | dict] | None = None,
-                  *, list_depth: int | None = None, list_kind: str | None = None, list_number_id: int | None = None) -> None:
+                  *, list_depth: int | None = None, list_kind: str | None = None, list_number_id: int | None = None,
+                  outline_headings: bool = False) -> None:
     tag = target.tag
     if target.xpath(".//img"):
         images = target.xpath(".//img")
@@ -511,11 +512,33 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
         columns = len(rows[0].xpath("./th|./td")) if rows else 0
         if not rows or not columns:
             return
+        if any(len(row.xpath("./th|./td")) != columns for row in rows):
+            raise ValueError("表格列数不一致，无法安全写入 Word。")
         table = doc.add_table(rows=len(rows), cols=columns)
-        nearby = [element for element in [*anchor.itersiblings(preceding=True), *anchor.itersiblings()] if isinstance(element, CT_Tbl)]
-        table.style = Table(nearby[0], doc).style if nearby else "Table Grid"
-        for word_row, row in zip(table.rows, rows):
-            for cell, html_cell in zip(word_row.cells, row.xpath("./th|./td")):
+        nearby = [element for element in [*anchor.itersiblings(preceding=True), *anchor.itersiblings()]
+                  if isinstance(element, CT_Tbl) and element is not table._tbl]
+        prototype = next((Table(element, doc) for element in nearby
+                          if len(Table(element, doc).columns) == columns), None)
+        table.style = prototype.style if prototype else "Table Grid"
+        if prototype is not None:
+            table._tbl.replace(table._tbl.tblPr, deepcopy(prototype._tbl.tblPr))
+            table._tbl.replace(table._tbl.tblGrid, deepcopy(prototype._tbl.tblGrid))
+        for row_index, (word_row, row) in enumerate(zip(table.rows, rows)):
+            for column_index, (cell, html_cell) in enumerate(zip(word_row.cells, row.xpath("./th|./td"))):
+                if prototype is not None:
+                    original = prototype.cell(0 if row_index == 0 else min(1, len(prototype.rows) - 1), column_index)
+                    if original._tc.tcPr is not None:
+                        cell._tc.replace(cell._tc.tcPr, deepcopy(original._tc.tcPr))
+                        for merge in cell._tc.tcPr.xpath("./w:gridSpan|./w:vMerge"):
+                            cell._tc.tcPr.remove(merge)
+                    cell.width = prototype.columns[column_index].width
+                    paragraph = cell.paragraphs[0]
+                    sample = original.paragraphs[0]
+                    if sample._p.pPr is not None:
+                        paragraph._p.insert(0, deepcopy(sample._p.pPr))
+                    run = paragraph.add_run()
+                    if sample.runs and sample.runs[0]._r.rPr is not None:
+                        run._r.insert(0, deepcopy(sample.runs[0]._r.rPr))
                 _edit_paragraph(cell.paragraphs[0], html_cell)
                 if html_cell.tag == "th":
                     for run in cell.paragraphs[0].runs:
@@ -533,17 +556,21 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
                     paragraph_html.append(deepcopy(child))
                 _insert_block(doc, paragraph_html, anchor,
                               "List Number" if kind == "ol" else "List Bullet", image_sources,
-                              list_depth=depth, list_kind=kind, list_number_id=number_ids[container])
+                              list_depth=depth, list_kind=kind, list_number_id=number_ids[container],
+                              outline_headings=outline_headings)
             return
         style = style_override or (f"Heading {tag[1:]}" if tag.startswith("h") else "Normal")
         # Inherit from this part of the document, rather than its cover's first Normal paragraph.
         nearby = list(anchor.itersiblings(preceding=True)) + list(anchor.itersiblings())
         paragraphs = [Paragraph(element, doc) for element in nearby if isinstance(element, CT_P)]
         sample = next((p for p in paragraphs if (p.text or p.runs) and
-                       (p.style.name == style if style_override or tag.startswith("h")
-                        else heading_level(p) is None and not p.style.name.startswith(("List", "toc", "TOC"))
+                       (p.style.name == style if style_override else
+                        heading_level(p, outline_headings=outline_headings) == int(tag[1:]) if tag.startswith("h")
+                        else heading_level(p, outline_headings=outline_headings) is None and not p.style.name.startswith(("List", "toc", "TOC", "Caption", "Title", "Subtitle"))
+                        and p.alignment != WD_ALIGN_PARAGRAPH.CENTER
+                        and not re.match(r"^[图表]\s*\d+(?:[.－—-]\d+)*\s*", p.text.strip())
                         and not p._p.xpath(_PROTECTED_INLINE))), None)
-        if sample is not None and not style_override and not tag.startswith("h"):
+        if sample is not None and not style_override:
             style = sample.style.name
         paragraph = doc.add_paragraph(style=style)
         if sample is not None and sample._p.pPr is not None:
@@ -566,8 +593,9 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
             run = paragraph.add_run(text)
             if sample_run is not None and sample_run._r.rPr is not None:
                 properties = deepcopy(sample_run._r.rPr)
-                for emphasis in properties.xpath("./w:b|./w:bCs|./w:i|./w:iCs"):
-                    properties.remove(emphasis)
+                if not tag.startswith("h"):
+                    for emphasis in properties.xpath("./w:b|./w:bCs|./w:i|./w:iCs"):
+                        properties.remove(emphasis)
                 run._r.insert(0, properties)
             if bold:
                 run.bold = True
@@ -646,7 +674,7 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
                 if element.getparent() is not None:
                     _remove_element(element)
         for element in new_blocks:
-            _insert_block(doc, element, anchor, image_sources=image_sources)
+            _insert_block(doc, element, anchor, image_sources=image_sources, outline_headings=outline_headings)
             if element.tag == "p" and element.xpath('./img[starts-with(@src,"docx-image:test-")]'):
                 test_pictures.append(anchor.getprevious())
     # Apply after insertion so later body paragraphs do not inherit this binding.
@@ -656,4 +684,17 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
             actual, caption = (Paragraph(element, doc) for element in preceding)
             if re.match(r"^步骤 \d+：", caption.text):
                 caption.paragraph_format.keep_with_next = actual.paragraph_format.keep_with_next = True
+    for table in doc.tables:
+        if len(table.rows) < 2 or len(table.columns) < 2 or table._tbl.xpath(".//w:gridSpan|.//w:vMerge"):
+            continue
+        header = table.rows[0]
+        runs = [run for cell in header.cells for paragraph in cell.paragraphs for run in paragraph.runs if run.text.strip()]
+        if not runs or not all(run.bold is True for run in runs):
+            continue
+        properties = header._tr.get_or_add_trPr()
+        if not properties.xpath("./w:tblHeader"):
+            properties.append(OxmlElement("w:tblHeader"))
+        for cell in header.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.keep_with_next = True
     doc.save(output_path)

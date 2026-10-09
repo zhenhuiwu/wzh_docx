@@ -4,10 +4,160 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
+from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import pytest
 
 from app.docx_export import edit_original_docx
 from app.docx_parser import parse_docx, _list_info
+
+
+def test_new_heading_uses_native_custom_heading_format(tmp_path):
+    source, output = tmp_path / 'custom.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    custom = doc.styles.add_style('自定义章节标题', WD_STYLE_TYPE.PARAGRAPH)
+    custom.base_style = doc.styles['Heading 2']
+    heading = doc.add_paragraph('现有章节', style=custom)
+    heading.paragraph_format.line_spacing = 1.5
+    heading.paragraph_format.space_before = Pt(8)
+    heading.runs[0].font.name = '宋体'
+    heading.runs[0].font.size = Pt(12)
+    heading.runs[0].bold = True
+    doc.add_paragraph('原有正文')
+    doc.save(source)
+    target = parse_docx(str(source), outline_headings=True).markdown + '\n\n## 新增章节'
+    edit_original_docx(target, source, output, outline_headings=True)
+    added = Document(output).paragraphs[-1]
+    assert added.style.name == custom.name
+    assert added.paragraph_format.line_spacing == 1.5
+    assert added.paragraph_format.space_before == Pt(8)
+    assert added.runs[0].font.name == '宋体' and added.runs[0].font.size == Pt(12)
+    assert added.runs[0].bold is True
+
+
+def test_new_body_does_not_borrow_caption_format(tmp_path):
+    source, output = tmp_path / 'caption.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    doc.add_heading('章节', 1)
+    body = doc.add_paragraph('原有正文')
+    body.paragraph_format.first_line_indent = Pt(24)
+    body.paragraph_format.line_spacing = 1.5
+    body.runs[0].font.size = Pt(12)
+    caption = doc.add_paragraph('表1 验收表')
+    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    caption.runs[0].font.size = Pt(14)
+    doc.add_heading('下一章节', 1)
+    doc.save(source)
+    target = parse_docx(str(source)).markdown.replace('# 下一章节', '新增正文\n\n# 下一章节')
+    edit_original_docx(target, source, output)
+    added = next(p for p in Document(output).paragraphs if p.text == '新增正文')
+    assert added.paragraph_format.first_line_indent == Pt(24)
+    assert added.paragraph_format.line_spacing == 1.5
+    assert added.runs[0].font.size == Pt(12)
+    assert added.alignment != WD_ALIGN_PARAGRAPH.CENTER
+
+
+def test_new_body_does_not_borrow_custom_outline_heading_format(tmp_path):
+    source, output = tmp_path / 'outline.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    body = doc.add_paragraph('原有正文')
+    body.runs[0].font.size = Pt(12)
+    body.paragraph_format.first_line_indent = Pt(24)
+    custom = doc.styles.add_style('模板自定义标题', WD_STYLE_TYPE.PARAGRAPH)
+    custom.base_style = doc.styles['Normal']
+    level = OxmlElement('w:outlineLvl')
+    level.set(qn('w:val'), '1')
+    custom.element.get_or_add_pPr().append(level)
+    heading = doc.add_paragraph('空白章节', style=custom)
+    heading.runs[0].font.size = Pt(16)
+    doc.save(source)
+    target = parse_docx(str(source), outline_headings=True).markdown + '\n\n新增正文'
+    edit_original_docx(target, source, output, outline_headings=True)
+    added = Document(output).paragraphs[-1]
+    assert added.style.name == 'Normal'
+    assert added.runs[0].font.size == Pt(12)
+    assert added.paragraph_format.first_line_indent == Pt(24)
+
+
+def test_new_table_inherits_matching_table_cell_format(tmp_path):
+    source, output = tmp_path / 'table.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    doc.add_heading('章节', 1)
+    doc.add_paragraph('正文')
+    table = doc.add_table(rows=2, cols=2, style='Table Grid')
+    table.columns[0].width, table.columns[1].width = Pt(90), Pt(210)
+    for row in table.rows:
+        for cell in row.cells:
+            cell.text = '原有单元格'
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cell.paragraphs[0].paragraph_format.line_spacing = 1.5
+            cell.paragraphs[0].runs[0].font.name = '宋体'
+            cell.paragraphs[0].runs[0].font.size = Pt(9)
+    doc.save(source)
+    target = parse_docx(str(source)).markdown + '\n\n| 新项目 | 新内容 |\n| --- | --- |\n| 甲 | 乙 |'
+    edit_original_docx(target, source, output)
+    added = Document(output).tables[-1]
+    assert [column.width for column in added.columns] == [Pt(90), Pt(210)]
+    for row in added.rows:
+        for cell in row.cells:
+            paragraph = cell.paragraphs[0]
+            assert paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+            assert paragraph.paragraph_format.line_spacing == 1.5
+            assert paragraph.runs[0].font.name == '宋体' and paragraph.runs[0].font.size == Pt(9)
+
+
+def test_new_table_borrows_merged_table_format_without_copying_merges_or_text(tmp_path):
+    source, output = tmp_path / 'merged.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    table = doc.add_table(rows=2, cols=2, style='Table Grid')
+    table.columns[0].width, table.columns[1].width = Pt(90), Pt(210)
+    table.cell(0, 0).merge(table.cell(0, 1)).text = '保留合并表头'
+    original = table._tbl.xml
+    doc.save(source)
+    target = parse_docx(str(source)).markdown + '\n\n| 新项目 | 新内容 |\n| --- | --- |\n| 甲 | 乙 |'
+    edit_original_docx(target, source, output)
+    result = Document(output)
+    assert result.tables[0]._tbl.xml == original
+    added = result.tables[-1]
+    assert added.style.name == 'Table Grid'
+    assert [column.width for column in added.columns] == [Pt(90), Pt(210)]
+    assert not added._tbl.xpath('.//w:gridSpan|.//w:vMerge')
+    assert [[cell.text for cell in row.cells] for row in added.rows] == [['新项目','新内容'],['甲','乙']]
+
+
+def test_contents_refresh_updates_indexes_and_pagination_without_other_fields(tmp_path):
+    from types import SimpleNamespace
+    from app.documents import _refresh_word_contents, _has_word_contents
+    calls = []
+    index = SimpleNamespace(Update=lambda: calls.append('entries'), UpdatePageNumbers=lambda: calls.append('pages'))
+    opened = SimpleNamespace(TablesOfContents=[index], TablesOfFigures=[index], Repaginate=lambda: calls.append('paginate'))
+    _refresh_word_contents(opened)
+    assert calls == ['entries','entries','paginate','pages','pages']
+    doc = Document()
+    doc.add_paragraph('普通正文')
+    source = tmp_path / 'contents.docx'
+    doc.save(source)
+    assert not _has_word_contents(source)
+    field = OxmlElement('w:fldSimple')
+    field.set(qn('w:instr'), ' TOC \\o "1-3" ')
+    doc.paragraphs[0]._p.append(field)
+    doc.save(source)
+    assert _has_word_contents(source)
+
+
+def test_edited_export_keeps_bold_table_header_with_data_and_repeats_on_new_pages(tmp_path):
+    source, output = tmp_path / 'headers.docx', tmp_path / 'edited.docx'
+    doc = Document()
+    doc.add_paragraph('原有正文')
+    table = doc.add_table(rows=2, cols=2)
+    for cell in table.rows[0].cells:
+        cell.text = '表头'
+        cell.paragraphs[0].runs[0].bold = True
+    doc.save(source)
+    edit_original_docx(parse_docx(str(source)).markdown.replace('原有正文','修改正文'), source, output)
+    header = Document(output).tables[0].rows[0]
+    assert header._tr.xpath('./w:trPr/w:tblHeader')
+    assert all(cell.paragraphs[0].paragraph_format.keep_with_next is True for cell in header.cells)
 
 
 def test_added_emphasis_preserves_unmodified_run_properties_and_plain_body(tmp_path):

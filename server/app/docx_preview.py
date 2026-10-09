@@ -118,7 +118,14 @@ def _properties(paragraph: Paragraph, kind: str, run: Run | None = None, table: 
             tag = etree.QName(child).localname
             attrs = {etree.QName(key).localname: value for key, value in child.attrib.items()}
             if tag in {"rFonts", "ind", "spacing"}:
-                result.setdefault(tag, {}).update(attrs)
+                resolved = result.setdefault(tag, {})
+                if tag == "rFonts":
+                    for category in ("ascii", "hAnsi", "eastAsia", "cs"):
+                        if category in attrs and category + "Theme" not in attrs:
+                            resolved.pop(category + "Theme", None)
+                        elif category + "Theme" in attrs and category not in attrs:
+                            resolved.pop(category, None)
+                resolved.update(attrs)
             else:
                 result[tag] = attrs
     return result
@@ -126,6 +133,9 @@ def _properties(paragraph: Paragraph, kind: str, run: Run | None = None, table: 
 
 def _theme(doc) -> tuple[dict[str, str], dict[str, str]]:
     colors, fonts = {}, {}
+    language = doc.settings.element.xpath("./w:themeFontLang")
+    east_asia = language[0].get(qn("w:eastAsia"), "zh-CN").lower() if language else "zh-cn"
+    script = "Jpan" if east_asia.startswith("ja") else "Hang" if east_asia.startswith("ko") else "Hant" if east_asia in {"zh-tw", "zh-hk", "zh-mo"} else "Hans"
     for relation in doc.part.rels.values():
         if not relation.reltype.endswith("/theme") or relation.is_external:
             continue
@@ -143,7 +153,7 @@ def _theme(doc) -> tuple[dict[str, str], dict[str, str]]:
                     if element is not None and element.get("typeface"):
                         fonts[category + name] = element.get("typeface")
                 for element in font.findall(_A + "font"):
-                    if element.get("script") == "Hans":
+                    if element.get("script") == script:
                         fonts.setdefault(category + "ea", element.get("typeface", ""))
     for name, alias in (("text1", "dk1"), ("text2", "dk2"), ("background1", "lt1"), ("background2", "lt2")):
         if alias in colors:
@@ -183,17 +193,18 @@ def _on(attrs: dict) -> bool:
     return attrs.get("val", "1").lower() not in {"0", "false", "off", "none"}
 
 
-def _run_css(paragraph: Paragraph, run: Run | None, theme, table=None) -> dict[str, str]:
+def _run_css(paragraph: Paragraph, run: Run | None, theme, table=None, *, east_asian: bool | None = None) -> dict[str, str]:
     properties = _properties(paragraph, "rPr", run, table)
     colors, fonts = theme
     css = {"white-space": "pre-wrap"}
     names = properties.get("rFonts", {})
-    cjk = run is not None and bool(re.search(r"[\u2e80-\uffff]", run.text))
+    cjk = east_asian if east_asian is not None else run is not None and bool(re.search(r"[\u2e80-\uffff]", run.text))
     category = "eastAsia" if cjk else "ascii"
-    font = names.get(category) or names.get("ascii")
-    if not font:
-        themed = names.get(category + "Theme") or names.get("asciiTheme", "")
-        font = fonts.get(("major" if themed.startswith("major") else "minor") + ("ea" if cjk else "latin")) if themed else None
+    themed = names.get(category + "Theme")
+    if not themed and not names.get(category):
+        themed = names.get("asciiTheme", "")
+    font = fonts.get(("major" if themed.startswith("major") else "minor") + ("ea" if cjk else "latin")) if themed else None
+    font = font or names.get(category) or names.get("ascii")
     if font and re.fullmatch(r"[\w\s\-]+", font, re.UNICODE):
         css["font-family"] = json.dumps(font, ensure_ascii=False)
     size = _measure(properties.get("sz", {}).get("val"), 2)
@@ -230,14 +241,25 @@ def _paragraph_css(paragraph: Paragraph, table=None) -> dict[str, str]:
     for name, target in (("left", "margin-left"), ("right", "margin-right"), ("firstLine", "text-indent")):
         if (value := _measure(indent.get(name))) is not None:
             css[target] = value
+        if (value := _number(indent.get(name + "Chars"), 100)) is not None:
+            css[target] = f"{value:g}em"
     if "hanging" in indent and (value := _number(indent["hanging"], 20)) is not None:
         css["text-indent"] = f"{-value:g}pt"
+    if (value := _number(indent.get("hangingChars"), 100)) is not None:
+        css["text-indent"] = f"{-value:g}em"
     spacing = properties.get("spacing", {})
-    css["margin-top"] = _measure(spacing.get("before", "0")) or "0pt"
-    css["margin-bottom"] = _measure(spacing.get("after", "0")) or "0pt"
     if "line" in spacing:
         css["line-height"] = (_measure(spacing["line"]) if spacing.get("lineRule") in {"exact", "atLeast"}
                               else f"{_number(spacing['line'], 240) or 1:g}")
+        if spacing.get("lineRule") == "atLeast" and css["line-height"]:
+            css["line-height"] = f"max({css['line-height']}, 1em)"
+    for name, target in (("before", "margin-top"), ("after", "margin-bottom")):
+        css[target] = _measure(spacing.get(name, "0")) or "0pt"
+        if not _on(spacing.get(name + "Autospacing", {"val": "0"})):
+            if (value := _number(spacing.get(name + "Lines"), 100)) is not None:
+                line = css.get("line-height", "1.2")
+                unit = line if not re.fullmatch(r"[\d.]+", line) else f"{line}em"
+                css[target] = f"calc({value:g} * {unit})"
     return css
 
 
@@ -267,9 +289,10 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
         # the existing exporter.  Never execute a relationship or field.
         for element in paragraph._p.xpath(".//w:r"):
             run = Run(element, paragraph)
-            css = _run_css(paragraph, run, theme, table)
+            latin = _run_css(paragraph, run, theme, table, east_asian=False)
+            cjk = _run_css(paragraph, run, theme, table, east_asian=True)
             source += run.text
-            owners += [css] * len(run.text)
+            owners += [cjk if '\u2e80' <= char <= '\uffff' else latin for char in run.text]
     text_nodes = list(_text_nodes(node))
     target = "".join(value for _, _, value in text_nodes)
     fallback = (_run_css(paragraphs[0], None, theme, table) if paragraphs else {}) | {"white-space": "normal"}
@@ -369,7 +392,9 @@ def _numbering(paragraph: Paragraph, counters: dict) -> tuple[dict, str | None]:
 def _decorate_paragraph(node, paragraphs, theme, table=None) -> None:
     if not paragraphs:
         return
-    _set_css(node, _run_css(paragraphs[0], None, theme, table) | _paragraph_css(paragraphs[0], table))
+    paragraph = paragraphs[0]
+    sample = next((run for run in paragraph.runs if run.text.strip()), None)
+    _set_css(node, _run_css(paragraph, sample, theme, table) | _paragraph_css(paragraph, table))
     _project_runs(node, paragraphs, theme, table)
 
 
@@ -507,4 +532,15 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         # Source image refs are stable; generated diagram refs come from the
         # caller.  Do not resolve external Markdown image URLs.
         _images(root, parse_docx(str(source_path), outline_headings=outline_headings).images + supplied)
+        if len(root):
+            # shortcut: continuous editing uses the final body section; inspect mixed sections in Word layout preview.
+            section = doc.sections[-1]
+            if all(value is not None for value in (section.page_width, section.page_height, section.left_margin,
+                                                   section.right_margin, section.top_margin, section.bottom_margin)):
+                root[0].set("data-word-page", json.dumps({
+                    "width": f"{(section.page_width - section.left_margin - section.right_margin) / 12700:g}pt",
+                    "minHeight": f"{(section.page_height - section.top_margin - section.bottom_margin) / 12700:g}pt",
+                    "paddingTop": f"{section.top_margin.pt:g}pt", "paddingBottom": f"{section.bottom_margin.pt:g}pt",
+                    "paddingLeft": f"{section.left_margin.pt:g}pt", "paddingRight": f"{section.right_margin.pt:g}pt",
+                }))
         return "".join(html.tostring(node, encoding="unicode") for node in root)

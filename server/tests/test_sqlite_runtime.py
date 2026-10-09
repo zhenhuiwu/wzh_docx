@@ -126,7 +126,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             original = client.get(f"/api/v1/documents/{document_id}/original-preview")
             assert client.get(f"/api/v1/documents/{document_id}/word-preview?scope=edited&expectedRevision=1").status_code == 409
             assert client.get(f"/api/v1/documents/{document_id}/word-preview?scope=edited").status_code == 409
-            edited_pdf = preview_dir / f"{document_id}.0.pdf"
+            edited_pdf = preview_dir / f"{document_id}.0.format4.pdf"
             edited_pdf.write_bytes(b"%PDF-1.4\n%%EOF")
             layout = client.get(f"/api/v1/documents/{document_id}/word-preview?scope=edited&expectedRevision=0")
             assert layout.status_code == 200 and layout.headers['content-type'] == 'application/pdf'
@@ -217,7 +217,8 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             assert streamed.status_code == 200, streamed.text
             assert events[0]["type"] == "start" and events[-1]["type"] == "done"
             assert events[-1]["content"] == "范围正文。", streamed.text
-            assert events[1]["type"] == "draft" and len(events[1]["content"]) < len(events[-1]["content"])
+            drafts = [event for event in events if event["type"] == "draft"]
+            assert drafts and len(drafts[0]["content"]) < len(events[-1]["content"])
             assert events[-1]["html"] == "<p>范围正文。</p>"
             assert client.get(f"/api/v1/documents/{document_id}").json()["data"]["revision"] == 3
 

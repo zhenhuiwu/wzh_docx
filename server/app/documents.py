@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -36,6 +37,49 @@ from app.writing_skills import load_skill_snapshot
 router = APIRouter()
 router.include_router(versions_router)
 _preview_lock = Lock()  # ponytail: local single-user preview; use a job queue if concurrent conversion matters.
+
+
+@contextmanager
+def _local_word_document(path: Path, *, read_only: bool = True):
+    if sys.platform != "win32":
+        raise AppError(503, "WORD_UNAVAILABLE", "完整目录和版式处理需要在本机安装 Microsoft Word。")
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        try:
+            word.Visible = False
+            word.DisplayAlerts = 0
+            word.AutomationSecurity = 3
+            opened = word.Documents.Open(str(path), ReadOnly=read_only, AddToRecentFiles=False)
+            try:
+                yield opened
+            finally:
+                opened.Close(False)
+        finally:
+            word.Quit()
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _refresh_word_contents(opened) -> None:
+    # Refresh only local indexes, never unrelated external or computed fields.
+    indexes = [*opened.TablesOfContents, *opened.TablesOfFigures]
+    if not indexes:
+        return
+    for index in indexes:
+        index.Update()
+    opened.Repaginate()
+    for index in indexes:
+        index.UpdatePageNumbers()
+
+
+def _has_word_contents(path: Path) -> bool:
+    from docx import Document
+    values = Document(path).element.xpath(".//w:instrText/text()|.//w:fldSimple/@w:instr")
+    return any(re.match(r"^\s*TOC\b", value, re.IGNORECASE) for value in values)
 
 _STATUSES = {"draft", "in_progress", "completed"}
 _SOURCE_TYPES = {"template", "upload"}
@@ -1048,6 +1092,15 @@ def export_document(
                     raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
                 source = resolve_object(get_settings().file_data_dir, file_row[0])
                 edit_original_docx(markdown_content, source, output_path, image_sources=diagram_images(row[6].get("images", [])), outline_headings=bool(row[6].get("wordOutlineHeadings")))
+                if _has_word_contents(output_path):
+                    try:
+                        with _preview_lock, _local_word_document(output_path, read_only=False) as opened:
+                            _refresh_word_contents(opened)
+                            opened.Save()
+                    except AppError:
+                        raise
+                    except Exception as exc:
+                        raise AppError(503, "WORD_CONTENTS_FAILED", "Word 目录更新失败，请检查本机 Microsoft Word。") from exc
                 exported = store_bytes(
                     name=filename,
                     media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1121,8 +1174,9 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
         raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
     preview_dir = source.parent.parent / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
-    # ponytail: cache by revision; add retention cleanup if preview storage grows large.
-    target = preview_dir / (f"{did}.{document[12]}.pdf" if scope == "edited" else f"{file_row[0]}.pdf")
+    # Invalidate edited PDFs made before the native format inheritance fix.
+    # shortcut: cache by revision; add retention cleanup if preview storage grows large.
+    target = preview_dir / (f"{did}.{document[12]}.format4.pdf" if scope == "edited" else f"{file_row[0]}.pdf")
     with _preview_lock:
         if not target.is_file():
             if sys.platform != "win32":
@@ -1133,27 +1187,10 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
                 if scope == "edited":
                     from app.docx_export import edit_original_docx, diagram_images
                     edit_original_docx(document[7], source, edited_word, image_sources=diagram_images(document[6].get("images", [])), outline_headings=bool(document[6].get("wordOutlineHeadings")))
-                import pythoncom
-                import win32com.client
-
-                pythoncom.CoInitialize()
-                try:
-                    word = win32com.client.DispatchEx("Word.Application")
-                    try:
-                        word.Visible = False
-                        word.DisplayAlerts = 0
-                        word.AutomationSecurity = 3
-                        opened = word.Documents.Open(
-                            str(edited_word if scope == "edited" else source), ReadOnly=True, AddToRecentFiles=False,
-                        )
-                        try:
-                            opened.ExportAsFixedFormat(str(temporary), 17)
-                        finally:
-                            opened.Close(False)
-                    finally:
-                        word.Quit()
-                finally:
-                    pythoncom.CoUninitialize()
+                with _local_word_document(edited_word if scope == "edited" else source) as opened:
+                    if scope == "edited":
+                        _refresh_word_contents(opened)
+                    opened.ExportAsFixedFormat(str(temporary), 17)
                 os.replace(temporary, target)
             except ValueError as exc:
                 temporary.unlink(missing_ok=True)

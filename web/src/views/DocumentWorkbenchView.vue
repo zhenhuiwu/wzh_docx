@@ -20,6 +20,7 @@ const documentId = computed(() => String(route.params.documentId));
 const projectId = computed(() => String(route.params.id));
 const document = ref<DocumentRecord | null>(null);
 const editor = ref<HTMLElement | null>(null);
+const paperStyle = ref<Record<string, string>>({});
 const mode = ref<"original" | "edit" | "layout">("edit");
 const originalPhase = ref<"loading" | "ready" | "error">("loading");
 const originalError = ref("");
@@ -86,6 +87,7 @@ const aiElapsed = ref(0);
 let aiProgressTimer: number | undefined;
 let aiController: AbortController | undefined;
 let autoSaveTimer: number | undefined;
+let layoutNeedsRefresh = false;
 
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const outline = computed(() => documentHeadings(markdownContent.value));
@@ -203,6 +205,7 @@ function chooseAiScope(scope: WritingMemory["scope"]) {
   aiOpen.value = true;
 }
 function showEditorHtml(html: string) {
+  layoutNeedsRefresh = false;
   selectionNeedsRefresh.value = false;
   selectedText.value = "";
   selectedRange = null;
@@ -211,7 +214,17 @@ function showEditorHtml(html: string) {
   for (const image of document.value?.formatTemplate.images || []) {
     html = html.replaceAll(`src="${image.ref}"`, `src="data:${image.content_type};base64,${image.data}"`);
   }
-  if (editor.value) editor.value.innerHTML = DOMPurify.sanitize(html);
+  if (editor.value) {
+    editor.value.innerHTML = DOMPurify.sanitize(html);
+    paperStyle.value = {};
+    try {
+      const page = JSON.parse(editor.value.firstElementChild?.getAttribute("data-word-page") || "{}");
+      for (const name of ["width", "minHeight", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight"]) {
+        if (typeof page[name] === "string" && /^\d+(?:\.\d+)?pt$/.test(page[name])) paperStyle.value[name] = page[name];
+      }
+      if (paperStyle.value.width) paperStyle.value.boxSizing = "content-box";
+    } catch { /* Local drafts without page metadata keep the default paper. */ }
+  }
 }
 async function acceptContent(result: DocumentContentResult) {
   const record = document.value;
@@ -638,7 +651,7 @@ async function switchMode(next: "original" | "edit" | "layout") {
   clearAiDraft();
   if (next !== "edit") await loadOriginal();
 }
-function onEditorInput() {
+function onEditorInput(event?: Event) {
   if (!editor.value) return;
   aiUndo.value = null;
   const copy = editor.value.cloneNode(true) as HTMLElement;
@@ -646,6 +659,7 @@ function onEditorInput() {
   markdownContent.value = turndown.turndown(DOMPurify.sanitize(copy.innerHTML));
   persistLocalDraft(copy.innerHTML);
   editorVersion.value += 1;
+  if (event instanceof InputEvent && ["insertParagraph", "insertFromDrop"].includes(event.inputType)) layoutNeedsRefresh = true;
   if (aiDraft.value) aiError.value = "文档已变化，请重新生成草稿。";
   window.clearTimeout(autoSaveTimer);
   autoSaveTimer = window.setTimeout(() => void save(), 3000);
@@ -702,6 +716,7 @@ function save(): Promise<void> {
       record.markdownContent = content;
       persistLocalDraft();
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
+      if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) { if (current()) errorText.value = messageOf(error); }
     finally {
       saving.value = false;
@@ -721,6 +736,17 @@ function blockUnsupportedImages(event: ClipboardEvent | DragEvent) {
     event.preventDefault();
     errorText.value = "不能直接粘贴或拖入图片。生成的图表请使用“插入正文”，原稿中的图片会保留。";
   }
+}
+async function pasteContent(event: ClipboardEvent) {
+  blockUnsupportedImages(event);
+  if (event.defaultPrevented) return;
+  event.preventDefault();
+  if (aiLocked.value || addingHeading.value || !event.clipboardData) return;
+  const html = event.clipboardData.getData("text/html");
+  if (html) window.document.execCommand("insertHTML", false, DOMPurify.sanitize(html, { FORBID_ATTR: ["style", "class", "id"] }));
+  else window.document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+  onEditorInput();
+  await refreshEditorFormatting();
 }
 async function openSkillSettings() {
   if (!canStartAi.value || aiDraft.value) return;
@@ -778,11 +804,74 @@ function beforeUnload(event: BeforeUnloadEvent) {
     event.returnValue = "";
   }
 }
-function format(command: string, value?: string) {
-  if (aiLocked.value) return;
+async function refreshEditorFormatting(saveFirst = true) {
+  const root = editor.value, record = document.value;
+  if (!root || !record || aiLocked.value) return;
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const selector = "p,li,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,:scope > div";
+  const blocks = [...root.querySelectorAll(selector)];
+  const positions: { index: number; offset: number }[] = [];
+  if (range && root.contains(range.startContainer) && root.contains(range.endContainer)) {
+    for (const [container, offset] of [[range.startContainer, range.startOffset], [range.endContainer, range.endOffset]] as const) {
+      const element = container instanceof Element ? container : container.parentElement;
+      const block = [...blocks].reverse().find(block => block === element || block.contains(container));
+      if (!block) break;
+      const before = range.cloneRange();
+      before.selectNodeContents(block);
+      before.setEnd(container, offset);
+      positions.push({ index: blocks.indexOf(block), offset: (before.cloneContents().textContent || "").length });
+    }
+  }
+  const scroll = root.closest(".page-scroll");
+  const scrollTop = scroll?.scrollTop || 0;
+  refreshingEditor.value = true;
+  root.contentEditable = "false";
+  window.clearTimeout(autoSaveTimer);
+  try {
+    if (saveFirst) await save();
+    if (isDirty.value || document.value !== record) return;
+    const preview = await previewDocument(record.id);
+    if (document.value !== record || documentId.value !== record.id) return;
+    showEditorHtml(preview.html);
+    if (positions.length === 2) {
+      const restored = window.document.createRange();
+      const currentBlocks = [...root.querySelectorAll(selector)];
+      for (const [boundary, position] of positions.entries()) {
+        const block = currentBlocks[position.index];
+        if (!block) break;
+        const walker = window.document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+        let remaining = Math.min(position.offset, block.textContent?.length || 0);
+        let node = walker.nextNode();
+        while (node) {
+          const length = node.textContent?.length || 0;
+          if (remaining <= length) break;
+          remaining -= length;
+          node = walker.nextNode();
+        }
+        if (boundary === 0) restored.setStart(node || block, node ? remaining : 0);
+        else restored.setEnd(node || block, node ? remaining : 0);
+      }
+      root.contentEditable = "true";
+      root.focus();
+      selection?.removeAllRanges();
+      selection?.addRange(restored);
+    }
+    if (scroll) scroll.scrollTop = scrollTop;
+  } catch (error) {
+    errorText.value = `排版刷新失败：${messageOf(error)}`;
+  } finally {
+    refreshingEditor.value = false;
+    if (editor.value === root) root.contentEditable = String(!aiLocked.value && !addingHeading.value);
+  }
+  captureEditorTarget();
+}
+async function format(command: string, value?: string) {
+  if (aiLocked.value || addingHeading.value) return;
   editor.value?.focus();
   window.document.execCommand(command, false, value);
   onEditorInput();
+  await refreshEditorFormatting();
 }
 function scrollToHeading(index: number) {
   editor.value?.querySelectorAll("h1,h2,h3,h4,h5,h6")[index]?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -919,7 +1008,7 @@ onUnmounted(() => {
             <button type="button" class="ghost" :disabled="!canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
             <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
           </fieldset>
-          <div class="page-scroll"><div class="paper"><div ref="editor" class="paper-content" :contenteditable="!aiLocked && !addingHeading" :aria-readonly="aiLocked || addingHeading" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="blockUnsupportedImages" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
+          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="!aiLocked && !addingHeading" :aria-readonly="aiLocked || addingHeading" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
         </main>
         <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
           <div class="ai-panel-head"><h2>写作助手</h2><button type="button" class="ghost" aria-label="关闭写作助手" @click="aiOpen = false">收起</button></div>

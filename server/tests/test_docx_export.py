@@ -147,7 +147,15 @@ def test_bundled_438c_templates_keep_cover_toc_and_grow_reference_table(tmp_path
         edit_original_docx(edited, source, output)
         result = Document(output)
         assert len(result.tables[reference_index].rows) == len(reference.rows) + 1
-        assert result.tables[reference_index].rows[0]._tr.xml == reference.rows[0]._tr.xml
+        # Only table pagination flags may change; retain the header text and all other properties.
+        headers = [deepcopy(table.rows[0]._tr) for table in (result.tables[reference_index], reference)]
+        for header in headers:
+            for flag in header.xpath('.//w:keepNext|./w:trPr/w:tblHeader'):
+                flag.getparent().remove(flag)
+            for properties in header.xpath('.//w:pPr|./w:trPr'):
+                if not len(properties):
+                    properties.getparent().remove(properties)
+        assert headers[0].xml == headers[1].xml
         assert result.tables[0]._tbl.xml == doc.tables[0]._tbl.xml
         assert [p._p.xml for p in result.paragraphs if p._p.xpath(".//w:fldChar")] == [
             p._p.xml for p in doc.paragraphs if p._p.xpath(".//w:fldChar")]

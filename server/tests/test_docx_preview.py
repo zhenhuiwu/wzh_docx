@@ -2,6 +2,7 @@
 
 from base64 import b64decode
 from io import BytesIO
+import json
 
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
@@ -30,12 +31,92 @@ def _span(root, text):
     return next(node for node in root.xpath(".//span") if node.text == text)
 
 
+def test_preview_supplies_native_paper_size_and_margins(tmp_path):
+    source = tmp_path / 'paper.docx'
+    doc = Document()
+    doc.add_paragraph('原稿纸面')
+    section = doc.sections[-1]
+    section.page_width, section.page_height = Pt(600), Pt(800)
+    section.left_margin, section.right_margin = Pt(70), Pt(80)
+    section.top_margin, section.bottom_margin = Pt(60), Pt(90)
+    doc.save(source)
+    root = _root(source)
+    assert json.loads(root[0].get('data-word-page')) == {
+        'width':'450pt','minHeight':'650pt','paddingTop':'60pt','paddingBottom':'90pt',
+        'paddingLeft':'70pt','paddingRight':'80pt'}
+    assert root.text_content() == '原稿纸面'
+
+
+def test_preview_character_indents_line_units_and_minimum_line_height(tmp_path):
+    source = tmp_path / 'character-indent.docx'
+    doc = Document()
+    paragraph = doc.add_paragraph('正文排版检查')
+    paragraph.runs[0].font.size = Pt(14)
+    properties = paragraph._p.get_or_add_pPr()
+    indent = OxmlElement('w:ind')
+    for key, value in {'firstLine':'120','firstLineChars':'200','leftChars':'100'}.items():
+        indent.set(qn('w:' + key), value)
+    properties.append(indent)
+    spacing = properties.get_or_add_spacing()
+    for key, value in {'line':'240','lineRule':'atLeast','before':'20','beforeLines':'50'}.items():
+        spacing.set(qn('w:' + key), value)
+    doc.save(source)
+    css = _css(_root(source)[0])
+    assert css['text-indent'] == '2em' and css['margin-left'] == '1em'
+    assert css['line-height'] == 'max(12pt, 1em)'
+    assert css['font-size'] == '14pt'
+    assert css['margin-top'] == 'calc(0.5 * max(12pt, 1em))'
+
+
+def test_preview_mixed_east_asian_and_latin_fonts_in_same_run(tmp_path):
+    source = tmp_path / 'mixed-fonts.docx'
+    doc = Document()
+    paragraph = doc.add_paragraph('中文ABC123中文')
+    fonts = paragraph.runs[0]._r.get_or_add_rPr().get_or_add_rFonts()
+    fonts.set(qn('w:ascii'), 'Times New Roman')
+    fonts.set(qn('w:eastAsia'), '宋体')
+    doc.save(source)
+    root = _root(source)
+    assert root.text_content() == '中文ABC123中文'
+    assert _css(_span(root, 'ABC123'))['font-family'] == '"Times New Roman"'
+    assert all(_css(node)['font-family'] == '"宋体"' for node in root.xpath('.//span') if node.text == '中文')
+
+
+def test_theme_font_wins_in_same_properties_but_direct_font_overrides_inherited_theme(tmp_path):
+    from app.docx_preview import _theme
+    source = tmp_path / 'font-theme.docx'
+    doc = Document()
+    first = doc.add_paragraph('主题字体')
+    fonts = first.runs[0]._r.get_or_add_rPr().get_or_add_rFonts()
+    fonts.set(qn('w:eastAsia'), 'Arial')
+    fonts.set(qn('w:eastAsiaTheme'), 'majorEastAsia')
+    second = doc.add_paragraph('直接字体')
+    second.runs[0]._r.get_or_add_rPr().get_or_add_rFonts().set(qn('w:eastAsia'), '黑体')
+    doc.save(source)
+    root = _root(source)
+    assert _css(_span(root,'主题字体'))['font-family'] == json.dumps(_theme(doc)[1]['majorea'],ensure_ascii=False)
+    assert _css(_span(root,'直接字体'))['font-family'] == '"黑体"'
+
+
+def test_theme_east_asian_font_uses_document_theme_language(tmp_path):
+    from app.docx_preview import _theme
+    doc = Document()
+    language = doc.settings.element.xpath('./w:themeFontLang')[0]
+    language.set(qn('w:eastAsia'), 'ja-JP')
+    doc.add_heading('主题语言验收', 1)
+    source = tmp_path / 'theme-language.docx'
+    doc.save(source)
+    assert _theme(doc)[1]['majorea'] == 'ＭＳ ゴシック'
+    assert _css(_span(_root(source), '主题语言验收'))['font-family'] == '"ＭＳ ゴシック"'
+
+
 def test_preview_resolves_paragraph_and_character_style_inheritance(tmp_path):
     source = tmp_path / "inherited.docx"
     doc = Document()
     base = doc.styles.add_style("Inherited body", WD_STYLE_TYPE.PARAGRAPH)
     base.base_style = doc.styles["Normal"]
     base.font.name, base.font.size = "Arial", Pt(13)
+    base.element.rPr.rFonts.set(qn('w:eastAsia'), 'Arial')
     base.font.color.rgb, base.font.italic = RGBColor(18, 52, 86), True
     base.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     base.paragraph_format.left_indent, base.paragraph_format.first_line_indent = Pt(14), Pt(7)
