@@ -42,7 +42,7 @@ let templatesRequest = 0;
 let templateDocsRequest = 0;
 const templateReady = computed(() => templatesPhase.value === "ready" && templateDocsPhase.value === "ready"
   && templates.value.some(item => item.id === selectedTemplateId.value)
-  && templateDocs.value.some(item => item.id === selectedTemplateDocId.value));
+  && templateDocs.value.some(item => item.id === selectedTemplateDocId.value && item.importStructure?.reviewed));
 
 function messageOf(error: unknown) {
   return error instanceof ApiError ? error.message : "暂时不能连接服务。";
@@ -123,7 +123,7 @@ async function onTemplateChange() {
     const result = await listTemplateDocuments(templateId);
     if (request !== templateDocsRequest || target !== projectId.value || templateId !== selectedTemplateId.value || !creating.value) return;
     templateDocs.value = result.items;
-    selectedTemplateDocId.value = result.items[0]?.id ?? "";
+    selectedTemplateDocId.value = result.items.find(item => item.importStructure?.reviewed)?.id ?? "";
     templateDocsPhase.value = "ready";
   } catch (error) {
     if (request !== templateDocsRequest || target !== projectId.value || templateId !== selectedTemplateId.value || !creating.value) return;
@@ -295,8 +295,8 @@ onBeforeUnmount(() => {
             选择文档模板
             <select v-model="selectedTemplateDocId" class="control" :disabled="submitting || templateDocsPhase !== 'ready' || templateDocs.length === 0">
               <option value="">请选择</option>
-              <option v-for="doc in templateDocs" :key="doc.id" :value="doc.id">
-                {{ doc.name }}
+              <option v-for="doc in templateDocs" :key="doc.id" :value="doc.id" :disabled="!doc.importStructure?.reviewed">
+                {{ doc.name }}{{ doc.importStructure?.reviewed ? '' : '（待核对）' }}
               </option>
             </select>
           </label>
@@ -305,6 +305,7 @@ onBeforeUnmount(() => {
             {{ templateDocsError }} <button type="button" class="ghost" :disabled="submitting" @click="onTemplateChange">重试</button>
           </p>
           <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && templateDocs.length === 0" class="form-state">此模板组没有文档模板</p>
+          <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && !templateDocs.some(doc => doc.importStructure?.reviewed)" class="field-error" role="alert">请先在模板管理中核对并保存模板内容。</p>
         </div>
 
         <label v-else>

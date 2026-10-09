@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+from io import BytesIO
 from urllib.parse import urlsplit
 from pathlib import Path
 from threading import Lock
@@ -26,7 +27,8 @@ from app.document_versions import record_current_version, router as versions_rou
 from app.docx_parser import parse_docx
 from app.errors import AppError
 from app.config import get_settings
-from app.files import resolve_object
+from app.files import resolve_object, store_bytes
+from app.template_import import clean_template
 from app.identity import require_permission
 from app.models import format_timestamp
 from app.writing_skills import load_skill_snapshot
@@ -201,7 +203,8 @@ def _check_word(connection, row, content: str, *, images: list[dict] | None = No
     try:
         with TemporaryDirectory() as directory:
             edit_original_docx(content, resolve_object(get_settings().file_data_dir, file_row[0]), Path(directory) / "checked.docx",
-                               image_sources=diagram_images(images if images is not None else row[6].get("images", [])))
+                               image_sources=diagram_images(images if images is not None else row[6].get("images", [])),
+                               outline_headings=bool(row[6].get("wordOutlineHeadings")))
     except ValueError as exc:
         raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
 
@@ -448,17 +451,25 @@ def create_document(
             if not td_row:
                 raise AppError(404, "NOT_FOUND", "模板文档不存在。")
 
-            original_file_id = td_row[0]
             format_template = td_row[1] if td_row[1] else {}
             storage_key = td_row[2]
-
+            structure = format_template.get("importStructure")
+            if not structure or not structure.get("reviewed"):
+                raise AppError(409, "TEMPLATE_REVIEW_REQUIRED", "请先在模板管理中核对并确认模板结构，再创建文档。")
             try:
-                parsed = parse_docx(str(resolve_object(get_settings().file_data_dir, storage_key)))
+                cleaned = clean_template(resolve_object(get_settings().file_data_dir, storage_key), structure)
+                parsed = parse_docx(BytesIO(cleaned), outline_headings=True)
+            except ValueError as exc:
+                raise AppError(422, "TEMPLATE_STRUCTURE_INVALID", str(exc)) from None
             except Exception as exc:
                 raise AppError(422, "WORD_PARSE_FAILED", "Word 文档解析失败，请检查上传的 .docx 文件。") from exc
             markdown_content = parsed.markdown
             outline = parsed.outline
-            format_template = {**parsed.format_template, "images": parsed.images}
+            stored = store_bytes(name=f"{name}.docx", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                 purpose="attachment", content=cleaned, project_id=pid, connection=conn)
+            original_file_id = stored.id
+            format_template = {**parsed.format_template, "images": parsed.images,
+                               "importStructure": structure, "templateSourceFileId": str(td_row[0]), "wordOutlineHeadings": True}
 
         elif body.sourceType == "upload":
             if not body.wordFileId:
@@ -834,6 +845,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         whole_document=whole_document, context_tokens=settings.ai_context_tokens,
         read_sections=read_sections, planned_sections=planned_sections, source_revision=row[12],
         writing_skill=_writing_skill(row),
+        template_structure=(row[6] or {}).get("importStructure"),
     )
     rules = section_rules(heading=inputs["heading"], document_name=row[2], template_name=row[15] or "",
                           instruction=body.instruction, existing=existing, selected_only=inputs["selected_only"], writing_skill=_writing_skill(row))
@@ -1035,7 +1047,7 @@ def export_document(
                 if file_row is None:
                     raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
                 source = resolve_object(get_settings().file_data_dir, file_row[0])
-                edit_original_docx(markdown_content, source, output_path, image_sources=diagram_images(row[6].get("images", [])))
+                edit_original_docx(markdown_content, source, output_path, image_sources=diagram_images(row[6].get("images", [])), outline_headings=bool(row[6].get("wordOutlineHeadings")))
                 exported = store_bytes(
                     name=filename,
                     media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1081,7 +1093,7 @@ def _editing_html(connection, row) -> str:
     if file is None:
         raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
     try:
-        return render_document_html(resolve_object(get_settings().file_data_dir, file[0]), row[7], row[6].get("images", []))
+        return render_document_html(resolve_object(get_settings().file_data_dir, file[0]), row[7], row[6].get("images", []), outline_headings=bool(row[6].get("wordOutlineHeadings")))
     except ValueError as exc:
         raise AppError(422, "PREVIEW_UNSUPPORTED", str(exc)) from None
 
@@ -1120,7 +1132,7 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
             try:
                 if scope == "edited":
                     from app.docx_export import edit_original_docx, diagram_images
-                    edit_original_docx(document[7], source, edited_word, image_sources=diagram_images(document[6].get("images", [])))
+                    edit_original_docx(document[7], source, edited_word, image_sources=diagram_images(document[6].get("images", [])), outline_headings=bool(document[6].get("wordOutlineHeadings")))
                 import pythoncom
                 import win32com.client
 

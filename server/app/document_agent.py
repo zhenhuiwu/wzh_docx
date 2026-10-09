@@ -28,6 +28,7 @@ from app.config import ai_reasoning_kwargs
 from app.docx_parser import parse_docx
 from app.document_rules import SKILL_ROOT, DraftFormatError, section_rules
 from app.document_memory import document_context, load_task_memory, read_memory_history
+from app.template_import import guidance_for_section
 
 
 def _project_overview(project_id: UUID) -> str:
@@ -235,10 +236,12 @@ def _section_agent(
     read_sections: set[int] | None = None,
     source_revision: int = 0, planned_sections: set[int] | None = None,
     writing_skill: dict | None = None,
+    template_structure: dict | None = None,
 ):
     # Snapshot once: callers changing their dictionary after construction cannot
     # change constraints half-way through reading or planning this draft.
     writing_skill = deepcopy(writing_skill)
+    template_structure = deepcopy(template_structure)
     rules = deepcopy(rules) if rules is not None and writing_skill is None else section_rules(
         heading=heading, document_name=document_name, template_name=template_name,
         instruction=instruction, existing=existing, selected_only=selected_only, writing_skill=writing_skill,
@@ -250,7 +253,15 @@ def _section_agent(
         "根据项目概述和标题编写本节正文，保留已知事实。"
     )
     overview = _project_overview(project_id)
-    preparation = {"ready": False, "source": "", "sections": [], "reminders": 0}
+    def template_guidance(index):
+        try:
+            return guidance_for_section(template_structure, full_markdown, index)
+        except ValueError as error:
+            raise DraftFormatError(str(error)) from None
+
+    initial_guidance = template_guidance(heading_index)
+    preparation = {"ready": False, "source": "", "sections": [], "reminders": 0,
+                   "templateNotices": [item["text"] for item in initial_guidance if item["kind"] == "notice"]}
     @tool
     def read_project_overview() -> str:
         """Read the project overview snapshot already loaded for the current task."""
@@ -283,6 +294,7 @@ def _section_agent(
         return json.dumps({"index": index, "content": text[offset:offset + limit],
                            "hasMore": offset + limit < len(text), "nextOffset": offset + limit,
                            "rules": chapter_rules,
+                           "templateGuidance": template_guidance(index),
                            "memory": load_task_memory(document_id, scope="section",
                                target=headings[index].group(2).strip()[:120] if index >= 0 else "正文",
                                instruction=instruction, max_chars=2000)}, ensure_ascii=False)
@@ -360,7 +372,8 @@ def _section_agent(
             if sections:
                 return '{"error":"选区模式只能修改选中文字。"}'
             indices = []
-            source = {"selectedText": existing, "rules": rules}
+            source = {"selectedText": existing, "rules": rules,
+                      "templateGuidance": initial_guidance}
         else:
             indices = sections if sections is not None else ([] if whole_document or heading_index is None else [heading_index])
             if not indices or len(indices) > 200 or len(set(indices)) != len(indices) or any(index < -1 or index >= len(headings) for index in indices):
@@ -375,9 +388,12 @@ def _section_agent(
                 "content": section_text(index), "rules": section_rules(
                     heading=headings[index].group(2).strip() if index >= 0 else "正文", document_name=document_name,
                     template_name=template_name, instruction=instruction, existing=section_text(index), writing_skill=writing_skill),
+                "templateGuidance": template_guidance(index),
                 "memory": load_task_memory(document_id, scope="section", target=headings[index].group(2).strip()[:120] if index >= 0 else "正文",
                     instruction=instruction, max_chars=2000)} for index in indices]}
         source["objective"] = objective.strip()
+        guidance = source.get("templateGuidance", []) + [item for section in source.get("sections", []) for item in section["templateGuidance"]]
+        preparation["templateNotices"] = list(dict.fromkeys(item["text"] for item in guidance if item["kind"] == "notice"))
         preparation.update(ready=True, sections=list(indices), source=json.dumps(source, ensure_ascii=False))
         if planned_sections is not None:
             planned_sections.update(indices)
@@ -415,6 +431,8 @@ def _section_agent(
         '你是专业文档编写智能体。仅为用户选定的标题撰写正文 Markdown，不重复标题，'
         '不添加任何级别的新标题，不输出代码围栏。'
     )
+    scope_prompt += ('模板编写指导是当前章节的基础约束，用户要求在该基础上补充，不能以补充要求取消模板约束。'
+                     '指导、示例和填写字段不是项目事实，不要把指导文字复制成正式正文；缺少事实时明确指出缺项，不编造。')
     context = document_context(full_markdown, whole_document=whole_document,
                                max_chars=max(6000, min(12000 if whole_document else 6000, context_tokens // 3)))
     initial_content = (
@@ -422,7 +440,8 @@ def _section_agent(
         f"目标标题（{level}级）：{heading}\n"
         f"{'选中文字' if selected_only else '该标题现有正文'}：\n{existing or '（暂无）'}\n\n"
         f"当前文档{'完整大纲与背景' if whole_document else '背景'}：\n{context}\n\n"
-        f"编写要求：{instruction}"
+        f"编写要求：{instruction}\n\n"
+        f"模板原有编写指导：{json.dumps(initial_guidance, ensure_ascii=False)}"
     )
     inferred_rules = []
     if whole_document and (writing_skill is None or writing_skill["mode"] == "auto"):
@@ -456,6 +475,7 @@ def _section_agent(
                 "scope": scope, "headingIndex": heading_index, "heading": heading,
                 "sourceRevision": source_revision, "instruction": instruction,
                 "writingSkill": rules.get("writingSkill"),
+                "templateGuidance": initial_guidance,
                 "projectOverview": overview}, ensure_ascii=False),
                 load_task_memory(document_id, scope=scope, target=heading[:120], instruction=instruction) or "暂无相关的已采纳要求。",
                 preparation, context_tokens, initial_content, context)],
@@ -507,6 +527,11 @@ async def stream_section_text(*, include_progress: bool = False, **kwargs) -> As
         yield {"type": "progress", "stage": "context", "message": "正在读取文档、项目概述与编写记忆"}
     agent, inputs, preparation = _section_agent(**kwargs)
     content, message_id, writing_started = "", None, False
+    sent_notices = set()
+    if include_progress:
+        for notice in preparation["templateNotices"]:
+            yield {"type": "progress", "stage": "template", "message": notice}
+            sent_notices.add(notice)
     headings = [match.group(2).strip() for match in re.finditer(r"^(#{1,6})[ \t]+([^\n]+)$", kwargs.get("full_markdown", ""), re.MULTILINE)]
     tool_stages = {
         "read_project_overview": ("context", "正在读取项目概述"),
@@ -527,6 +552,11 @@ async def stream_section_text(*, include_progress: bool = False, **kwargs) -> As
             if include_progress and preparation["ready"] and not writing_started:
                 writing_started = True
                 yield {"type": "progress", "stage": "writing", "message": "正在生成正文"}
+            if include_progress:
+                for notice in preparation["templateNotices"]:
+                    if notice not in sent_notices:
+                        yield {"type": "progress", "stage": "template", "message": notice}
+                        sent_notices.add(notice)
             if kind == "messages":
                 message, metadata = event
                 if metadata.get("langgraph_node") != "model" or metadata.get("lc_source") == "summarization" or not isinstance(message, AIMessageChunk):

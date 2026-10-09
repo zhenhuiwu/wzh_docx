@@ -445,7 +445,7 @@ def _images(root, supplied: list[dict]) -> None:
             node.attrib.pop("src", None)
 
 
-def render_document_html(source_path: str | Path, current_markdown: str, images: list[dict] | None = None) -> str:
+def render_document_html(source_path: str | Path, current_markdown: str, images: list[dict] | None = None, *, outline_headings: bool = False) -> str:
     """Return safe editable body HTML styled from the actual edited Word file.
 
     Raises the same safe-edit errors as DOCX export.  No original file, stored
@@ -454,7 +454,7 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
     supplied = images or []
     with TemporaryDirectory(prefix="docwb-preview-") as folder:
         edited = Path(folder) / "edited.docx"
-        edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied))
+        edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied), outline_headings=outline_headings)
         doc = Document(edited)
         root = html.Element("div")
         for block in _html_blocks(current_markdown):
@@ -464,7 +464,7 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         flat = any((_list_info(paragraph) or ("", 0))[1] for paragraph in doc.paragraphs) and not any(
             depth for element in target if element.tag in {"ul", "ol"} for _, depth, _, _ in _list_items(element)
         )
-        blocks = _word_blocks(doc, flat_lists=flat)
+        blocks = _word_blocks(doc, flat_lists=flat, outline_headings=outline_headings)
         if [element.tag for element in target] != [block.tag for block in blocks]:
             raise ValueError("编辑预览结构无法与 Word 对应，请使用 Word 预览检查完整排版。")
         theme, counters = _theme(doc), {}
@@ -506,5 +506,5 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
                     node.set("data-word-marker", marker)
         # Source image refs are stable; generated diagram refs come from the
         # caller.  Do not resolve external Markdown image URLs.
-        _images(root, parse_docx(str(source_path)).images + supplied)
+        _images(root, parse_docx(str(source_path), outline_headings=outline_headings).images + supplied)
         return "".join(html.tostring(node, encoding="unicode") for node in root)

@@ -14,6 +14,7 @@ from app.errors import AppError
 from app.files import guard_knowledge_file, resolve_object
 from app.identity import require_permission
 from app.models import format_timestamp
+from app.template_import import parse_template, validate_structure
 
 router = APIRouter()
 
@@ -45,6 +46,55 @@ class TemplateDocumentCreateBody(BaseModel):
     description: str = ""
     displayOrder: int = 0
     wordFileId: str
+    importStructure: dict | None = None
+
+
+class TemplateParseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    wordFileId: str
+
+
+class TemplateStructureBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expectedRevision: int = Field(ge=0)
+    importStructure: dict
+
+
+def _word_path(request: Request, file_id: UUID):
+    from app.config import get_settings
+    guard_knowledge_file(request, str(file_id))
+    with connect() as conn:
+        row = conn.execute("SELECT storage_key, media_type, status FROM files WHERE id = %s", [file_id]).fetchone()
+    if not row or row[2] != "stored":
+        raise AppError(404, "NOT_FOUND", "文件不存在。")
+    if row[1] != "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        raise AppError(422, "VALIDATION_FAILED", "请选择 Word .docx 文件。")
+    path = resolve_object(get_settings().file_data_dir, row[0])
+    if not path.is_file():
+        raise AppError(404, "NOT_FOUND", "文件不存在，请重新上传。")
+    return path
+
+
+def _parse_structure(path):
+    try:
+        return parse_template(path)
+    except Exception:
+        raise AppError(422, "WORD_PARSE_FAILED", "无法读取 Word 文档，请确认文件有效后重新上传。") from None
+
+
+def _checked_structure(source: dict, candidate: dict) -> dict:
+    try:
+        return validate_structure(source, candidate)
+    except ValueError as error:
+        raise AppError(422, "TEMPLATE_STRUCTURE_INVALID", str(error)) from None
+
+
+def _document_data(row) -> dict:
+    format_template = row[5] if isinstance(row[5], dict) else {}
+    return {"id": str(row[0]), "name": row[1], "description": row[2], "displayOrder": row[3],
+            "wordFileId": str(row[4]), "formatTemplate": format_template,
+            "importStructure": format_template.get("importStructure"),
+            "createdAt": format_timestamp(row[6]), "updatedAt": format_timestamp(row[7])}
 
 
 def _uuid(value: str, field: str) -> UUID:
@@ -348,19 +398,7 @@ def list_template_documents(request: Request, template_id: str) -> dict[str, obj
             [tid]
         ).fetchall()
 
-        items = [
-            {
-                "id": str(row[0]),
-                "name": row[1],
-                "description": row[2],
-                "displayOrder": row[3],
-                "wordFileId": str(row[4]),
-                "formatTemplate": row[5],
-                "createdAt": format_timestamp(row[6]),
-                "updatedAt": format_timestamp(row[7]),
-            }
-            for row in rows
-        ]
+        items = [_document_data(row) for row in rows]
 
         return {
             "data": {"items": items},
@@ -414,8 +452,13 @@ def create_template_document(
         if not file_path.is_file():
             raise AppError(404, "NOT_FOUND", "文件不存在，请重新上传。")
         try:
-            parsed = parse_docx(str(file_path))
-            format_template = parsed.format_template
+            parsed = parse_docx(str(file_path), outline_headings=True)
+            structure = _parse_structure(file_path)
+            if body.importStructure is not None:
+                structure = _checked_structure(structure, body.importStructure)
+            format_template = {**parsed.format_template, "importStructure": structure}
+        except AppError:
+            raise
         except Exception:
             raise AppError(422, "WORD_PARSE_FAILED", "无法读取 Word 文档，请确认文件有效后重新上传。") from None
 
@@ -451,18 +494,57 @@ def create_template_document(
         ).fetchone()
 
         return {
-            "data": {
-                "id": str(row[0]),
-                "name": row[1],
-                "description": row[2],
-                "displayOrder": row[3],
-                "wordFileId": str(row[4]),
-                "formatTemplate": row[5],
-                "createdAt": format_timestamp(row[6]),
-                "updatedAt": format_timestamp(row[7]),
-            },
+            "data": _document_data(row),
             "requestId": request.state.request_id,
         }
+
+
+@router.post("/template-documents/parse")
+def parse_template_document(request: Request, body: TemplateParseBody) -> dict:
+    require_permission(request, "templates.manage")
+    path = _word_path(request, _uuid(body.wordFileId, "wordFileId"))
+    return {"data": _parse_structure(path), "requestId": request.state.request_id}
+
+
+@router.get("/template-documents/{document_id}")
+def get_template_document(request: Request, document_id: str) -> dict:
+    require_permission(request, "templates.read")
+    did = _uuid(document_id, "documentId")
+    with connect() as conn:
+        row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
+                              format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
+    if row is None:
+        raise AppError(404, "NOT_FOUND", "模板文档不存在。")
+    data = _document_data(row)
+    if data["importStructure"] is None:
+        data["importStructure"] = _parse_structure(_word_path(request, row[4]))
+    return {"data": data, "requestId": request.state.request_id}
+
+
+@router.patch("/template-documents/{document_id}/structure")
+def update_template_structure(request: Request, document_id: str, body: TemplateStructureBody) -> dict:
+    require_permission(request, "templates.manage")
+    did = _uuid(document_id, "documentId")
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
+                              format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
+        if row is None:
+            raise AppError(404, "NOT_FOUND", "模板文档不存在。")
+        format_template = dict(row[5] or {})
+        saved = format_template.get("importStructure") or {"revision": 0}
+        if saved["revision"] != body.expectedRevision:
+            raise AppError(409, "REVISION_CONFLICT", "模板结构已更新，请重新读取后修改。")
+        source = _parse_structure(_word_path(request, row[4]))
+        source["revision"] = saved["revision"]
+        checked = _checked_structure(source, body.importStructure)
+        checked["revision"] += 1
+        format_template["importStructure"] = checked
+        conn.execute("UPDATE template_documents SET format_template=%s, updated_at=now() WHERE id=%s", [json.dumps(format_template), did])
+        conn.commit()
+        row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
+                              format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
+    return {"data": _document_data(row), "requestId": request.state.request_id}
 
 
 @router.delete("/template-documents/{document_id}")

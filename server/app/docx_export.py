@@ -27,7 +27,7 @@ from docx.image.image import Image
 from docx.shared import Inches
 from lxml import html
 
-from app.docx_parser import parse_docx, _list_info
+from app.docx_parser import parse_docx, _list_info, heading_level
 
 
 _PROTECTED_INLINE = (
@@ -57,7 +57,7 @@ def _html_blocks(content: str) -> list:
     return list(root)
 
 
-def _word_blocks(doc, *, flat_lists: bool = False) -> list[_Block]:
+def _word_blocks(doc, *, flat_lists: bool = False, outline_headings: bool = False) -> list[_Block]:
     blocks: list[_Block] = []
     for element in doc.element.body:
         if isinstance(element, CT_Tbl):
@@ -67,7 +67,9 @@ def _word_blocks(doc, *, flat_lists: bool = False) -> list[_Block]:
             style = paragraph.style.name if paragraph.style else "Normal"
             text = paragraph.text.strip()
             listing = _list_info(paragraph)
-            if listing and text:
+            if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None and text:
+                blocks.append(_Block(f"h{level}", [element]))
+            elif listing and text:
                 tag, depth = listing
                 if flat_lists:
                     depth = 0
@@ -75,9 +77,6 @@ def _word_blocks(doc, *, flat_lists: bool = False) -> list[_Block]:
                     blocks[-1].elements.append(element)
                 else:
                     blocks.append(_Block(tag, [element]))
-            elif style.startswith("Heading") and text:
-                level = style.removeprefix("Heading").strip()
-                blocks.append(_Block(f"h{level}" if level.isdigit() else "p", [element]))
             elif text:
                 blocks.append(_Block("p", [element]))
             for _ in element.xpath(".//w:drawing//a:blip[@r:embed]"):
@@ -251,7 +250,10 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
             owner = owners[start] if start < len(owners) else (owners[-1] if owners else 0)
             pieces[owner] += new_text[new_start:new_end]
     for run, value in zip(runs, pieces):
-        run.text = value
+        if not value and run.text:
+            run._r.getparent().remove(run._r)
+        else:
+            run.text = value
 
 
 def _edit_inline_runs(paragraph: Paragraph, target) -> None:
@@ -537,9 +539,10 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
         # Inherit from this part of the document, rather than its cover's first Normal paragraph.
         nearby = list(anchor.itersiblings(preceding=True)) + list(anchor.itersiblings())
         paragraphs = [Paragraph(element, doc) for element in nearby if isinstance(element, CT_P)]
-        sample = next((p for p in paragraphs if p.text and
+        sample = next((p for p in paragraphs if (p.text or p.runs) and
                        (p.style.name == style if style_override or tag.startswith("h")
-                        else not p.style.name.startswith(("Heading", "List")))), None)
+                        else heading_level(p) is None and not p.style.name.startswith(("List", "toc", "TOC"))
+                        and not p._p.xpath(_PROTECTED_INLINE))), None)
         if sample is not None and not style_override and not tag.startswith("h"):
             style = sample.style.name
         paragraph = doc.add_paragraph(style=style)
@@ -576,13 +579,13 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
     anchor.addprevious(element)
 
 
-def edit_original_docx(markdown_content: str, original_path: str | Path, output_path: str | Path, *, image_sources: dict[str, bytes | dict] | None = None) -> None:
+def edit_original_docx(markdown_content: str, original_path: str | Path, output_path: str | Path, *, image_sources: dict[str, bytes | dict] | None = None, outline_headings: bool = False) -> None:
     """Retain untouched OOXML and patch only edited blocks."""
     original_path = Path(original_path)
     doc = Document(original_path)
-    source = _html_blocks(parse_docx(str(original_path)).markdown)
+    source = _html_blocks(parse_docx(str(original_path), outline_headings=outline_headings).markdown)
     target = _html_blocks(markdown_content)
-    blocks = _word_blocks(doc)
+    blocks = _word_blocks(doc, outline_headings=outline_headings)
     source_levels = [depth for element in source if element.tag in {"ul", "ol"}
                      for _, depth, _, _ in _list_items(element)]
     target_levels = [depth for element in target if element.tag in {"ul", "ol"}
@@ -592,8 +595,8 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         # Treat missing nesting as that legacy view, not permission to remove
         # the original numbering. Explicit nested target markup uses the current
         # parser. This changes only the matching baseline, never stored content.
-        source = _html_blocks(parse_docx(str(original_path), flat_lists=True).markdown)
-        blocks = _word_blocks(doc, flat_lists=True)
+        source = _html_blocks(parse_docx(str(original_path), flat_lists=True, outline_headings=outline_headings).markdown)
+        blocks = _word_blocks(doc, flat_lists=True, outline_headings=outline_headings)
     if [block.tag for block in blocks] != [element.tag for element in source]:
         raise ValueError("原稿结构无法与编辑稿对应，未导出以避免破坏格式。")
 

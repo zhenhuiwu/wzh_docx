@@ -119,6 +119,11 @@ def test_current_document_creation_uses_names_and_project_scoped_sources(documen
     template_document = client.post(f"/api/v1/templates/{template.json()['data']['id']}/documents",
                                     json={"name": "范围说明", "wordFileId": str(stored.id)}, headers=headers)
     assert template_document.status_code == 200, template_document.text
+    structure = template_document.json()["data"]["importStructure"]
+    structure["reviewed"] = True
+    reviewed = client.patch(f"/api/v1/template-documents/{template_document.json()['data']['id']}/structure",
+                            json={"expectedRevision": 0, "importStructure": structure}, headers=headers)
+    assert reviewed.status_code == 200, reviewed.text
     from_template = client.post(f"/api/v1/projects/{project}/documents", json={"name": "模板文档", "sourceType": "template",
                                 "templateDocumentId": template_document.json()["data"]["id"]}, headers=headers)
     assert from_template.status_code == 200, from_template.text

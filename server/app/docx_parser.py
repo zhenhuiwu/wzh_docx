@@ -30,6 +30,27 @@ class ParsedDocument:
     images: list[dict[str, Any]]  # 新增：图片信息
 
 
+def heading_level(paragraph: Paragraph, *, outline_headings: bool = True) -> int | None:
+    """Word outline levels may live on a custom style's inherited base."""
+    if not outline_headings:
+        match = re.fullmatch(r'Heading\s*([1-6])', paragraph.style.name if paragraph.style else '')
+        return int(match.group(1)) if match else None
+    values = paragraph._p.xpath('./w:pPr/w:outlineLvl/@w:val')
+    if values:
+        return int(values[0]) + 1 if values[0].isdigit() and int(values[0]) < 6 else None
+    style, seen = paragraph.style, set()
+    while style is not None and style.style_id not in seen:
+        seen.add(style.style_id)
+        values = style.element.xpath('./w:pPr/w:outlineLvl/@w:val')
+        if values:
+            return int(values[0]) + 1 if values[0].isdigit() and int(values[0]) < 6 else None
+        match = re.fullmatch(r'Heading\s*([1-6])', style.name or '')
+        if match:
+            return int(match.group(1))
+        style = style.base_style
+    return None
+
+
 def _extract_paragraph_style(paragraph: Paragraph) -> dict[str, Any]:
     """提取段落样式"""
     style = {}
@@ -74,7 +95,7 @@ def _extract_paragraph_style(paragraph: Paragraph) -> dict[str, Any]:
     return style
 
 
-def _build_format_template(doc: Document) -> dict[str, Any]:
+def _build_format_template(doc: Document, *, outline_headings: bool = False) -> dict[str, Any]:
     """构建格式模板，记录各级标题和正文的样式"""
     template = {
         'headings': {},
@@ -87,10 +108,9 @@ def _build_format_template(doc: Document) -> dict[str, Any]:
         style_name = paragraph.style.name if paragraph.style else 'Normal'
 
         # 标题样式
-        if style_name.startswith('Heading'):
-            level = style_name.replace('Heading ', '').strip()
-            if level.isdigit() and level not in template['headings']:
-                template['headings'][level] = _extract_paragraph_style(paragraph)
+        if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None:
+            if str(level) not in template['headings']:
+                template['headings'][str(level)] = _extract_paragraph_style(paragraph)
 
         # 正文样式
         elif style_name in ['Normal', 'Body Text'] and not template['body']:
@@ -110,7 +130,7 @@ def _list_info(paragraph: Paragraph) -> tuple[str, int] | None:
     return ('ol' if 'Number' in style else 'ul', min(depth, 8))
 
 
-def _paragraph_to_markdown(paragraph: Paragraph, *, flat_lists: bool = False) -> str:
+def _paragraph_to_markdown(paragraph: Paragraph, *, flat_lists: bool = False, outline_headings: bool = False) -> str:
     """将段落转换为 Markdown"""
     text = _markdown_text(paragraph.text.strip())
     if not text:
@@ -119,11 +139,8 @@ def _paragraph_to_markdown(paragraph: Paragraph, *, flat_lists: bool = False) ->
     style_name = paragraph.style.name if paragraph.style else 'Normal'
 
     # 标题转换
-    if style_name.startswith('Heading'):
-        level_str = style_name.replace('Heading', '').strip()
-        if level_str.isdigit():
-            level = int(level_str)
-            return f"{'#' * level} {text}\n"
+    if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None:
+        return f"{'#' * level} {text}\n"
 
     # 列表项
     listing = _list_info(paragraph)
@@ -169,7 +186,7 @@ def _table_to_markdown(table: Table) -> str:
     return '\n'.join(lines) + '\n\n'
 
 
-def _build_outline(doc: Document) -> list[dict[str, Any]]:
+def _build_outline(doc: Document, *, outline_headings: bool = False) -> list[dict[str, Any]]:
     """构建文档大纲"""
     outline = []
     current_path = []  # 用于跟踪当前标题层级
@@ -178,33 +195,30 @@ def _build_outline(doc: Document) -> list[dict[str, Any]]:
         style_name = paragraph.style.name if paragraph.style else ''
         text = paragraph.text.strip()
 
-        if style_name.startswith('Heading') and text:
-            level_str = style_name.replace('Heading', '').strip()
-            if level_str.isdigit():
-                level = int(level_str)
+        if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None and text:
 
-                # 调整当前路径
-                while current_path and current_path[-1]['level'] >= level:
-                    current_path.pop()
+            # 调整当前路径
+            while current_path and current_path[-1]['level'] >= level:
+                current_path.pop()
 
-                node = {
-                    'id': f'heading-{i}',
-                    'level': level,
-                    'text': text,
-                    'children': []
-                }
+            node = {
+                'id': f'heading-{i}',
+                'level': level,
+                'text': text,
+                'children': []
+            }
 
-                if current_path:
-                    current_path[-1]['children'].append(node)
-                else:
-                    outline.append(node)
+            if current_path:
+                current_path[-1]['children'].append(node)
+            else:
+                outline.append(node)
 
-                current_path.append(node)
+            current_path.append(node)
 
     return outline
 
 
-def parse_docx(file_path: str, *, flat_lists: bool = False) -> ParsedDocument:
+def parse_docx(file_path: str, *, flat_lists: bool = False, outline_headings: bool = False) -> ParsedDocument:
     """解析 Word 文档，返回 Markdown 和格式模板"""
     if Document is None:
         raise RuntimeError("python-docx 未安装")
@@ -212,10 +226,10 @@ def parse_docx(file_path: str, *, flat_lists: bool = False) -> ParsedDocument:
     doc = Document(file_path)
 
     # 构建格式模板
-    format_template = _build_format_template(doc)
+    format_template = _build_format_template(doc, outline_headings=outline_headings)
 
     # 构建大纲
-    outline = _build_outline(doc)
+    outline = _build_outline(doc, outline_headings=outline_headings)
 
     # 提取图片
     images = _extract_images(doc)
@@ -228,7 +242,7 @@ def parse_docx(file_path: str, *, flat_lists: bool = False) -> ParsedDocument:
     for element in doc.element.body:
         if isinstance(element, CT_P):
             paragraph = Paragraph(element, doc)
-            md = _paragraph_to_markdown(paragraph, flat_lists=flat_lists)
+            md = _paragraph_to_markdown(paragraph, flat_lists=flat_lists, outline_headings=outline_headings)
             listing = _list_info(paragraph) if not md.startswith('#') else None
             if listing and flat_lists:
                 listing = (listing[0], 0)

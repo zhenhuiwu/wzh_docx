@@ -75,6 +75,60 @@ def test_prepared_section_generates_prose_and_final_model_has_no_tools(monkeypat
     assert '"sourceRevision": 17' in system_text(writing[0])
 
 
+@pytest.mark.parametrize("scope", ["section", "selection", "document"])
+def test_template_guidance_is_scoped_and_survives_preparation(monkeypatch, scope):
+    calls = [call("read_document_sections")] if scope == "document" else []
+    calls += [call("prepare_document_edit", objective="按目标模板要求润色。", **({"sections": [1]} if scope == "document" else {})),
+              AIMessage(content="保留事实后的本节正文。")]
+    model = ObservedModel(responses=calls)
+    blocks = [
+        {"id": "root", "kind": "heading", "headingLevel": 1, "sourceText": "总则", "headingId": None},
+        {"id": "root-guide", "kind": "guidance", "text": "总则约束必须保留。", "headingId": "root"},
+        {"id": "target", "kind": "heading", "headingLevel": 2, "sourceText": "目标", "headingId": None},
+        {"id": "target-guide", "kind": "guidance", "text": "目标指导明确要求真实依据。", "headingId": "target"},
+        {"id": "sample", "kind": "example", "text": "示例应作为参考，不作项目事实。", "headingId": "target"},
+        {"id": "other", "kind": "heading", "headingLevel": 2, "sourceText": "其他", "headingId": None},
+        {"id": "other-guide", "kind": "guidance", "text": "无关章节独有的指导。", "headingId": "other"},
+    ]
+    values = context(model, monkeypatch, full_markdown="# 总则\n\n## 目标\n\n必须保留的完整原文。\n\n## 其他\n\n其他正文。",
+                     heading_index=None if scope == "document" else 1, level=2,
+                     selected_only=scope == "selection", whole_document=scope == "document",
+                     template_structure={"reviewed": True, "blocks": blocks})
+    assert module.draft_section_text(**values) == "保留事实后的本节正文。"
+    for messages, _ in (model.observed[-1:] if scope == "document" else model.observed):
+        pinned = system_text(messages)
+        assert "目标指导明确要求真实依据" in pinned
+        assert "总则约束必须保留" in pinned
+        assert "示例应作为参考" in pinned
+        assert "无关章节独有的指导" not in pinned
+        assert "仅润色本节，不扩大范围。" in pinned
+
+
+@pytest.mark.parametrize("whole", [False, True])
+def test_new_heading_prompt_inheritance_notice_reaches_public_progress(monkeypatch, whole):
+    responses = [call("read_document_sections")] if whole else []
+    responses += [call("prepare_document_edit", objective="编写新增功能。", **({"sections": [2]} if whole else {})),
+                  AIMessage(content="正式新增功能正文。")]
+    model = ObservedModel(responses=responses)
+    blocks = [{"id": "root", "kind": "heading", "headingLevel": 1, "sourceText": "总则", "headingId": None},
+              {"id": "root-guide", "kind": "guidance", "text": "上级明确提供的编写提示词。", "headingId": "root"},
+              {"id": "target", "kind": "heading", "headingLevel": 2, "sourceText": "目标", "headingId": None},
+              {"id": "target-guide", "kind": "guidance", "text": "本模块明确提供的提示词。", "headingId": "target"}]
+    values = context(model, monkeypatch, full_markdown="# 总则\n\n## 目标\n\n### 新增功能\n\n原始功能内容。",
+                     heading="全文" if whole else "新增功能", heading_index=None if whole else 2,
+                     level=0 if whole else 3, whole_document=whole,
+                     template_structure={"reviewed": True, "blocks": blocks})
+
+    async def collect():
+        return [value async for value in module.stream_section_text(**values, include_progress=True)]
+
+    output = asyncio.run(collect())
+    notices = [value for value in output if isinstance(value, dict) and value["stage"] == "template"]
+    assert len(notices) == 1 and "仅继承已匹配上级" in notices[0]["message"]
+    assert "本模块明确提供的提示词" in system_text(model.observed[-1][0])
+    assert "上级明确提供的编写提示词" in system_text(model.observed[-1][0])
+
+
 def test_direct_unprepared_answer_is_rejected(monkeypatch):
     model = ObservedModel(responses=[AIMessage(content="绕过读取与规划的正文。")])
     with pytest.raises(ValueError, match="准备|规划|计划"):

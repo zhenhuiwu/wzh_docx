@@ -20,7 +20,34 @@ export interface TemplateDocument {
   formatTemplate: Record<string, any>;
   createdAt: string;
   updatedAt: string;
+  importStructure?: TemplateImportStructure;
 }
+
+export type TemplateBlockKind = "heading" | "guidance" | "body" | "placeholder" | "table" | "caption" | "toc" | "cover" | "example";
+export interface TemplateImportBlock {
+  id: string;
+  path: string;
+  kind: TemplateBlockKind;
+  text: string;
+  sourceText: string;
+  headingLevel: number | null;
+  headingId: string | null;
+  tableId: string | null;
+  protected: boolean;
+  isTable: boolean;
+  warning?: string;
+}
+export interface TemplateImportStructure {
+  schemaVersion: 1;
+  revision: number;
+  reviewed: boolean;
+  sourceHash: string;
+  blocks: TemplateImportBlock[];
+}
+export const templateBlockLabels: Record<TemplateBlockKind, string> = {
+  heading: "标题", guidance: "AI 提示词", body: "正文", placeholder: "填写位置",
+  table: "表格", caption: "题注", toc: "目录", cover: "封面与更改记录", example: "示例",
+};
 
 export const templateStatusLabel: Record<string, string> = {
   draft: "草稿",
@@ -92,6 +119,7 @@ export async function createTemplateDocument(
     description?: string;
     displayOrder?: number;
     wordFileId: string;
+    importStructure?: TemplateImportStructure;
   }
 ): Promise<TemplateDocument> {
   const body = await apiRequest<{ data: TemplateDocument }>(`/templates/${templateId}/documents`, {
@@ -106,4 +134,24 @@ export async function deleteTemplateDocument(id: string): Promise<void> {
   await apiRequest(`/template-documents/${id}`, {
     method: "DELETE",
   });
+}
+
+export async function parseTemplateWord(wordFileId: string): Promise<TemplateImportStructure> {
+  const body = await apiRequest<{ data: TemplateImportStructure }>("/template-documents/parse", {
+    method: "POST", json: { wordFileId }, timeoutMs: 60000,
+  });
+  if (!body?.data) throw new Error("模板解析响应不完整。");
+  return body.data;
+}
+export async function getTemplateDocument(id: string): Promise<TemplateDocument> {
+  const body = await apiRequest<{ data: TemplateDocument }>(`/template-documents/${id}`);
+  if (!body?.data) throw new Error("模板响应不完整。");
+  return body.data;
+}
+export async function saveTemplateStructure(id: string, structure: TemplateImportStructure): Promise<TemplateDocument> {
+  const body = await apiRequest<{ data: TemplateDocument }>(`/template-documents/${id}/structure`, {
+    method: "PATCH", json: { expectedRevision: structure.revision, importStructure: structure }, timeoutMs: 60000,
+  });
+  if (!body?.data) throw new Error("模板保存响应不完整。");
+  return body.data;
 }
