@@ -23,6 +23,7 @@ import e2e_phase2 as base  # noqa: E402
 
 PREFIX = os.environ.get("E2E_PREFIX", "shot")
 SHOTS = Path(os.environ.get("E2E_SHOTS", str(base.OUT / "workbench")))
+FINAL = os.environ.get("E2E_FINAL") == "1"  # 终验补拍：全部 1920×1080，另加 F-M1/S-3/S-4/S-5 几张
 WEB = base.WEB
 
 
@@ -99,10 +100,29 @@ def main() -> int:
         target.click()
         a.wait_for_timeout(300)
         shot(a, "01-普通编辑")
+        if FINAL:
+            # S-4：目录搜索（打开即聚焦）
+            a.get_by_role("button", name="搜索标题").click()
+            expect(a.locator(".osearch input")).to_be_focused(timeout=5000)
+            a.keyboard.type("需求")
+            a.wait_for_timeout(500)
+            shot(a, "10-目录搜索")
+            a.keyboard.press("Escape")
+            expect(a.locator(".osearch")).to_have_count(0, timeout=5000)
+            expect(a.get_by_role("button", name="搜索标题")).to_be_focused()
 
         # 保存状态各态
         base.type_after(a, p_dirty, "（未保存）")
         shot(a, "05a-保存状态-未保存")
+        if FINAL:
+            # S-5：下载菜单（打开后焦点在第一项，Esc 关闭并回到按钮）
+            a.get_by_role("button", name="更多下载方式").click()
+            expect(a.locator(".export-menu [role=menuitem]").first).to_be_focused(timeout=5000)
+            a.wait_for_timeout(300)
+            shot(a, "11-下载菜单")
+            a.keyboard.press("Escape")
+            expect(a.locator(".export-menu")).to_have_count(0, timeout=5000)
+            expect(a.get_by_role("button", name="更多下载方式")).to_be_focused()
         held = []
         a.route("**/documents/*/content", lambda route: held.append(route) if route.request.method == "PATCH" else route.continue_())
         base.save_now(a)
@@ -154,17 +174,17 @@ def main() -> int:
         a.get_by_role("button", name="版本记录").click()
         expect(a.locator(".history-panel")).to_be_visible(timeout=15000)
         try:
-            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
+            expect(a.locator(".history-panel .skel")).to_have_count(0, timeout=30000)
         except AssertionError:
             pass
         a.wait_for_timeout(1500)
         shot(a, "03-版本记录")
         if a.locator(".history-panel .vitem").count():  # S12：重塑后才有
             a.locator(".history-panel .vitem").first.click()
-            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
+            expect(a.locator(".history-panel .skel")).to_have_count(0, timeout=30000)
             compare = a.locator(".history-panel").get_by_role("button", name="与上一版本比较")
             compare.click(timeout=10000)
-            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
+            expect(a.locator(".history-panel .skel")).to_have_count(0, timeout=30000)
             a.wait_for_timeout(1200)
             shot(a, "03b-版本记录-与上一版本比较")
         a.close()
@@ -215,6 +235,23 @@ def main() -> int:
         expect(b.get_by_test_id("others-updated")).to_be_visible(timeout=10000)
         shot(b, "08-他人更新提示条")
         base.wait_saved(b, 30000)
+        if FINAL:
+            # F-M1：载入他人更新时的“正在载入 {姓名} 的更新…”（版式请求放慢 4 秒以便截图）
+            b.wait_for_timeout(2500)
+            b.evaluate("""() => { const original = window.fetch; window.__origFetch = original;
+                window.fetch = (input, init) => String(input instanceof Request ? input.url : input).includes('/preview')
+                    ? new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)) : original(input, init); }""")
+            rec = zhang.call("GET", f"/documents/{doc_id}")
+            blocks = rec["markdownContent"].split("\n\n")
+            index = next(i for i, block in enumerate(blocks) if block.strip().startswith(p_draft))
+            blocks[index] = blocks[index].rstrip() + "（张工又更新）"
+            zhang.call("PATCH", f"/documents/{doc_id}/content", json={"expectedRevision": rec["revision"], "markdownContent": "\n\n".join(blocks),
+                                                                      "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+            b.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            expect(b.get_by_test_id("editor-refreshing")).to_be_visible(timeout=15000)
+            shot(b, "12-载入他人更新提示")
+            expect(b.get_by_test_id("editor-refreshing")).to_have_count(0, timeout=30000)
+            b.evaluate("() => { window.fetch = window.__origFetch; }")
 
         # 草稿恢复条
         b.context.set_offline(True)
@@ -253,13 +290,14 @@ def main() -> int:
         s.close()
 
         # 1366：写作助手面板
-        n = page_for(f"e2e-zhang-{base.RUN}", 1366, 768)
+        n = page_for(f"e2e-zhang-{base.RUN}", *((1920, 1080) if FINAL else (1366, 768)))
         ai_routes(n, revision)
         base.open_doc(n, data)
         n.wait_for_timeout(800)
         n.get_by_role("button", name="版本记录").click()
+        expect(n.locator(".history-panel .skel")).to_have_count(0, timeout=30000)
         n.wait_for_timeout(1500)
-        shot(n, "09-1366-版本记录")
+        shot(n, "09-版本记录" if FINAL else "09-1366-版本记录")
         n.close()
         browser.close()
     return 0
