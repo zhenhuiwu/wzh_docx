@@ -62,14 +62,31 @@ AI_REASONING_EFFORT 配置思考强度；留空使用模型默认值。可选 no
 SECRET_KEYS = frozenset({"AI_API_KEY", "BOOTSTRAP_ADMIN_PASSWORD"})
 
 
+def env_quote(value: str) -> str:
+    r"""Quote ``value`` so python-dotenv (used by pydantic-settings) reads it back unchanged.
+
+    Plain values use single quotes, where only \ and ' are escapes. Values with
+    line breaks or tabs use double quotes, where 
+, , 	, " and \ are decoded.
+    python-dotenv expands ``${NAME}`` in every quoting style and offers no escape
+    for it, so such values are refused instead of being silently changed.
+    """
+    if "${" in value:
+        raise ValueError("配置值含有 ${，python-dotenv 会把它当作变量展开，无法原样写入 .env。")
+    if not any(char in value for char in "\n\r\t"):
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    escaped = (value.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
+    return '"' + escaped + '"'
+
+
 def env_example(values: dict[str, str]) -> str:
     """A configuration template carrying non-secret settings only."""
     lines = ["# 文档工作室配置模板：复制为 .env 后填写 AI_API_KEY，再重启程序。"]
     for key, value in values.items():
         if key in SECRET_KEYS:
             continue
-        escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
-        lines.append(f"{key}='{escaped}'")
+        lines.append(f"{key}={env_quote(str(value))}")
     lines.append("AI_API_KEY=''")
     return "\n".join(lines) + "\n"
 

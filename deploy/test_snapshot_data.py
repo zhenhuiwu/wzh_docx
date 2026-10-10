@@ -8,7 +8,35 @@ import sqlite3
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from snapshot_data import snapshot
+from snapshot_data import env_example, env_quote, snapshot
+
+
+def check_env_quoting() -> None:
+    from io import StringIO
+
+    from dotenv import dotenv_values
+
+    values = {
+        "PLAIN": r"D:\数据\files",
+        "QUOTE": "it's \"quoted\" \\'",
+        "DOLLAR": "$HOME/x $USER {braces}",
+        "MULTI": "第一行\n第二行\r\n\tC:\\path \"q\"",
+        "TRAILING": "ends with backslash\\",
+        "AI_API_KEY": "must-not-appear",
+    }
+    text = env_example(values)
+    assert "must-not-appear" not in text
+    parsed = dotenv_values(stream=StringIO(text))
+    for key, value in values.items():
+        if key != "AI_API_KEY":
+            assert parsed[key] == value, (key, parsed[key], value)
+    assert parsed["AI_API_KEY"] == ""
+    try:
+        env_quote("${HOME}/data")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("${...} must be refused")
 
 
 def check() -> None:
@@ -121,4 +149,5 @@ def check() -> None:
 
 
 if __name__ == "__main__":
+    check_env_quoting()
     check()
