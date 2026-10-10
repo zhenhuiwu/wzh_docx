@@ -25,7 +25,7 @@ export interface DocumentRecord {
 
 /** 01 §4.7：仅用于展示，写接口仍以服务端 403 为准。 */
 export interface DocumentPermissions {
-  projectRole: "owner" | "editor" | "reviewer" | "viewer" | null;
+  projectRole: "owner" | "editor" | "reviewer" | "viewer" | "auditor" | null;
   canEdit: boolean;
   canExport: boolean;
   canResolveConflicts: boolean;

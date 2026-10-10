@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.db import connect
 from app.errors import AppError
 from app.document_access import document_principal
-from app.projects import _is_admin, _load, _parse_uuid, require_project_editor
+from app.projects import _load, _parse_uuid, _reads_all, require_project_editor
 
 router = APIRouter()
 
@@ -61,7 +61,8 @@ def list_document_plans(project_id: str, request: Request, page: int = 1, pageSi
     if page < 1 or not 1 <= pageSize <= 50:
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     with connect() as connection:
-        _load(connection, target, actor.user_id, _is_admin(actor.roles))
+        # 三审：审计员与项目详情一致，可读文档计划
+        _load(connection, target, actor.user_id, _reads_all(actor.roles))
         total = connection.execute(
             "select count(*) as total from document_plans where project_id = %s", (target,)
         ).fetchone()["total"]
@@ -84,7 +85,7 @@ def create_document_plan(project_id: str, request: Request, body: DocumentPlanBo
     plan_id = uuid4()
     with connect() as connection:
         with connection.transaction():
-            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _load(connection, target, actor.user_id, _reads_all(actor.roles))
             require_project_editor(connection, actor, target)
             # Serialize creates per project so the 100-plan ceiling cannot race.
             connection.execute("select id from projects where id = %s for update", (target,))

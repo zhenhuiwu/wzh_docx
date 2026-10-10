@@ -490,7 +490,10 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
     with connect() as connection:
         admin = _is_admin(actor.roles)
         project = _load(connection, target, actor.user_id, _reads_all(actor.roles))
-        role = project_role(connection, target, actor.user_id)
+        from app.document_access import member_role
+
+        # 三审：非成员的全局审计员返回 "auditor"（与文档接口 permissions.projectRole 口径一致），不是 null
+        role = member_role(connection, target, actor.user_id)
     # 测试 L2：前端按此隐藏写操作（与 update_project / 成员管理的判定一致）。
     project["permissions"] = {
         "projectRole": role,

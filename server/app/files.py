@@ -351,7 +351,7 @@ async def upload_file(request: Request) -> dict[str, object]:
     base_id = _optional_uuid(form.get("baseId"), "baseId")
     from app.identity import require_permission
     from app.knowledge import _require_writer
-    from app.projects import require_project_editor
+    from app.projects import _reads_all, project_role, require_project_editor
 
     if purpose == "template":
         require_permission(request, "templates.manage")
@@ -374,7 +374,11 @@ async def upload_file(request: Request) -> dict[str, object]:
             with connection.transaction(immediate=True):
                 if project_id is not None:
                     project = connection.execute("SELECT archived_at FROM projects WHERE id = %s", (project_id,)).fetchone()
-                    if project is None:
+                    # 三审：看不到这个项目（非成员、非管理员/审计员）与不存在一样回 404，不泄露存在性；看得到但不能写才 403
+                    if project is None or (
+                        not _reads_all(principal.roles)
+                        and project_role(connection, project_id, principal.user_id) is None
+                    ):
                         raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
                     require_project_editor(connection, principal, project_id)
                     if project["archived_at"] is not None:

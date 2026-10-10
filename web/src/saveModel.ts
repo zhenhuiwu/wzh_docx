@@ -116,6 +116,8 @@ export const PROJECT_ROLE_TEXT: Record<string, string> = { owner: "负责人", e
 /** 403/404 文案（02 §3.9 C 第4条）。 */
 export function accessText(error: { status?: number; details?: Record<string, any> }): string {
   if (error.status === 404) return "项目不存在或你无权访问。";
+  // 三审：审计员是全局只读，不提示“联系负责人开通”
+  if (error.details?.projectRole === "auditor") return "你是审计查看者（只读审计），可以查看和导出，不能修改。";
   const owner = error.details?.ownerName;
   return owner ? `你在该项目中没有此操作权限，如需开通请联系负责人 ${owner}。` : "你在该项目中没有此操作权限，如需开通请联系项目负责人。";
 }

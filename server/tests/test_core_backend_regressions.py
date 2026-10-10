@@ -225,7 +225,7 @@ def test_upload_scope_and_idempotency_include_metadata(client):
     other_csrf = _login(other, "core-outsider")
     def upload(browser, token, project=first["id"], key="same-upload", name="中文说明.txt", purpose="attachment"):
         return browser.post("/api/v1/files", files={"file": (name, b"same content", "text/plain")}, data={"purpose": purpose, "projectId": project}, headers={"X-CSRF-Token": token, "Idempotency-Key": key})
-    assert upload(other, other_csrf).status_code == 403
+    assert upload(other, other_csrf).status_code == 404  # 三审：看不到项目与不存在一样 404
     assert upload(other, other_csrf, purpose="template").status_code == 403
     stored = upload(client, csrf)
     assert stored.status_code == 201, stored.text

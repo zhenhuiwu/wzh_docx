@@ -68,6 +68,8 @@ describe("texts", () => {
     expect(capsuleLabel("offline", { pending: 3 })).toBe("离线 · 本机保留 3 处修改");
     expect(accessText({ status: 404 })).toBe("项目不存在或你无权访问。");
     expect(accessText({ status: 403, details: { ownerName: "王工" } })).toContain("王工");
+    // 三审：审计员不提示“联系负责人开通”
+    expect(accessText({ status: 403, details: { projectRole: "auditor", ownerName: null } })).not.toContain("联系");
     expect(myChangesFileName("需求", new Date(2026, 9, 10, 14, 32))).toBe("需求-我的修改-1010-1432.md");
   });
 });

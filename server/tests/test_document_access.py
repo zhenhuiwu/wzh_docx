@@ -220,7 +220,8 @@ def test_member_without_global_role_uploads_to_own_project_only(members):
     buffer = BytesIO()
     WordDocument().save(buffer)
     files = {"file": ("成员上传.docx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
-    for role, expected in (("editor", 201), ("viewer", 403), ("outsider", 403)):
+    # 三审：看不到项目的账号与项目不存在一样回 404（不泄露存在性）；看得到但不能写才 403
+    for role, expected in (("editor", 201), ("viewer", 403), ("outsider", 404)):
         headers = _as(client, role)
         response = client.post("/api/v1/files", files=files, data={"purpose": "attachment", "projectId": str(project)},
                                headers={**headers, "Idempotency-Key": f"member-upload-{role}"})
@@ -229,6 +230,34 @@ def test_member_without_global_role_uploads_to_own_project_only(members):
     unscoped = client.post("/api/v1/files", files=files, data={"purpose": "attachment"},
                            headers={**headers, "Idempotency-Key": "member-upload-unscoped"})
     assert unscoped.status_code == 422  # 夹具账号带 template_manager（含 files.upload），未选项目仍被拒
+    headers = _as(client, "outsider")
+    missing = client.post("/api/v1/files", files=files, data={"purpose": "attachment", "projectId": str(uuid4())},
+                          headers={**headers, "Idempotency-Key": "member-upload-missing"})
+    hidden = client.post("/api/v1/files", files=files, data={"purpose": "attachment", "projectId": str(project)},
+                         headers={**headers, "Idempotency-Key": "member-upload-hidden"})
+    assert (missing.status_code, missing.json()["error"]) == (hidden.status_code, hidden.json()["error"])
+
+
+def test_auditor_reads_project_plans_with_auditor_role(members):
+    """三审：非成员 auditor 的项目详情 projectRole 为 "auditor"，可读文档计划；写操作 403 且不提示“联系负责人开通”。"""
+    client, project, document, _ = members
+    with connect() as connection:
+        create_user(account="m-auditor", name="审计员", password=PASSWORD, roles=["auditor"], connection=connection)
+        connection.commit()
+    headers = _as(client, "auditor")
+    detail = client.get(f"/api/v1/projects/{project}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["permissions"]["projectRole"] == "auditor"
+    assert detail.json()["data"]["permissions"]["canEdit"] is False
+    plans = client.get(f"/api/v1/projects/{project}/document-plans")
+    assert plans.status_code == 200, plans.text
+    doc = client.get(f"/api/v1/documents/{document['id']}")
+    assert doc.status_code == 200 and doc.json()["data"]["permissions"]["projectRole"] == "auditor"
+    saved = client.patch(f"/api/v1/documents/{document['id']}/content",
+                         json={"expectedRevision": 0, "markdownContent": "改"}, headers=headers)
+    assert saved.status_code == 403
+    assert "联系" not in saved.json()["error"]["message"]
+    assert saved.json()["error"]["details"]["projectRole"] == "auditor"
 
 
 def test_project_detail_permissions_hide_edit_for_readonly_members(members):
