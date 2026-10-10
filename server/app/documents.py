@@ -9,7 +9,7 @@ import re
 import sys
 from io import BytesIO
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from time import monotonic
 from html import escape
 from typing import Literal
@@ -36,7 +36,31 @@ from app.writing_skills import load_skill_snapshot
 
 router = APIRouter()
 router.include_router(versions_router)
-_preview_lock = Lock()  # ponytail: local single-user preview; use a job queue if concurrent conversion matters.
+# S3（01 §5.5）：Word COM 仍串行，但只包住 COM 调用；同一预览目标按文件键加锁只生成一次；
+# 缓存命中与 edit_original_docx 都在锁外。进程内锁只对单进程部署有效。
+_COM_SLOT = BoundedSemaphore(1)
+WORD_SLOT_TIMEOUT_SECONDS = 120.0
+_target_locks: dict[str, Lock] = {}
+_target_locks_guard = Lock()
+
+
+@contextmanager
+def _word_slot():
+    if not _COM_SLOT.acquire(timeout=WORD_SLOT_TIMEOUT_SECONDS):
+        raise AppError(503, "WORD_BUSY", "Word 正在处理其他文档，请稍后重试。", retry_after=5)
+    try:
+        yield
+    finally:
+        _COM_SLOT.release()
+
+
+def _target_lock(key: str) -> Lock:
+    with _target_locks_guard:
+        return _target_locks.setdefault(key, Lock())
+
+
+def _word_available() -> bool:
+    return sys.platform == "win32"
 
 
 @contextmanager
@@ -1078,7 +1102,7 @@ def export_document(
                 edit_original_docx(markdown_content, source, output_path, image_sources=diagram_images(row[6].get("images", [])), outline_headings=bool(row[6].get("wordOutlineHeadings")))
                 if _has_word_contents(output_path):
                     try:
-                        with _preview_lock, _local_word_document(output_path, read_only=False) as opened:
+                        with _word_slot(), _local_word_document(output_path, read_only=False) as opened:
                             _refresh_word_contents(opened)
                             opened.Save()
                     except AppError:
@@ -1161,21 +1185,37 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
     # Invalidate edited PDFs made before the native format inheritance fix.
     # shortcut: cache by revision; add retention cleanup if preview storage grows large.
     target = preview_dir / (f"{did}.{document[12]}.format4.pdf" if scope == "edited" else f"{file_row[0]}.pdf")
-    with _preview_lock:
+    if not target.is_file():
+        if not _word_available():
+            raise AppError(503, "WORD_UNAVAILABLE", "版式预览需要在本机安装 Microsoft Word。")
+        _render_preview(target, preview_dir, did, scope, document, source)
+    return FileResponse(
+        target,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline", "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _render_preview(target: Path, preview_dir: Path, did: UUID, scope: str, document, source: Path) -> None:
+    lock = _target_lock(str(target))
+    if not lock.acquire(timeout=WORD_SLOT_TIMEOUT_SECONDS):
+        raise AppError(503, "WORD_BUSY", "Word 正在处理其他文档，请稍后重试。", retry_after=5)
+    try:
         if not target.is_file():
-            if sys.platform != "win32":
-                raise AppError(503, "WORD_UNAVAILABLE", "版式预览需要在本机安装 Microsoft Word。")
             temporary = preview_dir / f"{did}.{uuid4()}.pdf"
             edited_word = temporary.with_suffix(".docx")
             try:
                 if scope == "edited":
                     from app.docx_export import edit_original_docx, diagram_images
                     edit_original_docx(document[7], source, edited_word, image_sources=diagram_images(document[6].get("images", [])), outline_headings=bool(document[6].get("wordOutlineHeadings")))
-                with _local_word_document(edited_word if scope == "edited" else source) as opened:
+                with _word_slot(), _local_word_document(edited_word if scope == "edited" else source) as opened:
                     if scope == "edited":
                         _refresh_word_contents(opened)
                     opened.ExportAsFixedFormat(str(temporary), 17)
                 os.replace(temporary, target)
+            except AppError:
+                temporary.unlink(missing_ok=True)
+                raise
             except ValueError as exc:
                 temporary.unlink(missing_ok=True)
                 raise AppError(422, "EXPORT_UNSUPPORTED", str(exc)) from None
@@ -1184,9 +1224,6 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
                 raise AppError(503, "WORD_PREVIEW_FAILED", "版式预览生成失败，请检查本机 Word 是否可用。") from exc
             finally:
                 edited_word.unlink(missing_ok=True)
-    return FileResponse(
-        target,
-        media_type="application/pdf",
-        headers={"Content-Disposition": "inline", "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"},
-    )
+    finally:
+        lock.release()
 
