@@ -1162,3 +1162,11 @@ dialog::backdrop {
 .search-box { position: relative; display: block; width: calc(var(--space-7) * 7); }
 .search-box .ico { position: absolute; top: 8px; left: 10px; color: var(--text-tertiary); pointer-events: none; }
 .search-box .control { width: 100%; padding-left: 32px; }
+
+/* 迁移期兼容：文档编辑工作台子组件仍按旧按钮写法（块级、文字左对齐）。
+ * 新按钮是 inline-flex 居中，这里恢复左对齐；阶段2 合并后随工作台重做一并删除。 */
+.outline-item.ghost,
+nav[aria-label="已有图表"] > .ghost {
+  justify-content: flex-start;
+  text-align: left;
+}
