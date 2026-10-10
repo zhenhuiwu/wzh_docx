@@ -66,7 +66,8 @@ onBeforeUnmount(() => ++loadRequest);
           <span v-if="project.department">所属部门：{{ project.department }}</span>
         </p>
       </div>
-      <div class="page-actions"><router-link class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link></div>
+      <!-- 项目不存在时，空态里已有“返回项目列表”，页头不再重复（08 复验 N-S6） -->
+      <div v-if="!notFound" class="page-actions"><router-link class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link></div>
     </header>
     <div class="card frame-card">
       <nav v-if="!notFound" class="tabs subnav" aria-label="项目内导航">

@@ -8,6 +8,7 @@ import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
 import ProjectFrame from "../components/ProjectFrame.vue";
 import { displayText, projectStatuses, statusLabel } from "../projects";
+import { useFieldErrors } from "../fieldErrors";
 
 const route = useRoute();
 const projectId = computed(() => String(route.params.id));
@@ -17,6 +18,7 @@ const phase = ref<"loading" | "ready" | "error">("loading");
 const documentPhase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
 const notFound = ref(false);
+const fields = useFieldErrors<"name" | "periodEnd">("project-edit");
 const documentError = ref("");
 const editing = ref(false);
 const saving = ref(false);
@@ -94,10 +96,11 @@ async function saveInfo() {
     periodEnd: form.value.periodEnd || null,
   };
   formError.value = "";
-  if (!input.name) {
-    formError.value = "请填写项目名称。";
-    return;
-  }
+  // 字段级校验（08 复验 N-S3）
+  if (await fields.report({
+    name: !input.name ? "请填写项目名称。" : input.name.length > 120 ? "项目名称不能超过 120 个字符。" : "",
+    periodEnd: input.periodStart && input.periodEnd && input.periodEnd < input.periodStart ? "结束日期不能早于开始日期。" : "",
+  })) return;
   const request = ++saveRequest;
   saving.value = true;
   try {
@@ -157,21 +160,21 @@ onBeforeUnmount(() => {
       <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
           <h2 id="overview-title" class="section-title">项目概述</h2>
-          <button type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''">{{ editing ? "收起编辑" : "编辑项目" }}</button>
+          <button type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''; fields.clear()">{{ editing ? "收起编辑" : "编辑项目" }}</button>
         </div>
         <form v-if="editing" class="edit-form" :aria-busy="saving" novalidate @submit.prevent="saveInfo">
           <div class="form-grid">
-            <label><span class="required">项目名称</span><input v-model="form.name" class="control" type="text" required :aria-invalid="formError === '请填写项目名称。' ? 'true' : undefined" :disabled="saving" /></label>
+            <label><span class="required">项目名称</span><input id="project-edit-name" v-model="form.name" class="control" v-bind="fields.invalid('name')" type="text" required :disabled="saving" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></label>
             <label>状态<select v-model="form.status" class="control" :disabled="saving"><option v-for="item in projectStatuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
             <label>甲方单位<input v-model="form.organization" class="control" type="text" :disabled="saving" /></label>
             <label>甲方联系人<input v-model="form.clientContact" class="control" type="text" :disabled="saving" /></label>
             <label>所属部门<input v-model="form.department" class="control" type="text" :disabled="saving" /></label>
             <label>所属组<input v-model="form.group" class="control" type="text" :disabled="saving" /></label>
             <label>开始日期<input v-model="form.periodStart" class="control" type="date" :disabled="saving" /></label>
-            <label>结束日期<input v-model="form.periodEnd" class="control" type="date" :disabled="saving" /></label>
+            <label>结束日期<input id="project-edit-periodEnd" v-model="form.periodEnd" class="control" v-bind="fields.invalid('periodEnd')" type="date" :disabled="saving" @input="fields.clear('periodEnd')" /><span v-if="fields.errors.value.periodEnd" :id="fields.errorId('periodEnd')" class="field-error" role="alert">{{ fields.errors.value.periodEnd }}</span></label>
             <label class="wide">项目说明<textarea v-model="form.description" class="control" rows="3" :disabled="saving" /></label>
           </div>
-          <p v-if="formError" class="form-alert field-error" role="alert">{{ formError }}</p>
+          <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
           <div class="form-actions"><button type="submit" class="primary" :disabled="saving">{{ saving ? "正在保存…" : "保存项目" }}</button><button type="button" class="ghost" :disabled="saving" @click="editing = false; fillForm(project)">取消</button></div>
         </form>
         <template v-else>
