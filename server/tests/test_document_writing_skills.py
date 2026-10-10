@@ -177,8 +177,9 @@ def test_document_binding_permission_csrf_and_forged_snapshot_are_rejected(versi
     other = TestClient(client.app)
     assert other.patch(url, json=payload, headers=login(other, "version-other")).status_code == 404
     auditor = create_user(account="skill-auditor", name="只读", password="version-test-password", roles=["auditor"])
-    # S1：非项目成员一律 404；成为只读成员后才是 403。
-    assert other.patch(url, json=payload, headers=login(other, "skill-auditor")).status_code == 404
+    # S1：非项目成员一律 404（上面的 version-other）；I6：auditor 是全局只读审计，看得到文档但不能写 → 403
+    # （测试工程师口径，待用户确认）；成为只读成员后同样 403。
+    assert other.patch(url, json=payload, headers=login(other, "skill-auditor")).status_code == 403
     with connect() as connection:
         connection.execute("INSERT INTO project_members (project_id, user_id, role) VALUES (%s, %s, 'viewer')", (doc["projectId"], auditor))
         connection.commit()
