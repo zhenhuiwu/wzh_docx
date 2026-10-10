@@ -30,12 +30,14 @@ from app.errors import AppError
 from app.config import get_settings
 from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
+from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
 from app.document_access import DocumentRow, Need, check_project, document_principal, load_document, member_role, permissions_of
 from app.models import format_timestamp
 from app.writing_skills import load_skill_snapshot
 
 router = APIRouter()
 router.include_router(versions_router)
+router.include_router(objects_router)
 # S3（01 §5.5）：Word COM 仍串行，但只包住 COM 调用；同一预览目标按文件键加锁只生成一次；
 # 缓存命中与 edit_original_docx 都在锁外。进程内锁只对单进程部署有效。
 _COM_SLOT = BoundedSemaphore(1)
@@ -244,9 +246,13 @@ def _insert_at(markdown: str, offset: int, text: str) -> str:
     return (before + "\n\n" if before else "") + text.strip("\n") + ("\n\n" + after if after else "")
 
 
+_AI_KINDS = frozenset({"selection", "ai_section", "ai_document", "diagram"})
+
+
 def _save_markdown(connection, document_id: UUID, markdown: str, expected_revision: int, *,
                    format_template: dict | None = None, outline: list | None = None,
-                   kind: str = "edit", restored_from_revision: int | None = None) -> None:
+                   kind: str = "edit", restored_from_revision: int | None = None) -> UUID:
+    ensure_document_objects(connection, document_id)
     before = record_current_version(connection, document_id, expected_revision=expected_revision)
     template = before["format_template"] if format_template is None else format_template
     updated = connection.execute(
@@ -256,9 +262,11 @@ def _save_markdown(connection, document_id: UUID, markdown: str, expected_revisi
          json.dumps(template, ensure_ascii=False), document_id, expected_revision],
     )
     if updated.rowcount != 1:
-        raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+        raise revision_conflict(connection, document_id)
     record_current_version(connection, document_id, expected_revision=expected_revision + 1,
                            kind=kind, restored_from_revision=restored_from_revision)
+    return record_commit(connection, document_id, base_revision=expected_revision, markdown=markdown, kind=kind,
+                         ai_assisted=kind in _AI_KINDS)
 
 
 def _check_word(connection, row, content: str, *, images: list[dict] | None = None) -> None:
@@ -309,7 +317,7 @@ def set_document_skill(request: Request, document_id: str, body: DocumentSkillBo
         with conn.transaction(immediate=True):
             row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
             if row[12] != body.expectedRevision:
-                raise AppError(409, "REVISION_CONFLICT", "文档已更新，请关闭设置并刷新后重试。")
+                raise revision_conflict(conn, did, "文档已更新，请关闭设置并刷新后重试。")
             current = _writing_skill(row) or {"mode": "auto", "documentInstructions": ""}
             if body.mode == "selected":
                 if not body.skillId or body.skillRevision is None:
@@ -329,6 +337,7 @@ def set_document_skill(request: Request, document_id: str, body: DocumentSkillBo
                 snapshot = {"mode": body.mode}
             snapshot["documentInstructions"] = body.documentInstructions.strip()
             if snapshot != current:
+                ensure_document_objects(conn, did)
                 record_current_version(conn, did, expected_revision=row[12])
                 template = {**row[6], "writingSkill": snapshot}
                 updated = conn.execute(
@@ -337,8 +346,9 @@ def set_document_skill(request: Request, document_id: str, body: DocumentSkillBo
                     [json.dumps(template, ensure_ascii=False), did, row[12]],
                 )
                 if updated.rowcount != 1:
-                    raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+                    raise revision_conflict(conn, did)
                 record_current_version(conn, did, expected_revision=row[12]+1, kind="skill_settings")
+                record_commit(conn, did, base_revision=row[12], markdown=None, kind="skill_settings")
             row = _document_row(conn, did, session.user_id, _admin(session.roles))
             result = _content_result(request, row)
             result["data"]["formatTemplate"] = row[6]
@@ -650,7 +660,7 @@ def update_document_content(
         row = _document_row(conn, did, session.user_id, admin, "edit")
 
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "版本冲突，请刷新后重试。")
+            raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
 
         if body.memory is not None and _writing_skill(row) is not None:
             raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
@@ -683,7 +693,7 @@ def add_heading(request: Request, document_id: str, body: HeadingAddBody) -> dic
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+            raise revision_conflict(conn, did, "文档已更新，请刷新后重试。")
         markdown = row[7]
         if body.afterIndex is None:
             level, position, insert_index = 1, len(markdown), len(_headings(markdown))
@@ -860,7 +870,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
     if row[12] != body.expectedRevision:
-        raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+        raise revision_conflict(None, did, "文档已更新，请刷新后重试。")
     whole_document = body.scope == "document"
     selected_only = body.scope == "selection" or body.selectedText is not None or body.selection is not None
     if selected_only:
@@ -1007,7 +1017,7 @@ def insert_selection(request: Request, document_id: str, body: SelectionInsertBo
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请重新选择正文并生成。")
+            raise revision_conflict(conn, did, "文档已更新，请重新选择正文并生成。")
         rules = section_rules(heading="选中内容", document_name=row[2], template_name=row[15] or "",
                               instruction=body.instruction, existing=body.selection.text, selected_only=True, writing_skill=_writing_skill(row))
         try:
@@ -1030,7 +1040,7 @@ def insert_section(request: Request, document_id: str, body: SectionInsertBody) 
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+            raise revision_conflict(conn, did, "文档已更新，请刷新后重试。")
         heading, _, _ = _section_body(row[7], body.headingIndex)
         try:
             updated = _section_update(row, body.headingIndex, content, body.mode, body.instruction)
@@ -1050,7 +1060,7 @@ def insert_document_edits(request: Request, document_id: str, body: DocumentInse
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请重新生成全文草稿。")
+            raise revision_conflict(conn, did, "文档已更新，请重新生成全文草稿。")
         try:
             edits = _validate_edits(row, body.edits, body.instruction)
         except DraftFormatError as exc:
@@ -1078,7 +1088,7 @@ def export_document(
         row = _document_row(conn, did, session.user_id, admin, "export")
 
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "版本冲突，请刷新后重试。")
+            raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
 
         markdown_content = row[7]
         document_name = row[2]
@@ -1169,7 +1179,7 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
     with connect() as conn:
         document = _document_row(conn, did, session.user_id, _admin(session.roles))
         if scope == "edited" and expectedRevision != document[12]:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重新预览。")
+            raise revision_conflict(conn, did, "文档已更新，请刷新后重新预览。")
         file_row = conn.execute(
             "SELECT storage_key FROM files WHERE id = %s AND status = 'stored'",
             [document[5]],

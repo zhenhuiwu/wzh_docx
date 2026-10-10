@@ -139,7 +139,7 @@ export interface DocumentContentResult {
 }
 
 export interface DocumentSelection { blockId: string; endBlockId?: string; start: number; end: number; text: string }
-export interface DocumentVersion { revision: number; createdAt: string; kind: string; restoredFromRevision?: number | null }
+export interface DocumentVersion { revision: number; createdAt: string; kind: string; restoredFromRevision?: number | null; createdBy?: { id: string; name: string } | null; changedObjects?: number | null }
 export interface DocumentVersionPage { items: DocumentVersion[]; hasMore: boolean; currentRevision: number }
 export interface DocumentVersionDetail extends DocumentVersion { html: string; markdownContent: string; formatTemplate: Record<string, any> }
 

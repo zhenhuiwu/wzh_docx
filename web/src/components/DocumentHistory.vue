@@ -22,6 +22,10 @@ const html = computed(() => {
   }
   return DOMPurify.sanitize(value, { FORBID_TAGS: ["iframe", "form", "input", "button", "textarea"] });
 });
+// 112 之前的版本没有操作人与处数，显示“未记录”（01 §4.5）
+const actor = (item: DocumentVersion) => item.createdBy
+  ? `${item.createdBy.name}${item.changedObjects ? ` · ${item.changedObjects} 处` : ""}`
+  : (item.kind === "baseline" || item.kind === "created" ? "" : "未记录");
 const label = (item: DocumentVersion) => ({ created: "新建文档", baseline: "开始记录", edit: "正文修改", restore: "恢复版本", heading: "添加标题", diagram: "插入图表", test_results: "补充测试结果", ai_section: "章节编写", selection: "选区编写", ai_selection: "选区编写", ai_document: "全文编写", ai_undo: "撤回 AI 修改", skill_settings: "编写规范" }[item.kind] || "保存文档");
 const time = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 const message = (e: unknown) => e instanceof Error ? e.message : "读取失败，请重试。";
@@ -64,7 +68,7 @@ onMounted(() => void load());
     <template v-else>
       <nav class="version-list" aria-label="选择历史版本">
         <button v-for="item in items" :key="item.revision" type="button" class="ghost" :class="{ selected: detail?.revision === item.revision }" :disabled="restoring || detailLoading" @click="select(item)">
-          <span>{{ time(item.createdAt) }}</span><span>{{ label(item) }}{{ item.revision === revision ? ' · 当前' : '' }}</span>
+          <span>{{ time(item.createdAt) }}</span><span>{{ label(item) }}{{ item.revision === revision ? ' · 当前' : '' }}</span><small class="version-actor">{{ actor(item) }}</small>
         </button>
       </nav>
       <nav v-if="offset || hasMore" class="history-pages" aria-label="版本分页"><button type="button" class="ghost" :disabled="!offset || loading || restoring" @click="load(offset - 5)">上一页</button><button type="button" class="ghost" :disabled="!hasMore || loading || restoring" @click="load(offset + 5)">下一页</button></nav>
@@ -82,6 +86,7 @@ onMounted(() => void load());
 .history-panel { display:flex; flex-direction:column; gap:var(--space-3); min-height:0; min-width:0; padding:var(--space-5) var(--space-4); background:var(--sheet); border-left:1px solid var(--rule); font-family:var(--font); font-size:var(--text-sm); }
 header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
+.version-actor { display:block; color:var(--muted); font-size:var(--text-sm, 12px); }
 .history-hint { margin:0 0 var(--space-2); color:var(--warning-700, var(--muted)); font-size:var(--text-sm); }
 p { margin:0; color:var(--ink-secondary); }
 .version-list { display:flex; flex-direction:column; gap:var(--space-1); }

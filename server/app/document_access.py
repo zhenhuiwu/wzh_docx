@@ -89,6 +89,8 @@ def document_principal(request: Request) -> Principal:
     principal = identity.require_session(request)
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         identity.require_csrf(request, principal)
+    from app.document_objects import set_actor
+    set_actor(principal.user_id)
     return principal
 
 

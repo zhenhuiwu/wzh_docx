@@ -20,6 +20,7 @@ from app.document_memory import load_task_memory
 from app.documents import _admin, _check_word, _content_result, _document_row, _insert_at, _save_markdown, _section_body, _uuid
 from app.ai_capability import require_ai
 from app.errors import AppError
+from app.document_objects import revision_conflict
 from app.document_access import document_principal
 from app.models import format_timestamp
 from app.visio_render import VisioRenderError, render_visio
@@ -191,7 +192,7 @@ def create_diagram(request: Request, document_id: str, body: DiagramGenerateBody
     with connect() as connection:
         row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
     if row[12] != body.expectedRevision:
-        raise AppError(409, "REVISION_CONFLICT", "文档已更新，请保存并刷新后重试。")
+        raise revision_conflict(None, did, "文档已更新，请保存并刷新后重试。")
     heading, content = ("全文", str(row[7])) if body.headingIndex is None else (None, None)
     if body.headingIndex is not None:
         selected, content, _ = _section_body(row[7], body.headingIndex)
@@ -213,7 +214,7 @@ def create_diagram(request: Request, document_id: str, body: DiagramGenerateBody
         with connect() as connection:
             current = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
             if current[12] != body.expectedRevision:
-                raise AppError(409, "REVISION_CONFLICT", "生成期间文档已更新，请重新生成图表。")
+                raise revision_conflict(connection, did, "生成期间文档已更新，请重新生成图表。")
             connection.execute(
                 "INSERT INTO document_diagrams (id,document_id,name,kind,source_revision,graph_json) VALUES (%s,%s,%s,%s,%s,%s)",
                 (diagram_id, did, graph["name"], body.kind, current[12], json.dumps(graph, ensure_ascii=False)),
@@ -256,7 +257,7 @@ def insert_diagram(request: Request, document_id: str, diagram_id: str, body: Di
         row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
         diagram = _diagram_row(connection, did, gid)
         if row[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+            raise revision_conflict(connection, did, "文档已更新，请刷新后重试。")
         ref = "docx-image:diagram-" + str(gid)
         if ref in row[7]:
             raise AppError(409, "DIAGRAM_ALREADY_INSERTED", "这个图表已在文档中。")

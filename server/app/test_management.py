@@ -22,6 +22,7 @@ from app.docx_parser import parse_docx
 from app.documents import _project_visible, _uuid
 from app.ai_capability import require_ai
 from app.errors import AppError
+from app.document_objects import revision_conflict
 from app.files import resolve_object
 from app.document_access import document_principal
 from app.identity import require_permission
@@ -767,7 +768,7 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
         already = len(cases) - len(pending)
         if pending:
             if document[12] != body.expectedRevision:
-                raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重新选择补充位置。")
+                raise revision_conflict(connection, did, "文档已更新，请刷新后重新选择补充位置。")
             offset, level = len(document[7]), 1
             if body.headingIndex is not None:
                 heading, _, offset = _section_body(document[7], body.headingIndex)
