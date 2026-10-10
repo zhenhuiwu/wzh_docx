@@ -38,36 +38,70 @@ class FrontendFiles(StaticFiles):
 INITIAL_PASSWORD_FILE = "初始管理员密码.txt"
 
 
+class InitialAdminError(RuntimeError):
+    """The first administrator could not be created safely."""
+
+
 def initialize_admin(home: Path) -> None:
     """Create the first administrator with a random one-time password.
 
-    The password is written once to a local file beside the data and printed
-    to the console. The account must change it at first sign-in.
+    The password file is written (owner-only, exclusive create) and the
+    password printed *before* the account is committed. If either step fails
+    the transaction rolls back, so the next start simply tries again instead of
+    leaving an account whose password nobody knows.
     """
-    from app.bootstrap_admin import create_initial_admin, generate_initial_password
+    from app.bootstrap_admin import (
+        INITIAL_PASSWORD_FILE_ENV, create_initial_admin, generate_initial_password,
+        initial_password_text, write_secret_file,
+    )
     from app.db import connect, migrate
 
     migrate()
     password = generate_initial_password()
+    target = home / INITIAL_PASSWORD_FILE
+    os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
     with connect() as connection:
         with connection.transaction(immediate=True):
             if connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"]:
                 return
             create_initial_admin("admin", "管理员", password, connection=connection)
-    target = home / INITIAL_PASSWORD_FILE
-    target.write_text(
-        "文档工作室初始管理员\n"
-        "账号：admin\n"
-        f"初始密码：{password}\n"
-        "首次登录后系统会要求修改密码。修改完成后请删除本文件。\n",
-        encoding="utf-8-sig",
-    )
-    try:
-        target.chmod(0o600)
-    except OSError:
-        logging.warning("不能限制初始密码文件的访问权限：%s", target)
+            try:
+                write_secret_file(target, initial_password_text("admin", password))
+            except FileExistsError:
+                raise InitialAdminError(
+                    f"{target} 已存在（可能是上次失败留下的）。请删除该文件后重新启动。"
+                ) from None
+            except OSError as error:
+                raise InitialAdminError(
+                    f"不能写入初始密码文件 {target}：{error.strerror or error}。请把程序放到可写目录后重新启动。"
+                ) from None
+            try:
+                print(f"初始管理员：admin，初始密码：{password}（已保存到 {target}，首次登录须修改）", flush=True)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
     logging.info("已创建初始管理员 admin，初始密码已写入 %s", target)
-    print(f"初始管理员：admin，初始密码：{password}（已保存到 {target}，首次登录须修改）")
+
+
+def reset_admin(home: Path, account: str) -> None:
+    """Offline recovery for the portable package: new random password, must change."""
+    from app.bootstrap_admin import (
+        INITIAL_PASSWORD_FILE_ENV, initial_password_text, reset_account_password, write_secret_file,
+    )
+    from app.db import migrate
+
+    migrate()
+    target = home / INITIAL_PASSWORD_FILE
+    target.unlink(missing_ok=True)
+    password = reset_account_password(account)
+    os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
+    try:
+        write_secret_file(target, initial_password_text(account, password))
+        saved = f"，已保存到 {target}"
+    except OSError:
+        logging.warning("不能写入密码文件 %s，只在窗口中显示一次", target)
+        saved = ""
+    print(f"已重置账号 {account}：临时密码 {password}{saved}。原有会话已失效，下次登录须修改密码。", flush=True)
 
 
 def application(home: Path):
@@ -123,6 +157,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--render-visio", type=Path)
+    parser.add_argument("--reset-admin", nargs="?", const="admin", metavar="ACCOUNT",
+                        help="离线重置该账号密码（默认 admin），生成随机临时密码，下次登录须修改")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("端口必须在 1–65535 之间")
@@ -139,6 +175,14 @@ def main():
         return 0
     if args.self_check:
         self_check()
+        return 0
+    if args.reset_admin:
+        from app.bootstrap_admin import ResetError
+        try:
+            reset_admin(home, args.reset_admin)
+        except ResetError as error:
+            print(f"没有重置：{error}", file=sys.stderr)
+            return 1
         return 0
     url = f"http://localhost:{args.port}"
     installation = hashlib.sha256(str(home).encode()).hexdigest()
@@ -160,7 +204,11 @@ def main():
     (home / "logs").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.FileHandler(home / "logs" / "server.log", encoding="utf-8"), logging.StreamHandler()])
-    initialize_admin(home)
+    try:
+        initialize_admin(home)
+    except InitialAdminError as error:
+        logging.error("没有创建初始管理员：%s", error)
+        return 1
     if not args.no_browser:
         def open_when_ready():
             for _ in range(150):
