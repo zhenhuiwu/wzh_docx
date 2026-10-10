@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import StatePanel from "../components/StatePanel.vue";
+import { hasPermission, readSession } from "../session";
+
+// 有 templates.read 的角色可只读查看；新建等写操作只给 templates.manage（09 审查 M2）。
+const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
 import { formatDateTime } from "../format";
 import { ApiError } from "../api/client";
 import { createTemplate, listTemplates, templateStatusLabel, type TemplateRecord } from "../api/templates";
@@ -94,7 +98,7 @@ onMounted(() => void load());
   <section class="view fill">
     <header class="page-head">
       <div><h1>模板管理</h1><p class="page-desc">按文档类别维护模板组；发布后的模板可在项目中新建文档时选用。</p></div>
-      <div class="page-actions"><button type="button" class="primary" :disabled="creating" @click="creating = true"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建模板组</button></div>
+      <div v-if="canManage" class="page-actions"><button type="button" class="primary" :disabled="creating" @click="creating = true"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建模板组</button></div>
     </header>
     <div class="card tpl-card">
       <form class="query" @submit.prevent="search">

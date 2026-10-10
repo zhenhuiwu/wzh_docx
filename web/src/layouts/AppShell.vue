@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import NavItem from "../components/NavItem.vue";
 import StatePanel from "../components/StatePanel.vue";
@@ -8,6 +8,7 @@ import { ApiError } from "../api/client";
 import { getProject } from "../api/projects";
 import { projectCrumb, rememberProject } from "../crumbs";
 import { flashMessage } from "../flash";
+import { NAV_ITEMS, navVisible } from "../access";
 
 const route = useRoute();
 const router = useRouter();
@@ -17,11 +18,10 @@ const account = computed(() => session.value?.staffId || "");
 const department = computed(() => session.value?.department || "");
 const initial = computed(() => Array.from(displayName.value)[0] ?? "用");
 const can = (permission: string) => hasPermission(session.value, permission);
-const showUsers = computed(() => can("users.read"));
-const showTemplates = computed(() => can("templates.manage"));
-const showSkills = computed(() => can("system.manage"));
-const showKnowledge = computed(() => can("knowledge.read"));
-const showSystem = computed(() => showUsers.value || showTemplates.value || showSkills.value);
+// 导航显隐与路由权限共用 access.ts 的一张表（09 审查 M1/M2/S6）。
+const visibleNav = computed(() => new Set(NAV_ITEMS.filter((item) => navVisible(item, session.value?.permissions ?? [])).map((item) => item.route)));
+const show = (routeName: string) => visibleNav.value.has(routeName);
+const showSystem = computed(() => NAV_ITEMS.some((item) => item.group === "system" && show(item.route)));
 
 const SYSTEM_KEY = "doc-workbench.nav.system-open";
 const COLLAPSE_KEY = "doc-workbench.nav.collapsed";
@@ -46,6 +46,45 @@ const loggingOut = ref(false);
 const logoutError = ref("");
 const menuOpen = ref(false);
 const userMenu = ref<HTMLElement | null>(null);
+const userButton = ref<HTMLButtonElement | null>(null);
+const menuPop = ref<HTMLElement | null>(null);
+
+// 用户菜单键盘行为（09 审查 S4）：打开时焦点进第一项，上下/Home/End 移动，Esc 关闭并回到触发按钮，Tab 离开即关闭。
+function menuItems(): HTMLButtonElement[] {
+  return Array.from(menuPop.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
+}
+async function openMenu(focus: "first" | "last" = "first") {
+  menuOpen.value = true;
+  await nextTick();
+  const items = menuItems();
+  (focus === "first" ? items[0] : items[items.length - 1])?.focus();
+}
+function closeMenu(returnFocus = true) {
+  menuOpen.value = false;
+  if (returnFocus) userButton.value?.focus();
+}
+function toggleMenu() {
+  if (menuOpen.value) closeMenu(false);
+  else void openMenu();
+}
+function onButtonKeydown(event: KeyboardEvent) {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    void openMenu(event.key === "ArrowDown" ? "first" : "last");
+  }
+}
+function onMenuKeydown(event: KeyboardEvent) {
+  const items = menuItems();
+  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+  let next = -1;
+  if (event.key === "ArrowDown") next = (index + 1) % items.length;
+  else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = items.length - 1;
+  else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeMenu(); return; }
+  else if (event.key === "Tab") { closeMenu(false); return; }
+  if (next >= 0 && items.length) { event.preventDefault(); items[next].focus(); }
+}
 
 watch(() => route.path, (path) => { if (path.startsWith("/system")) systemOpen.value = true; menuOpen.value = false; });
 watch(systemOpen, (value) => writeFlag(SYSTEM_KEY, value));
@@ -101,7 +140,7 @@ function onDocumentClick(event: MouseEvent) {
   if (menuOpen.value && userMenu.value && !userMenu.value.contains(event.target as Node)) menuOpen.value = false;
 }
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape" && menuOpen.value) menuOpen.value = false;
+  if (event.key === "Escape" && menuOpen.value) closeMenu();
 }
 onMounted(() => { document.addEventListener("click", onDocumentClick); document.addEventListener("keydown", onKeydown); });
 onBeforeUnmount(() => { document.removeEventListener("click", onDocumentClick); document.removeEventListener("keydown", onKeydown); });
@@ -143,15 +182,15 @@ async function logout() {
       </nav>
       <span v-if="logoutError" class="logout-error" role="alert">{{ logoutError }}</span>
       <div ref="userMenu" class="user-menu">
-        <button type="button" class="user" :title="account ? `账号：${account}` : undefined" :aria-expanded="menuOpen" aria-haspopup="menu" @click="menuOpen = !menuOpen">
+        <button ref="userButton" type="button" class="user" :title="account ? `账号：${account}` : undefined" :aria-expanded="menuOpen" aria-haspopup="menu" aria-controls="user-menu-pop" @click="toggleMenu" @keydown="onButtonKeydown">
           <span class="avatar" aria-hidden="true">{{ initial }}</span>
           <span class="user-meta"><span class="user-name">{{ displayName }}</span><small v-if="department">{{ department }}</small></span>
           <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
         </button>
-        <div v-if="menuOpen" class="menu-pop" role="menu">
+        <div v-if="menuOpen" id="user-menu-pop" ref="menuPop" class="menu-pop" role="menu" aria-label="用户菜单" @keydown="onMenuKeydown">
           <div class="menu-who"><strong>{{ displayName }}</strong><span>{{ account }}</span></div>
-          <button type="button" role="menuitem" @click="changePassword">修改密码</button>
-          <button type="button" role="menuitem" class="danger" :disabled="loggingOut" @click="logout">{{ loggingOut ? "正在退出…" : "退出登录" }}</button>
+          <button type="button" role="menuitem" tabindex="-1" @click="changePassword">修改密码</button>
+          <button type="button" role="menuitem" tabindex="-1" class="danger" :disabled="loggingOut" @click="logout">{{ loggingOut ? "正在退出…" : "退出登录" }}</button>
         </div>
       </div>
     </header>
@@ -162,11 +201,11 @@ async function logout() {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z" /></svg>
             <span class="nav-label">项目</span>
           </NavItem>
-          <NavItem :to="{ name: 'test-cases' }" :current="route.name === 'test-cases'" label="测试用例管理">
+          <NavItem v-if="show('test-cases')" :to="{ name: 'test-cases' }" :current="route.name === 'test-cases'" label="测试用例管理">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H6v15h12V5h-3M9 3.5h6V7H9zM9 12.5l2 2 4-4M9 17h6" /></svg>
             <span class="nav-label">测试用例管理</span>
           </NavItem>
-          <NavItem v-if="showKnowledge" :to="{ name: 'knowledge' }" :current="route.name === 'knowledge' || route.name === 'knowledge-base'" label="知识库">
+          <NavItem v-if="show('knowledge')" :to="{ name: 'knowledge' }" :current="route.name === 'knowledge' || route.name === 'knowledge-base'" label="知识库">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5c2.5-1 5-1 7.5.5v13c-2.5-1.5-5-1.5-7.5-.5zM19.5 5.5c-2.5-1-5-1-7.5.5v13c2.5-1.5 5-1.5 7.5-.5z" /></svg>
             <span class="nav-label">知识库</span>
           </NavItem>
@@ -178,15 +217,15 @@ async function logout() {
             </button>
             <span v-else class="group-sep" aria-hidden="true"></span>
             <div v-if="systemOpen || collapsed" class="sub">
-              <NavItem v-if="showUsers" :to="{ name: 'users' }" :current="route.name === 'users'" label="用户管理">
+              <NavItem v-if="show('users')" :to="{ name: 'users' }" :current="route.name === 'users'" label="用户管理">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM3.5 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14.5c1.6.8 2.6 2.8 2.9 5.5" /></svg>
                 <span class="nav-label">用户管理</span>
               </NavItem>
-              <NavItem v-if="showTemplates" :to="{ name: 'templates' }" :current="route.name === 'templates' || route.name === 'template'" label="模板管理">
+              <NavItem v-if="show('templates')" :to="{ name: 'templates' }" :current="route.name === 'templates' || route.name === 'template'" label="模板管理">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6zM14 3.5V8h4M9 12h6M9 15.5h6" /></svg>
                 <span class="nav-label">模板管理</span>
               </NavItem>
-              <NavItem v-if="showSkills" :to="{ name: 'writing-skills' }" :current="route.name === 'writing-skills'" label="Skill 管理">
+              <NavItem v-if="show('writing-skills')" :to="{ name: 'writing-skills' }" :current="route.name === 'writing-skills'" label="Skill 管理">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5l5 5-9.5 9.5H5v-5zM12.5 6.5l5 5" /></svg>
                 <span class="nav-label">Skill 管理</span>
               </NavItem>

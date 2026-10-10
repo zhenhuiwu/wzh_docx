@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import StatePanel from "../components/StatePanel.vue";
+import { hasPermission, readSession } from "../session";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { uploadFile } from "../api/files";
@@ -8,6 +9,8 @@ import { getTemplate, listTemplateDocuments, createTemplateDocument, deleteTempl
   type TemplateRecord, type TemplateDocument, type TemplateImportStructure, templateStatusLabel } from "../api/templates";
 import TemplateImportEditor from "../components/TemplateImportEditor.vue";
 
+// 只读角色（templates.read）不显示导入、核对、移除（09 审查 M2）。
+const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
 const route = useRoute();
 const templateId = computed(() => String(route.params.id ?? ""));
 const template = ref<TemplateRecord | null>(null);
@@ -164,7 +167,7 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       </div>
       <div class="page-actions">
         <router-link class="ghost" :to="{ name: 'templates' }">返回模板管理</router-link>
-        <button v-if="!adding && phase === 'ready'" class="primary" type="button" :disabled="busy" @click="startImport"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V3M5 6l3-3 3 3M3 11v2h10v-2" /></svg>导入 Word 模板</button>
+        <button v-if="canManage && !adding && phase === 'ready'" class="primary" type="button" :disabled="busy" @click="startImport"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V3M5 6l3-3 3 3M3 11v2h10v-2" /></svg>导入 Word 模板</button>
       </div>
     </header>
     <div class="card template-detail">
@@ -188,7 +191,7 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       <template v-else>
         <div class="section-bar"><h2>模板文档</h2><span class="count">{{ documents.length }}</span></div>
         <StatePanel v-if="documents.length === 0" title="还没有模板文档" text="请导入 Word 模板，解析后逐项核对内容用途。" />
-        <div v-else class="table-wrap doc-table"><table><thead><tr><th>模板文档</th><th class="col-review">内容核对</th><th class="col-ops th-right"><span class="sr">操作</span></th></tr></thead><tbody><tr v-for="doc in documents" :key="doc.id"><td class="doc-name">{{ doc.name }}</td><td><span class="tag" :class="doc.importStructure?.reviewed ? 'success' : 'warning'">{{ doc.importStructure?.reviewed ? '已核对' : '待核对' }}</span></td><td class="doc-actions"><button type="button" class="text" :disabled="busy" @click="review(doc)">核对模板</button><button type="button" class="text danger" :disabled="busy" @click="removeDocument(doc)">移除</button></td></tr></tbody></table></div>
+        <div v-else class="table-wrap doc-table"><table><thead><tr><th>模板文档</th><th class="col-review">内容核对</th><th class="col-ops th-right"><span class="sr">操作</span></th></tr></thead><tbody><tr v-for="doc in documents" :key="doc.id"><td class="doc-name">{{ doc.name }}</td><td><span class="tag" :class="doc.importStructure?.reviewed ? 'success' : 'warning'">{{ doc.importStructure?.reviewed ? '已核对' : '待核对' }}</span></td><td class="doc-actions"><template v-if="canManage"><button type="button" class="text" :disabled="busy" @click="review(doc)">核对模板</button><button type="button" class="text danger" :disabled="busy" @click="removeDocument(doc)">移除</button></template></td></tr></tbody></table></div>
       </template>
     </template>
     </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import StatePanel from "../components/StatePanel.vue";
+import { hasPermission, readSession } from "../session";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
@@ -8,6 +9,9 @@ import { listProjects, type ProjectRecord } from "../api/projects";
 import { documentHeadings, getDocument, listDocuments, type DocumentRecord } from "../api/documents";
 import { analyzeTestTask, createTestTask, downloadTestReport, getTestTask, insertTestResults, listTestTasks, runTestTask, setTestCaseEnabled, stopTestTask, testEvidenceUrl, updateTestTask, type TestCase, type TestDocumentInsertion, type TestRun, type TestTask, type TestTaskInput } from "../api/testTasks";
 
+// 写操作按权限显隐（09 审查 M1）：tests.edit 建任务/改配置/提取，tests.execute 运行/停止。
+const canEdit = computed(() => hasPermission(readSession(), "tests.edit"));
+const canExecute = computed(() => hasPermission(readSession(), "tests.execute"));
 const route = useRoute();
 const router = useRouter();
 const projects = ref<ProjectRecord[]>([]);
@@ -496,7 +500,7 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
       </div>
       <div class="page-actions">
         <button v-if="taskId" type="button" class="ghost" @click="backToList">返回任务列表</button>
-        <button v-else type="button" class="primary" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建测试任务</button>
+        <button v-else-if="canEdit" type="button" class="primary" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建测试任务</button>
       </div>
     </header>
 
@@ -533,19 +537,19 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
         <div class="detail-toolbar">
           <nav class="detail-tabs" aria-label="测试任务视图"><button type="button" :class="{ active: tab === 'cases' }" :aria-current="tab === 'cases' ? 'page' : undefined" @click="tab = 'cases'">测试项</button><button type="button" :class="{ active: tab === 'results' }" :aria-current="tab === 'results' ? 'page' : undefined" @click="tab = 'results'">执行结果</button></nav>
           <span class="state-label" :data-state="task.status" role="status">{{ analyzing ? "正在提取测试项" : activeRun?.stopRequested ? "正在停止" : running && tab === 'results' && activeResults.length ? `正在测试 ${finishedCount} / ${activeResults.length}` : statusLabel(task.status) }}</span>
-          <div class="toolbar-actions"><button type="button" class="ghost" :disabled="locked" @click="analyze">{{ analyzing ? "正在提取…" : task.cases.length ? "重新提取" : "从计划提取测试项" }}</button><button v-if="running" type="button" class="ghost danger stop-button" :disabled="operation === 'stop' || task.runs[0]?.stopRequested" @click="stop">{{ operation === 'stop' || task.runs[0]?.stopRequested ? "正在停止…" : "停止测试" }}</button><button v-else type="button" class="primary" :disabled="locked || !enabledCount" @click="run()">{{ operation === 'run' ? "正在启动…" : "运行已勾选测试项" }}</button></div>
+          <div class="toolbar-actions"><button v-if="canEdit" type="button" class="ghost" :disabled="locked" @click="analyze">{{ analyzing ? "正在提取…" : task.cases.length ? "重新提取" : "从计划提取测试项" }}</button><button v-if="running && canExecute" type="button" class="ghost danger stop-button" :disabled="operation === 'stop' || task.runs[0]?.stopRequested" @click="stop">{{ operation === 'stop' || task.runs[0]?.stopRequested ? "正在停止…" : "停止测试" }}</button><button v-else-if="canExecute" type="button" class="primary" :disabled="locked || !enabledCount" @click="run()">{{ operation === 'run' ? "正在启动…" : "运行已勾选测试项" }}</button></div>
         </div>
         <p v-if="actionError || detailError || task.error" class="notice error-strip" role="alert">{{ actionError || detailError || task.error }}</p>
-        <div class="config-row"><details class="task-config"><summary>测试配置</summary><dl><div><dt>所属项目</dt><dd>{{ task.projectName || projects.find(project => project.id === task?.projectId)?.name || "—" }}</dd></div><div><dt>测试计划</dt><dd>{{ task.planName || "未提供" }}</dd></div><div><dt>功能测试方式</dt><dd>{{ task.executionMode === "agent" ? "AI 实时操作" : "按固定步骤" }}</dd></div><div><dt>前端地址</dt><dd>{{ task.frontendUrl || "未提供" }}</dd></div><div><dt>前端源码</dt><dd>{{ task.frontendRoot || "未提供" }}</dd></div><div><dt>后端地址</dt><dd>{{ task.backendUrl || "未提供" }}</dd></div><div><dt>后端源码</dt><dd>{{ task.backendRoot || "未提供" }}</dd></div><div><dt>允许修改的测试数据</dt><dd>{{ task.dataScope || "未提供" }}</dd></div></dl></details><button type="button" class="ghost sm" :disabled="locked" @click="openEdit">编辑配置</button></div>
+        <div class="config-row"><details class="task-config"><summary>测试配置</summary><dl><div><dt>所属项目</dt><dd>{{ task.projectName || projects.find(project => project.id === task?.projectId)?.name || "—" }}</dd></div><div><dt>测试计划</dt><dd>{{ task.planName || "未提供" }}</dd></div><div><dt>功能测试方式</dt><dd>{{ task.executionMode === "agent" ? "AI 实时操作" : "按固定步骤" }}</dd></div><div><dt>前端地址</dt><dd>{{ task.frontendUrl || "未提供" }}</dd></div><div><dt>前端源码</dt><dd>{{ task.frontendRoot || "未提供" }}</dd></div><div><dt>后端地址</dt><dd>{{ task.backendUrl || "未提供" }}</dd></div><div><dt>后端源码</dt><dd>{{ task.backendRoot || "未提供" }}</dd></div><div><dt>允许修改的测试数据</dt><dd>{{ task.dataScope || "未提供" }}</dd></div></dl></details><button v-if="canEdit" type="button" class="ghost sm" :disabled="locked" @click="openEdit">编辑配置</button></div>
 
         <div v-if="tab === 'cases'" class="case-area">
           <StatePanel v-if="analyzing && !task.cases.length" kind="loading" text="正在读取测试计划和源码…" />
-          <StatePanel v-else-if="!task.cases.length" title="尚未提取测试项" text="从测试计划 Word 中提取测试项后，可勾选并运行。"><button type="button" class="primary" :disabled="locked" @click="analyze">提取测试项</button></StatePanel>
+          <StatePanel v-else-if="!task.cases.length" title="尚未提取测试项" text="从测试计划 Word 中提取测试项后，可勾选并运行。"><button v-if="canEdit" type="button" class="primary" :disabled="locked" @click="analyze">提取测试项</button></StatePanel>
           <article v-for="item in task.cases" :key="item.id" class="case-block">
-            <header class="case-head"><label class="case-title"><input type="checkbox" :checked="item.enabled && !missingInput(item)" :disabled="locked || Boolean(missingInput(item))" :aria-label="`选择测试项：${item.title}`" @change="toggleCase(item, $event)" /><strong>{{ item.title }}</strong></label><span class="tag plain kind-label">{{ kindLabel(item.kind) }}</span><button type="button" class="ghost sm" :aria-label="`运行测试项：${item.title}`" :disabled="locked || !item.enabled || Boolean(missingInput(item))" @click="run([item.id])">运行此项</button></header>
+            <header class="case-head"><label class="case-title"><input type="checkbox" :checked="item.enabled && !missingInput(item)" :disabled="locked || !canEdit || Boolean(missingInput(item))" :aria-label="`选择测试项：${item.title}`" @change="toggleCase(item, $event)" /><strong>{{ item.title }}</strong></label><span class="tag plain kind-label">{{ kindLabel(item.kind) }}</span><button v-if="canExecute" type="button" class="ghost sm" :aria-label="`运行测试项：${item.title}`" :disabled="locked || !item.enabled || Boolean(missingInput(item))" @click="run([item.id])">运行此项</button></header>
             <dl class="case-facts"><div class="full-row"><dt>预期结果</dt><dd>{{ item.expected || "未确定" }}</dd></div></dl>
             <details class="test-procedure"><summary>{{ item.kind === 'unit' ? "测试步骤与代码" : "测试步骤与依据" }}</summary><dl class="case-facts"><div><dt>计划依据</dt><dd>{{ item.planReference || "未提取到计划依据" }}</dd></div><div><dt>代码位置</dt><dd>{{ item.sourceReference || "未确定" }}</dd></div></dl><ol v-if="item.steps?.length" class="planned-steps"><li v-for="(step, index) in item.steps" :key="index"><strong>{{ stepLabel(step) }}</strong><details v-if="stepDetails(step)"><summary>操作参数</summary><pre>{{ stepDetails(step) }}</pre></details><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre></li></ol></details>
-            <div v-if="missingInput(item)" class="missing-input"><span>缺少条件：{{ missingInput(item) }}</span><button type="button" class="ghost sm" :disabled="locked" @click="openEdit">补充配置</button></div>
+            <div v-if="missingInput(item)" class="missing-input"><span>缺少条件：{{ missingInput(item) }}</span><button v-if="canEdit" type="button" class="ghost sm" :disabled="locked" @click="openEdit">补充配置</button></div>
           </article>
         </div>
 

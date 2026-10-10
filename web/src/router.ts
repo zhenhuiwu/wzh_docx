@@ -1,8 +1,10 @@
 import { START_LOCATION, createRouter, createWebHistory } from "vue-router";
 import { defineAsyncComponent, h } from "vue";
+import type { RouteRecordRaw } from "vue-router";
+import { routePermission } from "./access";
 import AppShell from "./layouts/AppShell.vue";
-import { onPasswordChangeRequired, onSessionExpired } from "./api/client";
-import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired } from "./session";
+import { onForbidden, onPasswordChangeRequired, onSessionExpired } from "./api/client";
+import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired, refreshSession } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
@@ -32,9 +34,19 @@ const TestCasesView = defineAsyncComponent({
   ]) },
 });
 
+/** 按 access.ts 的权限表写入 meta.permission（路由与导航共用一张表）。 */
+function withPermissions(records: RouteRecordRaw[]): RouteRecordRaw[] {
+  for (const record of records) {
+    const needed = typeof record.name === "string" ? routePermission(record.name) : null;
+    if (needed) record.meta = { ...record.meta, permission: needed };
+    if (record.children) withPermissions(record.children);
+  }
+  return records;
+}
+
 export const router = createRouter({
   history: createWebHistory(),
-  routes: [
+  routes: withPermissions([
     {
       path: "/login",
       name: "login",
@@ -92,13 +104,13 @@ export const router = createRouter({
           path: "knowledge",
           name: "knowledge",
           component: KnowledgeView,
-          meta: { title: "知识库", permission: "knowledge.read" },
+          meta: { title: "知识库" },
         },
         {
           path: "knowledge/:id",
           name: "knowledge-base",
           component: KnowledgeDetailView,
-          meta: { title: "知识库详情", permission: "knowledge.read" },
+          meta: { title: "知识库详情" },
         },
         { path: "assistant", redirect: { name: "projects" } },
         {
@@ -123,7 +135,7 @@ export const router = createRouter({
           path: "system/users",
           name: "users",
           component: UsersView,
-          meta: { title: "用户管理", permission: "users.read" },
+          meta: { title: "用户管理" },
         },
         {
           path: "system/skills",
@@ -136,7 +148,7 @@ export const router = createRouter({
         { path: ":pathMatch(.*)*", name: "not-found", component: NotFoundView, meta: { title: "页面不存在" } },
       ],
     },
-  ],
+  ]),
 });
 
 router.beforeEach(async (to) => {
@@ -170,6 +182,11 @@ onSessionExpired(() => {
   // 首次导航由守卫处理；登录页等公开页面自身的 401 不跳转。
   if (current === START_LOCATION || current.meta.public) return;
   void router.replace({ name: "login", query: { redirect: current.fullPath } });
+});
+
+// 普通 403：权限可能刚被调整，刷新会话权限让导航自愈（09 审查 S1）。
+onForbidden(() => {
+  void refreshSession();
 });
 
 router.afterEach((to, _from, failure) => {
