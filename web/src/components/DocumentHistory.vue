@@ -20,6 +20,9 @@ const error = ref("");
 const detailError = ref("");
 const detail = ref<DocumentVersionDetail | null>(null);
 let detailRequest = 0;
+/** 终验 S-7：读过的版本缓存起来（版本内容不会再变），来回切换不再等服务器渲染。 */
+const detailCache = new Map<number, DocumentVersionDetail>();
+const markdownCache = new Map<number, string>();
 /** 界面验收 S12：版本间看差异。view=正文 / 与上一版本 / 与当前正文。 */
 const view = ref<"content" | "previous" | "current">("content");
 const previous = ref<{ revision: number; markdown: string } | null>(null);
@@ -53,14 +56,29 @@ async function loadPrevious() {
   if (current.revision <= 1) { previousMissing.value = true; return; }
   previousLoading.value = true;
   try {
-    const value = await getDocumentVersion(props.documentId, current.revision - 1);
-    if (detail.value === current) previous.value = { revision: current.revision, markdown: value.markdownContent };
+    // 只取 markdown（不渲染 Word 版式），按块比较
+    const cached = markdownCache.get(current.revision - 1) ?? detailCache.get(current.revision - 1)?.markdownContent;
+    const markdown = cached ?? (await getDocumentVersion(props.documentId, current.revision - 1, false)).markdownContent;
+    markdownCache.set(current.revision - 1, markdown);
+    if (detail.value === current) previous.value = { revision: current.revision, markdown };
   } catch { if (detail.value === current) previousMissing.value = true; }
   finally { previousLoading.value = false; }
 }
 function chooseView(next: "content" | "previous" | "current") {
   view.value = next;
   if (next === "previous") void loadPrevious();
+  const current = detail.value;
+  if (next === "content" && current && !detailCache.has(current.revision)) void loadHtml(current);
+}
+async function loadHtml(current: DocumentVersionDetail) {
+  const request = ++detailRequest;
+  detailLoading.value = true;
+  try {
+    const result = await getDocumentVersion(props.documentId, current.revision);
+    detailCache.set(current.revision, result);
+    if (request === detailRequest && detail.value?.revision === current.revision) detail.value = result;
+  } catch (e) { if (request === detailRequest) detailError.value = message(e); }
+  finally { if (request === detailRequest) detailLoading.value = false; }
 }
 const html = computed(() => {
   let value = detail.value?.html || "";
@@ -83,7 +101,11 @@ async function select(item: DocumentVersion) {
   detail.value = null;
   previous.value = null; previousMissing.value = false;
   try {
-    const result = await getDocumentVersion(props.documentId, item.revision);
+    // 比较视图只要 markdown：先不渲染 Word 版式；切回“正文”时再补取
+    const withHtml = view.value === "content";
+    const result = detailCache.get(item.revision) ?? await getDocumentVersion(props.documentId, item.revision, withHtml);
+    if (withHtml) detailCache.set(item.revision, result);
+    markdownCache.set(item.revision, result.markdownContent);
     if (request === detailRequest) { detail.value = result; if (view.value === "previous") void loadPrevious(); }
   }
   catch (e) { if (request === detailRequest) detailError.value = message(e); }
@@ -131,7 +153,7 @@ onMounted(() => void load());
           </button>
         </nav>
         <nav v-if="offset || hasMore" class="history-pages" aria-label="版本分页"><button type="button" class="ghost sm" :disabled="!offset || loading || restoring" @click="load(offset - 5)">上一页</button><button type="button" class="ghost sm" :disabled="!hasMore || loading || restoring" @click="load(offset + 5)">下一页</button></nav>
-        <p v-if="detailLoading" class="hint" role="status">正在读取正文…</p>
+        <div v-if="detailLoading" class="skel" role="status" aria-label="正在读取正文…"><span></span><span></span><span></span><span class="short"></span></div>
         <div v-if="detailError"><p class="history-error" role="alert">{{ detailError }}</p><button v-if="!detail" type="button" class="ghost sm" @click="load(offset)">重试</button><button v-else-if="staleRestore" type="button" class="ghost sm" @click="staleRestore = false; detailError = ''; emit('refresh'); load(0)">刷新版本列表</button></div>
         <template v-if="detail">
           <div class="seg" role="group" aria-label="查看方式">
@@ -141,7 +163,7 @@ onMounted(() => void load());
           </div>
           <div v-if="view === 'content'" class="version-preview" aria-label="历史版本正文" v-html="html"></div>
           <div v-else class="version-diff" :aria-label="view === 'previous' ? '与上一版本的差异' : '与当前正文的差异'">
-            <p v-if="view === 'previous' && previousLoading" class="hint" role="status">正在读取上一版本…</p>
+            <div v-if="view === 'previous' && previousLoading" class="skel" role="status" aria-label="正在读取上一版本…"><span></span><span></span><span class="short"></span></div>
             <p v-else-if="view === 'previous' && previousMissing" class="hint">没有更早的版本可以比较。</p>
             <p v-else-if="!diffChanged" class="hint">{{ view === 'previous' ? '与上一版本相同。' : '与当前正文相同。' }}</p>
             <template v-else>
@@ -200,6 +222,11 @@ onMounted(() => void load());
 .blk.mod { background:var(--bg-surface); color:var(--text-primary); box-shadow:inset 3px 0 0 var(--info-200); }
 .blk ins { background:var(--diff-ins-bg); text-decoration:none; }
 .blk del { background:var(--diff-del-bg); color:var(--danger-700); }
+/* 终验 S-7：读取中显示骨架 */
+.skel { display:grid; gap:var(--space-2); padding:var(--space-2) 0; }
+.skel span { height:var(--space-3); border-radius:var(--radius-control); background:linear-gradient(90deg, var(--gray-100), var(--gray-150), var(--gray-100)); background-size:200% 100%; animation:skel 1.2s ease-in-out infinite; }
+.skel span.short { width:60%; }
+@keyframes skel { from { background-position:100% 0; } to { background-position:-100% 0; } }
 .skip { margin:0; color:var(--text-tertiary); font-size:var(--text-xs); text-align:center; }
 .history-foot { display:flex; flex-direction:column; align-items:flex-start; gap:var(--space-2); flex:none; }
 .history-hint { margin:0; color:var(--warning-600); font-size:var(--text-xs); }

@@ -8,6 +8,7 @@ export interface DocumentRecord {
   sourceType: "template" | "upload";
   templateDocumentId?: string;
   templateDocumentName?: string;
+  templateName?: string | null;
   originalDocxFileId?: string;
   formatTemplate: Record<string, any>;
   markdownContent: string;
@@ -171,8 +172,8 @@ export async function listDocumentVersions(id: string, offset = 0): Promise<Docu
   if (!body?.data) throw new Error("版本记录响应不完整。");
   return body.data;
 }
-export async function getDocumentVersion(id: string, revision: number): Promise<DocumentVersionDetail> {
-  const body = await apiRequest<{ data: DocumentVersionDetail }>(`/documents/${id}/versions/${revision}`);
+export async function getDocumentVersion(id: string, revision: number, withHtml = true): Promise<DocumentVersionDetail> {
+  const body = await apiRequest<{ data: DocumentVersionDetail }>(`/documents/${id}/versions/${revision}${withHtml ? "" : "?html=false"}`);
   if (!body?.data) throw new Error("版本内容响应不完整。");
   return body.data;
 }
@@ -252,7 +253,7 @@ export async function insertDocumentSection(id: string, expectedRevision: number
 
 // ---- 阶段2 S5：合并保存与冲突（01 §4.3、§4.4） ----
 export interface Person { id: string; name: string }
-export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean }
+export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; whitespaceDropped?: number }
 export interface ConflictLocation { headingPath?: string[]; ordinal?: number | null; kind?: string; label?: string | null }
 export interface ConflictSide { markdown?: string | null; revision?: number | null; deleted?: boolean; updatedBy?: Person | null; updatedAt?: string | null; deletedBy?: Person | null; deletedAt?: string | null }
 export interface ConflictItem {
