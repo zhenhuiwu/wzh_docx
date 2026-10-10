@@ -64,6 +64,10 @@ def test_editor_without_global_role_can_list_read_and_save(members):
 def test_viewer_reads_and_exports_but_cannot_write(members):
     client, project, document, _ = members
     headers = _as(client, "viewer")
+    # N-S5：成员（含只读）在“文档编写”页签能列出文档，不再出现“项目不存在”。
+    listing = client.get(f"/api/v1/projects/{project}/documents")
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["data"]["permissions"]["canEdit"] is False
     assert client.get(f"/api/v1/documents/{document['id']}").status_code == 200
     denied = client.patch(f"/api/v1/documents/{document['id']}/content",
                           json={"expectedRevision": 0, "markdownContent": "x"}, headers=headers)

@@ -93,7 +93,8 @@ async function load() {
     // 02 P0-4：非成员与不存在不区分，不显示“重试”。
     notFound.value = isMissingResource(error);
     accessDenied.value = error instanceof ApiError && error.status === 403;
-    errorText.value = notFound.value ? "项目不存在或你无权访问。" : accessDenied.value ? accessText(error as ApiError) : messageOf(error);
+    // N-S5：页头由 ProjectFrame 负责；页签内只说“文档列表”读不到，不重复“项目不存在”和返回按钮。
+    errorText.value = notFound.value ? "当前账号读不到这个项目的文档，可能已被移出项目或项目已删除。" : accessDenied.value ? accessText(error as ApiError) : messageOf(error);
   }
 }
 
@@ -357,8 +358,7 @@ onBeforeUnmount(() => {
 
       <div class="doc-box">
         <StatePanel v-if="phase === 'loading'" kind="loading" text="正在加载文档…" />
-        <StatePanel v-else-if="phase === 'error' && notFound" kind="error" title="项目不存在或你无权访问。"><router-link class="primary" :to="{ name: 'projects' }">返回项目列表</router-link></StatePanel>
-        <StatePanel v-else-if="phase === 'error'" kind="error" title="文档加载失败" :text="errorText"><button v-if="!accessDenied" type="button" class="ghost" @click="load">重试</button></StatePanel>
+        <StatePanel v-else-if="phase === 'error'" kind="error" title="文档列表加载失败" :text="errorText"><button v-if="!accessDenied && !notFound" type="button" class="ghost" @click="load">重试</button></StatePanel>
         <StatePanel v-else-if="documents.length === 0" title="还没有文档" :text="canCreate ? '从模板创建第一篇文档，或上传已有的 Word 文档。' : '项目里还没有文档。'"><button v-if="canCreate" type="button" class="primary" :disabled="submitting" @click="startCreate">新建文档</button></StatePanel>
         <div v-else class="table-wrap document-list">
           <table>
