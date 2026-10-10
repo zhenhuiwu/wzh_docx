@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+import uuid
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -726,8 +727,76 @@ def s_offline_reopen(ctx: Run, page):
     return {}
 
 
+@scenario("M1 另一标签快照后 保留我的 确认后按最新一份")
+def s_other_tab_keep_mine(ctx: Run, page):
+    """审查员 M1（p9-c-probe A3）：同一人另一个标签页追加了快照，本标签点“保留我的”不能永远 409；
+    展示最新一份（注明另一个标签页），再点一次按这一份处理，另一个标签页写的字不丢。"""
+    doc_id = ctx.doc(page, "方案C另一标签快照")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    hit = ctx.wait_snapshot(doc_id, MARK)
+    other = P3 + MARK + "〔另一标签写的〕"
+    ctx.li.call("POST", f"/documents/{doc_id}/conflicts/{hit['conflictId']}/mine", json={
+        "itemIndex": hit["itemIndex"], "markdown": other, "clientSaveKey": str(uuid.uuid4()), "tabId": "other-tab", "seq": int(time.time() * 1000)})
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    notice = card(page).locator(".ccard-notice")
+    expect(notice).to_contain_text("你自己在另一个标签页", timeout=20000)
+    expect(notice).to_contain_text("再点一次「保留我的」")
+    expect(card(page)).to_contain_text("〔另一标签写的〕")
+    assert_no_self_named(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    assert other in md.split("\n\n"), md[:400]
+    expect(page.locator(".paper-content")).to_contain_text("〔另一标签写的〕")
+    return {}
+
+
+@scenario("M1 另一标签快照后 使用对方的版本 一次生效")
+def s_other_tab_use_theirs(ctx: Run, page):
+    """审查员 A3b：另一个标签页写了快照后，“使用对方的版本”不被卡住。"""
+    doc_id = ctx.doc(page, "方案C另一标签用对方")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    hit = ctx.wait_snapshot(doc_id, MARK)
+    ctx.li.call("POST", f"/documents/{doc_id}/conflicts/{hit['conflictId']}/mine", json={
+        "itemIndex": hit["itemIndex"], "markdown": P3 + "〔另一标签写的〕", "clientSaveKey": str(uuid.uuid4()), "tabId": "other-tab", "seq": int(time.time() * 1000)})
+    open_panel(page)
+    card(page).get_by_role("button", name="使用对方的版本").click()
+    card(page).locator(".ccard-confirm").get_by_role("button", name="使用对方的版本").click()
+    expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    assert P3_THEIRS in ctx.server(doc_id)["markdownContent"].split("\n\n")
+    return {}
+
+
+@scenario("K1-M1 重开后正文里改冲突段 保留我的 不算到对方")
+def s_reopen_self_edit(ctx: Run, page):
+    """测试工程师 K1-M1：刷新后在正文第 3 段（对方版本）续写，再点“保留我的”：
+    不能提示“张工 又修改了一次”，要说明是你自己在正文里改的、保留我的会换掉它。"""
+    doc_id = ctx.doc(page, "方案C重开后改正文")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    ctx.wait_snapshot(doc_id, MARK)
+    page.reload()
+    expect(page.locator(".paper-content")).to_be_visible(timeout=90000)
+    base.wait_saved(page, 90000)
+    base.type_after(page, "第3段", "〔后补XY〕")
+    deadline = time.time() + 20
+    while "〔后补XY〕" not in ctx.server(doc_id)["markdownContent"] and time.time() < deadline:
+        time.sleep(0.5)
+    assert "〔后补XY〕" in ctx.server(doc_id)["markdownContent"], "正文自动保存没进来"
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    notice = card(page).locator(".ccard-notice")
+    expect(notice).to_contain_text("你刚在正文里也改了这一段", timeout=20000)
+    assert "张工 又修改了一次" not in page.locator("body").inner_text()
+    assert_no_self_named(page)
+    return {"notice": notice.inner_text()[:80]}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
-             s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen]
+             s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit]
 
 
 def main() -> int:

@@ -137,14 +137,15 @@ def _theirs_info(connection, document_id: UUID, rows: list, names: dict, base_bo
     first = max(changed, key=lambda row: int(row["updated_doc_revision"] or 0)) if changed else rows[0]
     who = _person(first["updated_by"], names.get(str(first["updated_by"])))
     when = format_timestamp(first["updated_at"])
-    if actor is not None and first["updated_by"] is not None and str(first["updated_by"]) == str(actor):
+    by_self = actor is not None and first["updated_by"] is not None and str(first["updated_by"]) == str(actor)
+    if by_self:
         # 方案 C 后端第 5 条：最近一次是本人改的（如冲突后又提交了同段），“对方”取最后一个非本人修改者，不把自己当对方
         other = _last_other_editor(connection, [str(row["id"]) for row in rows], actor)
         if other is not None:
             who = _person(other["actor_id"], other["name"])
             when = format_timestamp(other["created_at"])
     return {"markdown": "\n\n".join(row["body"] for row in rows), "revision": int(first["revision"]), "deleted": False,
-            "updatedBy": who, "updatedAt": when}
+            "updatedBy": who, "updatedAt": when, **({"latestBySelf": True} if by_self else {})}
 
 
 def build_items(connection, document_id: UUID, base_md: str, theirs_md: str, result: MergeResult,

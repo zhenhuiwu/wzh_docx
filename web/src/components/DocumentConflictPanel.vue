@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import ConflictCompareDialog from "./ConflictCompareDialog.vue";
 import { diffWords, isTable, tableCellDiffs } from "../textDiff";
 import { ApiError } from "../api/client";
-import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type ResolveRequestItem, type ResolveResult } from "../api/documents";
+import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type MineLatest, type ResolveRequestItem, type ResolveResult } from "../api/documents";
 import { ACTION_DONE_TEXT, REASON_TEXT, SELF_THEIRS_NAME, normalizeListMarkers, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
 import { locationText, shortTime } from "../saveModel";
 import { continuedChars, type LiveMine } from "../frozenConflict";
@@ -22,7 +22,7 @@ const props = defineProps<{
   /** 方案 C：冻结区里正在写的“我的版本”。 */
   liveMine?: Record<string, LiveMine>;
 }>();
-const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number]; locate: [item: ConflictItem] }>();
+const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number]; locate: [item: ConflictItem]; adopt: [key: string, latest: MineLatest] }>();
 
 const tab = ref<"mine" | "members">(props.initialTab || "mine");
 const items = ref<ConflictItem[]>([]);
@@ -51,7 +51,15 @@ async function load() {
     phase.value = "ready";
     // 没有待处理时直接展开“已处理”，处理完的记录仍可查看和下载（界面验收 M2）
     if (!open.length && done.length) handledOpen.value = true;
-    if (tab.value === "mine") emit("count", open.length);
+    if (tab.value === "mine") {
+      emit("count", open.length);
+      // 审查员 M1：服务器上的最新快照是本标签写的（如正文保存时续写追加成快照）而冻结区没有未存的字 → 直接以它为准，避免带旧 snapshotId 永远 409
+      const tabNow = browserTabIdentity().current;
+      for (const item of open) {
+        const state = live(item); const latest = item.mineLatest;
+        if (state?.saved && latest?.snapshotId && state.snapshotId !== latest.snapshotId && (!latest.tabId || latest.tabId === tabNow)) emit("adopt", id(item), latest);
+      }
+    }
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "冲突列表加载失败";
     phase.value = "error";
@@ -137,7 +145,8 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
       return;
     }
     // 审查点 3：带上我看到的“我的版本”快照（处理前已把编辑区里的续写存上）；服务器上不是这一份时 409，不用旧快照处理
-    if (tab.value === "mine") request.mineSnapshotId = (live(item) ? live(item)!.snapshotId : item.mineLatest?.snapshotId) ?? "";
+    // 审查员 A3b：“使用对方的版本”不用我的版本，不带快照 id（另一个标签页刚写了快照也不该卡住）
+    if (tab.value === "mine" && choice.action !== "use_theirs") request.mineSnapshotId = (live(item) ? live(item)!.snapshotId : item.mineLatest?.snapshotId) ?? "";
     const key = keys.keyFor(JSON.stringify([item.conflictId, request]));
     const result = await resolveConflict(props.documentId, item.conflictId, key, props.revision, [request]);
     keys.done();
@@ -151,7 +160,18 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     if (apiError.code === "MINE_SNAPSHOT_CHANGED") {
       keys.done();
       await load();
-      cardNotice.value = { ...cardNotice.value, [id(item)]: "你的版本刚有更新（可能来自另一个标签页），请确认最新内容后再处理。" };
+      // 审查员 M1：展示服务器上最新的一份（注明来自哪个标签页），以它为准；用户再点一次才按这一份处理（不拿本标签的旧文字覆盖另一个标签页写的字）
+      const fresh = items.value.find(entry => id(entry) === id(item));
+      const latest = fresh?.mineLatest;
+      if (fresh && latest?.snapshotId) {
+        if (live(fresh)) emit("adopt", id(fresh), latest);
+        const tabNow = browserTabIdentity().current;
+        const from = latest.tabId && tabNow && latest.tabId !== tabNow ? "你自己在另一个标签页" : "你";
+        const text = latest.markdown.replace(/\s+/g, " ").trim();
+        cardNotice.value = { ...cardNotice.value, [id(item)]: `${from}${latest.savedAt ? ` ${hm(latest.savedAt)}` : ""} 刚更新了“我的版本”：「${text.length > 40 ? `${text.slice(0, 40)}…` : text}」。卡片已换成这一份，再点一次「${choice.label}」会按这一份处理。` };
+      } else {
+        cardNotice.value = { ...cardNotice.value, [id(item)]: "你的版本刚有更新，请确认最新内容后再处理。" };
+      }
       return;
     }
     switch (classifyResolveError(apiError)) {
@@ -164,7 +184,10 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
         const fresh = (apiError.details?.conflicts as ConflictItem[] | undefined)?.find(entry => entry.itemIndex === item.itemIndex);
         if (fresh) {
           items.value = items.value.map(entry => entry === item ? { ...entry, ...fresh, conflictId: item.conflictId } : entry);
-          cardNotice.value = { ...cardNotice.value, [id(item)]: `${whoOf(fresh)} 又修改了一次，请重新确认。` };
+          // K1-M1：这次是你自己在正文里改了这一段（如重新打开后），不能算到对方名下，并说清“保留我的”会换掉正文里的这次修改
+          cardNotice.value = { ...cardNotice.value, [id(item)]: fresh.theirs?.latestBySelf
+            ? "你刚在正文里也改了这一段（卡片上方“已在正文中”的版本已更新）。「保留我的」会用你的冲突版本替换正文这一段，正文里的这次修改会被换掉；两边都要留下请用「手动合并」或「两段都保留」。"
+            : `${whoOf(fresh)} 又修改了一次，请重新确认。` };
         }
         return;
       }
