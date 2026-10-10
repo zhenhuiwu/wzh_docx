@@ -46,6 +46,7 @@ def test_multi_paragraph_cell_edit_reports_location(document_context):
                          json={"expectedRevision": 0, "markdownContent": markdown}, headers=headers)
     assert saved.status_code == 422
     error = saved.json()["error"]
-    assert error["code"] == "AI_FORMAT_INVALID"
+    assert error["code"] == "WORD_BLOCK_PROTECTED"  # 测试 L3
+    assert error["details"]["reason"].startswith("表格第 2 行第 2 列包含多段文字")
     assert error["details"]["location"] == {"headingPath": ["封面"], "ordinal": 1, "kind": "table", "label": None}
     assert error["message"].startswith("封面 · 第 1 个表格：表格第 2 行第 2 列包含多段文字")

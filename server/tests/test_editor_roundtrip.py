@@ -69,7 +69,8 @@ def _tables_xml(path: Path) -> list[str]:
 def test_template_roundtrip_is_identity(page, path):
     parsed, html = _editor_html(path)
     markdown = page.evaluate("([h, i]) => window.roundtrip(h, i)", [html, parsed.images])
-    assert markdown.splitlines() == parsed.markdown.expandtabs(4).splitlines() or markdown == parsed.markdown
+    # 测试 L4：编辑区保留行内制表符，往返必须逐字节一致（不再容忍 \t→空格）。
+    assert markdown == parsed.markdown
     _check(markdown, path, parsed.images)
 
 

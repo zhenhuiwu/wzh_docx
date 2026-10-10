@@ -338,18 +338,26 @@ def _check_word(connection, row, content: str, *, images: list[dict] | None = No
         raise word_format_error(content, exc) from None
 
 
+# 测试 L3：原稿某段无法安全写回是“结构类”问题，不是 AI 输出格式问题；手工保存也会遇到。
+WORD_BLOCK_PROTECTED = "WORD_BLOCK_PROTECTED"
+WORD_WRITE_CODES = frozenset({"AI_FORMAT_INVALID", WORD_BLOCK_PROTECTED})
+
+
 def word_format_error(content: str, exc: ValueError) -> AppError:
-    """422 AI_FORMAT_INVALID with the failing block's location (01 §4.10)."""
+    """422 WORD_BLOCK_PROTECTED with the failing block's location (01 §4.10)."""
     from app.docx_export import _html_blocks
     from app.document_location import compute_locations, html_block_items, location_text
     index = getattr(exc, "block_index", None)
     if index is None:
-        return AppError(422, "AI_FORMAT_INVALID", str(exc))
+        return AppError(422, WORD_BLOCK_PROTECTED, str(exc))
     try:
-        location = compute_locations(html_block_items(_html_blocks(content)))[index]
+        blocks = _html_blocks(content)
+        location = compute_locations(html_block_items(blocks))[index]
+        block_text = " ".join("".join(blocks[index].itertext()).split())
     except (IndexError, ValueError):
-        return AppError(422, "AI_FORMAT_INVALID", str(exc))
-    return AppError(422, "AI_FORMAT_INVALID", f"{location_text(location)}：{exc}", details={"location": location})
+        return AppError(422, WORD_BLOCK_PROTECTED, str(exc))
+    # details.reason 只写原因，界面说明条用它避免位置写两遍（界面验收 S8）；message 保留位置给其他入口。
+    return AppError(422, WORD_BLOCK_PROTECTED, f"{location_text(location)}：{exc}", details={"location": location, "reason": str(exc), "blockText": block_text[:2000]})
 
 
 def _content_result(request: Request, row: dict) -> dict[str, object]:
@@ -847,7 +855,7 @@ def _section_adoption_modes(connection, row, index: int, content: str, instructi
             updated = _section_update(row, index, content, mode, instruction)
             _check_word(connection, row, updated)
         except (AppError, DraftFormatError) as exc:
-            if isinstance(exc, AppError) and exc.code != "AI_FORMAT_INVALID":
+            if isinstance(exc, AppError) and exc.code not in WORD_WRITE_CODES:
                 raise
             failures.append(exc)
         else:

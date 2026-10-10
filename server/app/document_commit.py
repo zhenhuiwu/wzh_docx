@@ -313,7 +313,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
             try:
                 check_word(merged)
             except AppError as error:
-                if error.code != "AI_FORMAT_INVALID" or not merged_flag:
+                if error.code not in {"AI_FORMAT_INVALID", "WORD_BLOCK_PROTECTED"} or not merged_flag:
                     raise
                 item = _whole_item(0, "FORMAT", mine_md, theirs, base_md)
                 if error.details and error.details.get("location"):

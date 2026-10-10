@@ -17,7 +17,7 @@ export function classifyResolveError(error: { status?: number; code?: string }):
   if (error.status === 409 && error.code === "CONFLICT_ALREADY_RESOLVED") return "archive";
   if (error.status === 409 && error.code === "OBJECT_CONFLICT") return "reconflict";
   if (!error.status || error.status === 502 || error.status === 504 || (error.status === 503 && error.code !== "AI_UNAVAILABLE")) return "retry";
-  if (error.status === 422 && error.code === "AI_FORMAT_INVALID") return "format";
+  if (error.status === 422 && (error.code === "AI_FORMAT_INVALID" || error.code === "WORD_BLOCK_PROTECTED")) return "format";
   return "error";
 }
 

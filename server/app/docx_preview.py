@@ -33,6 +33,32 @@ _ALLOWED_TAGS = {
     "thead", "tbody", "tr", "th", "td", "br", "strong", "em", "code", "pre",
     "blockquote", "a", "img", "hr", "del", "s", "span",
 }
+_FIELD_LIKE = (
+    ".//w:fldChar|.//w:fldSimple|.//w:hyperlink|.//w:footnoteReference|.//w:endnoteReference"
+    "|.//m:oMath|.//w:sdt|.//w:br[@w:type='page' or @w:type='column']"
+)
+# 测试 L4：Python-Markdown 会把制表符展开成空格，编辑区再存回去时 \t 就变成了空格。
+# 行内（行首非空白之后）的制表符先换成非字符占位，渲染后在文本里还原成 \t（行首缩进不动）。
+_TAB_MARK = "\ufdef"
+
+
+def _hide_inline_tabs(markdown_text: str) -> str:
+    def line(text: str) -> str:
+        stripped = text.lstrip(" \t")
+        lead = text[:len(text) - len(stripped)]
+        return lead + stripped.replace("\t", _TAB_MARK)
+    return "".join(line(part) for part in markdown_text.splitlines(keepends=True))
+
+
+def _restore_inline_tabs(root) -> None:
+    for node in root.iter():
+        if isinstance(node.tag, str):
+            if node.text and _TAB_MARK in node.text:
+                node.text = node.text.replace(_TAB_MARK, "\t")
+            if node.tail and _TAB_MARK in node.tail:
+                node.tail = node.tail.replace(_TAB_MARK, "\t")
+
+
 _DROP_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math", "form", "input", "button"}
 _COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 _IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -482,8 +508,9 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied), outline_headings=outline_headings)
         doc = Document(edited)
         root = html.Element("div")
-        for block in _html_blocks(current_markdown):
+        for block in _html_blocks(_hide_inline_tabs(current_markdown)):
             root.append(block)
+        _restore_inline_tabs(root)
         _sanitize(root)
         target = list(root)
         flat = any((_list_info(paragraph) or ("", 0))[1] for paragraph in doc.paragraphs) and not any(
@@ -520,6 +547,11 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
             else:
                 paragraph = Paragraph(block.elements[0], doc)
                 _decorate_paragraph(node, [paragraph], theme)
+                if block.elements[0].xpath(_FIELD_LIKE):
+                    # 测试 L3：目录行、域、超链接等写回 Word 会被拒绝，编辑区里直接设为只读并说明。
+                    node.set("contenteditable", "false")
+                    node.set("data-word-protected", "1")
+                    node.set("title", "此段含目录、域或链接等 Word 内容，不能在这里修改；请在原稿中修改。")
                 # Legacy Normal+numPr stays a p in Markdown.  A CSS pseudo
                 # marker can show its native number without changing textContent.
                 numbering_css, marker = _numbering(paragraph, counters)

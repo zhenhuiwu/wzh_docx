@@ -35,6 +35,13 @@ _PROTECTED_INLINE = (
     "|.//w:footnoteReference|.//w:endnoteReference|.//m:oMath|.//w:sdt"
     "|.//w:bookmarkStart|.//w:bookmarkEnd|.//w:br[@w:type='page' or @w:type='column']"
 )
+# 改写段落文字时书签不承载内容，原样保留（界面验收 M1：438C“文档标识号”行只含一个 OLE_LINK 书签）。
+# 删除整段时仍按 _PROTECTED_INLINE 保守拒绝（书签可能被 REF 域引用）。
+_PROTECTED_EDIT = (
+    ".//w:drawing|.//w:pict|.//w:object|.//w:hyperlink|.//w:fldChar|.//w:fldSimple"
+    "|.//w:footnoteReference|.//w:endnoteReference|.//m:oMath|.//w:sdt"
+    "|.//w:br[@w:type='page' or @w:type='column']"
+)
 
 
 class WordEditError(ValueError):
@@ -233,7 +240,7 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
     target_inline = _key(target)[-1]
     if paragraph.text == new_text and source_inline == target_inline:
         return
-    if paragraph._p.xpath(_PROTECTED_INLINE):
+    if paragraph._p.xpath(_PROTECTED_EDIT):
         raise ValueError("此段包含图片、链接、域或复杂 Word 内容，无法安全替换；请在原稿中修改该段。")
 
     runs = paragraph.runs
@@ -286,7 +293,12 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
             groups[-1][1] += char
         else:
             groups.append([key, char])
+    # 书签不随 clear() 丢失：开始标记放回段首、结束标记放回段尾（与段内文字无关）。
+    starts = [deepcopy(node) for node in paragraph._p.xpath("./w:bookmarkStart")]
+    ends = [deepcopy(node) for node in paragraph._p.xpath("./w:bookmarkEnd")]
     paragraph.clear()
+    for node in reversed(starts):
+        paragraph._p.insert(1 if paragraph._p.pPr is not None else 0, node)
     for (owner, bold, italic), text in groups:
         original = runs[owner] if runs else None
         if original is not None and text == original.text and (not bold or original.bold is True) and (not italic or original.italic is True):
@@ -299,6 +311,8 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
             run.bold = True
         if italic:
             run.italic = True
+    for node in ends:
+        paragraph._p.append(node)
 
 
 def _edit_table(table: Table, target, source) -> None:

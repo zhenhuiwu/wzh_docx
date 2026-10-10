@@ -13,6 +13,7 @@ import { otherTabOpen } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, pageInstance } from "../tabIdentity";
+import { revertBlock } from "../blockRevert";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -66,7 +67,8 @@ let actionNoteTimer: number | undefined;
 // 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
 const readonly = ref(false);
 const readonlyReason = ref("");
-const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string } | null>(null);
+const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string } | null>(null);
+const revertingBlock = ref(false);
 const retrying = ref(false);
 const failures = ref(0);
 let failingSince: number | null = null;
@@ -432,7 +434,8 @@ function showEditorHtml(html: string) {
     html = html.replaceAll(`src="${image.ref}"`, `src="data:${image.content_type};base64,${image.data}"`);
   }
   if (editor.value) {
-    editor.value.innerHTML = DOMPurify.sanitize(html);
+    // 测试 L3：服务端把目录/域段落标成 contenteditable=false（data-word-protected）。
+    editor.value.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["contenteditable"] });
     paperStyle.value = {};
     try {
       const page = JSON.parse(editor.value.firstElementChild?.getAttribute("data-word-page") || "{}");
@@ -1127,8 +1130,36 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
     default: {
       retrying.value = false;
       const location = apiError.details?.location as LocationInfo | undefined;
-      blocked.value = { message: apiError.message, location, content, code: apiError.code };
+      // 界面验收 S8：位置单独显示，说明文字只用原因（details.reason），不再写两遍。
+      const reason = typeof apiError.details?.reason === "string" ? apiError.details.reason : apiError.message;
+      const blockText = typeof apiError.details?.blockText === "string" ? apiError.details.blockText : undefined;
+      blocked.value = { message: location ? reason : apiError.message, location, content, code: apiError.code, blockText };
     }
+  }
+}
+/** 界面验收 M1：把卡住保存的那一段换回上次保存的原文，其余修改照常保存。 */
+async function revertBlockedBlock() {
+  const record = document.value, failed = blocked.value;
+  if (!record || !failed?.blockText || revertingBlock.value) return;
+  const reverted = revertBlock(savedContent.value, markdownContent.value, failed.blockText);
+  if (reverted === null) {
+    noteAction("没能自动找到这一段，请手动改回这一段，或先下载你的修改。", 8000);
+    return;
+  }
+  revertingBlock.value = true;
+  try {
+    if (savePromise) await savePromise.catch(() => undefined);
+    markdownContent.value = reverted;
+    blocked.value = null;
+    failures.value = 0;
+    failingSince = null;
+    await saveContent(reverted, "manual");
+    if (!blocked.value && !isDirty.value && document.value === record) {
+      await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
+      noteAction("已撤销这一段的修改，其余修改已保存。");
+    }
+  } finally {
+    revertingBlock.value = false;
   }
 }
 function retryNow() {
@@ -1197,7 +1228,7 @@ async function pasteContent(event: ClipboardEvent) {
   if (aiLocked.value || addingHeading.value || !event.clipboardData) return;
   const html = event.clipboardData.getData("text/html");
   // S7：对象 ID / 选区 ID 不随粘贴复制（否则产生重复 ID，01 §6.2）
-  if (html) window.document.execCommand("insertHTML", false, DOMPurify.sanitize(html, { FORBID_ATTR: ["style", "class", "id", "data-object-id", "data-object-revision", "data-selection-id"] }));
+  if (html) window.document.execCommand("insertHTML", false, DOMPurify.sanitize(html, { FORBID_ATTR: ["style", "class", "id", "data-object-id", "data-object-revision", "data-selection-id", "contenteditable", "data-word-protected"] }));
   else window.document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
   onEditorInput();
   await refreshEditorFormatting();
@@ -1522,6 +1553,7 @@ onUnmounted(() => {
         <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
         <span class="acts">
           <button v-if="blocked.location" type="button" class="ghost" @click="locateBlocked">定位</button>
+          <button v-if="blocked.blockText && !readonly" type="button" class="ghost" data-testid="revert-block" :disabled="revertingBlock" @click="revertBlockedBlock">{{ revertingBlock ? '正在撤销…' : '撤销这一段的修改' }}</button>
           <button v-if="!readonly" type="button" class="ghost" @click="retryNow">重试保存</button>
           <button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button>
         </span>
@@ -1756,6 +1788,7 @@ onUnmounted(() => {
 .paper-content :deep(th) { background:var(--desk); font-weight:600; }
 .paper-content :deep(img) { display:block; max-width:100%; max-height:calc(var(--space-7) * 14); width:auto; height:auto; object-fit:contain; margin:var(--space-4) auto; }
 .paper-content :deep(a) { color:var(--stamp); }
+.paper-content :deep([data-word-protected]) { cursor:not-allowed; color:var(--text-secondary); background:var(--bg-subtle); }
 .paper-content :deep([data-word-marker])::before { content:attr(data-word-marker); display:inline-block; margin-right:var(--space-2); }
 button:focus-visible { outline:var(--space-1) solid var(--focus-ring); outline-offset:var(--space-1); }
 </style>
