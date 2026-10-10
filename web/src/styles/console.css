@@ -1164,9 +1164,10 @@ dialog::backdrop {
 .search-box .control { width: 100%; padding-left: 32px; }
 
 /* 迁移期兼容：文档编辑工作台子组件仍按旧按钮写法（块级、文字左对齐）。
- * 新按钮是 inline-flex 居中，这里恢复左对齐；阶段2 合并后随工作台重做一并删除。 */
+ * 新按钮是 inline-flex 居中，这里恢复左对齐；阶段2 合并后随工作台重做一并删除。
+ * 只按类名匹配（DocumentWorkbenchView 的 .outline-item、DocumentDiagrams 根元素 .diagram-dialog），不依赖界面文案。 */
 .outline-item.ghost,
-nav[aria-label="已有图表"] > .ghost {
+.diagram-dialog nav > .ghost {
   justify-content: flex-start;
   text-align: left;
 }

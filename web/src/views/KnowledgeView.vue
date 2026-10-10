@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import StatePanel from "../components/StatePanel.vue";
+import { hasPermission, readSession } from "../session";
+
+const canManage = computed(() => hasPermission(readSession(), "knowledge.manage"));
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { getCurrentSession } from "../api/identity";
@@ -92,7 +95,7 @@ onMounted(async () => {
   <section class="view fill">
     <header class="page-head">
       <div><h1>知识库</h1><p class="page-desc">只显示你有权查看的知识库。上传成功还不等于可以检索；公司资料格式和检索范围尚未确定。</p></div>
-      <div class="page-actions"><button type="button" class="primary" :disabled="creating" @click="creating = true"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建知识库</button></div>
+      <div v-if="canManage" class="page-actions"><button type="button" class="primary" :disabled="creating" @click="creating = true"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建知识库</button></div>
     </header>
     <div class="card kb-card">
       <form class="query" @submit.prevent="load">

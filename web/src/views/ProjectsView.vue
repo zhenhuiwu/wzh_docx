@@ -6,6 +6,12 @@ import { createProject, listProjects, listProjectOwners, type ProjectOwner, type
 import { projectStatuses, statusLabel } from "../projects";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
+import { hasPermission, readSession } from "../session";
+
+// 只有能建项目的角色显示“新建项目”（审计员等只读角色不显示，09 审查 S3）。
+const canCreate = computed(() => hasPermission(readSession(), "projects.create"));
+// 没有项目读取权限（仅项目成员、模板/知识维护者）时按“还没有加入项目”展示，不给“重试”。
+const noAccess = ref(false);
 
 const statusTone: Record<ProjectRecord["status"], string> = { not_started: "", active: "success", paused: "warning", completed: "info" };
 
@@ -39,6 +45,7 @@ function messageOf(error: unknown) {
 async function load() {
   phase.value = "loading";
   errorText.value = "";
+  noAccess.value = false;
   try {
     const result = await listProjects({ page: page.value, pageSize: pageSize.value, name: applied.value.name, status: applied.value.status });
     projects.value = result.items;
@@ -48,6 +55,7 @@ async function load() {
     phase.value = "ready";
   } catch (error) {
     phase.value = "error";
+    noAccess.value = error instanceof ApiError && error.status === 403;
     errorText.value = messageOf(error);
   }
 }
@@ -160,7 +168,7 @@ onMounted(async () => {
         <p class="page-desc">查看你参与的项目，进入项目编写文档。</p>
       </div>
       <div class="page-actions">
-        <button type="button" class="primary" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建项目</button>
+        <button v-if="canCreate" type="button" class="primary" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建项目</button>
       </div>
     </header>
     <div class="card project-surface">
@@ -170,8 +178,9 @@ onMounted(async () => {
         <div class="query-actions"><button type="submit" class="primary" :disabled="phase === 'loading'">查询</button><button type="button" class="ghost" :disabled="phase === 'loading'" @click="resetQuery">重置</button></div>
       </form>
       <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取项目…" />
+      <StatePanel v-else-if="phase === 'error' && noAccess" title="你还没有加入任何项目" text="项目负责人把你加入项目后，项目会出现在这里。" />
       <StatePanel v-else-if="phase === 'error'" kind="error" title="项目加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
-      <StatePanel v-else-if="projects.length === 0" :title="hasFilters ? '没有找到项目' : '还没有项目'" :text="hasFilters ? '换个名称或状态试试。' : '新建项目后即可在项目中编写文档。'"><button type="button" :class="hasFilters ? 'ghost' : 'primary'" @click="hasFilters ? resetQuery() : openCreate()">{{ hasFilters ? "清除筛选" : "新建项目" }}</button></StatePanel>
+      <StatePanel v-else-if="projects.length === 0" :title="hasFilters ? '没有找到项目' : '还没有项目'" :text="hasFilters ? '换个名称或状态试试。' : canCreate ? '新建项目后即可在项目中编写文档。' : '项目负责人把你加入项目后，项目会出现在这里。'"><button v-if="hasFilters || canCreate" type="button" :class="hasFilters ? 'ghost' : 'primary'" @click="hasFilters ? resetQuery() : openCreate()">{{ hasFilters ? "清除筛选" : "新建项目" }}</button></StatePanel>
       <div v-else class="table-wrap project-list">
         <table>
           <colgroup><col class="col-name" /><col class="col-owner" /><col class="col-dept" /><col class="col-status" /><col class="col-time" /><col class="col-ops" /></colgroup>
