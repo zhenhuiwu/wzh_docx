@@ -570,12 +570,20 @@ def s_tablist(ctx: Run, page):
 
 
 # —— F-L1 缺口：载入锁定期间不经按键的直接上屏 / 组字 ——
+STRETCH_LOCK = """(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 ? 2500 : ms, ...rest); })()"""
+
+
 def load_lock_round(ctx: Run, page, mode: str, n: int) -> dict:
+    """载入锁定窗口真实只有约 250ms（打开时等其他标签回报的 PRESENCE_WAIT_MS），测试里把这一个 250ms 等待拉长到 2.5s 以稳定打中。"""
     mark = f"【载入{mode}{n}】"
+    if not getattr(page, "_stretched", False):
+        page.context.add_init_script(STRETCH_LOCK)
+        page._stretched = True
     for attempt in range(6):
         selfconf.PARAS = [f"第{i}段：原始内容 {i}。" for i in range(1, 9)]
         doc_id = selfconf.make_doc(ctx.data, f"方案C载入锁定{mode}{n}-{attempt}-{time.strftime('%H%M%S')}", 0)
-        page.goto(f"{base.WEB}/projects/{ctx.data['project']['id']}/documents/{doc_id}")
+        # goto 默认等 load 事件，那时锁定早已结束：只等到提交导航
+        page.goto(f"{base.WEB}/projects/{ctx.data['project']['id']}/documents/{doc_id}", wait_until="commit")
         try:
             page.wait_for_selector(".paper-content[contenteditable='false'] p", state="attached", timeout=30000)
         except Exception:  # noqa: BLE001 - 锁定窗口太短没等到：这次不算，重来
