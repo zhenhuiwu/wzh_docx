@@ -348,6 +348,53 @@ def test_only_system_admin_can_grant_system_admin(
     _reset("dev04-useradmin")
 
 
+
+def test_cannot_grant_role_beyond_own_permissions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """通用路径：只有账号管理权限的角色，不能授予比自己权限多的角色（新建与改角色两条入口）。"""
+    from app import permissions
+
+    monkeypatch.setitem(
+        permissions._ROLE_PERMISSIONS,
+        "test_users_only",
+        frozenset({"users.read", "users.manage"}),
+    )
+    _reset("dev04-usersonly")
+    _reset("dev04-beyond")
+    _reset("dev04-beyond-ok")
+    create_user(account="dev04-usersonly", name="仅账号管理", password=PASSWORD, roles=["auditor"])
+    with connect() as connection:
+        with connection.transaction():
+            row = connection.execute(
+                "select id from users where account_key = 'dev04-usersonly'"
+            ).fetchone()
+            connection.execute("delete from user_roles where user_id = %s", (row["id"],))
+            connection.execute(
+                "insert into user_roles (user_id, role) values (%s, 'test_users_only')",
+                (row["id"],),
+            )
+    csrf = _login(client, "dev04-usersonly")
+
+    denied = _create(client, csrf, "dev04-beyond", "dev04-beyond", ["project_creator"])
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["error"]["message"] == "不能分配超出自己权限的角色。"
+    assert client.get("/api/v1/users", params={"account": "dev04-beyond"}).json()["data"]["items"] == []
+
+    # 不授予全局角色的账号仍可创建；之后给它改角色同样受限。
+    created = _create(client, csrf, "dev04-beyond-ok", "dev04-beyond-ok", [])
+    assert created.status_code == 201, created.text
+    user = created.json()["data"]
+    changed = client.put(
+        f"/api/v1/users/{user['id']}/roles",
+        json={"expectedRevision": user["revision"], "globalRoles": ["project_creator"], "reason": "越权尝试"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert changed.status_code == 403, changed.text
+    assert changed.json()["error"]["message"] == "不能分配超出自己权限的角色。"
+    _reset("dev04-usersonly")
+
+
 def test_idempotent_replay_treats_missing_and_empty_roles_alike(client: TestClient) -> None:
     _reset("dev04-replay")
     csrf = _admin(client)
