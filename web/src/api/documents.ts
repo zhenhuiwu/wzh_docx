@@ -1,4 +1,5 @@
 import { apiRequest, ApiError } from "./client";
+import { rememberCrumb } from "../crumbs";
 
 export interface DocumentRecord {
   id: string;
@@ -98,6 +99,8 @@ export async function createDocument(
 export async function getDocument(id: string): Promise<DocumentRecord> {
   const body = await apiRequest<{ data: DocumentRecord }>(`/documents/${id}`);
   if (!body?.data) throw new Error("文档响应不完整。");
+  // 顺带登记面包屑的文档名：工作台自己读取文档时即可显示，顶栏不再重复请求（09 复审 R6）。
+  rememberCrumb(`document:${body.data.id}`, body.data.name);
   return body.data;
 }
 

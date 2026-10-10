@@ -2,11 +2,12 @@
 import { computed, onMounted, ref } from "vue";
 import StatePanel from "../components/StatePanel.vue";
 import { useRoute } from "vue-router";
-import { ApiError } from "../api/client";
+import { ApiError, isMissingResource } from "../api/client";
 import { uploadFile } from "../api/files";
 import { createSource, getKnowledgeBase, listSources, type KnowledgeBase, type SourceVersion } from "../api/knowledge";
 import FilePicker from "../components/FilePicker.vue";
 import { rememberCrumb } from "../crumbs";
+import { hasPermission, readSession } from "../session";
 
 const route = useRoute();
 const baseId = computed(() => String(route.params.id));
@@ -20,6 +21,7 @@ const file = ref<File | null>(null);
 const submitting = ref(false);
 const tab = ref<"materials" | "search">("materials");
 const notFound = ref(false);
+const canManage = computed(() => hasPermission(readSession(), "knowledge.manage"));
 
 async function load() {
   phase.value = "loading";
@@ -31,7 +33,7 @@ async function load() {
     phase.value = "ready";
   } catch (error) {
     phase.value = "error";
-    notFound.value = error instanceof ApiError && error.status === 404;
+    notFound.value = isMissingResource(error);
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   }
 }
@@ -83,7 +85,8 @@ onMounted(() => void load());
       </nav>
       <StatePanel v-if="tab === 'search'" title="检索尚未接入" text="未发布和未解析的资料不会出现在检索结果里。" />
       <template v-else>
-        <form class="query upload" @submit.prevent="submitFile">
+        <!-- 登记资料按 knowledge.manage 显隐（09 复审 R5） -->
+        <form v-if="canManage" class="query upload" @submit.prevent="submitFile">
           <div class="query-fields">
             <label><span>资料名称</span><input v-model="name" class="control" type="text" :disabled="submitting" /></label>
             <label><span>文件</span><FilePicker class="file" :file="file" :disabled="submitting" @change="picked => { file = picked; }" /></label>
@@ -91,7 +94,7 @@ onMounted(() => void load());
           <div class="query-actions"><button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button></div>
         </form>
         <p v-if="notice" class="notice" role="status">{{ notice }}</p>
-        <StatePanel v-if="sources.length === 0" title="还没有资料" text="选择文件并登记后，资料会出现在这里。" />
+        <StatePanel v-if="sources.length === 0" title="还没有资料" :text="canManage ? '选择文件并登记后，资料会出现在这里。' : '知识库维护者登记资料后，资料会出现在这里。'" />
         <div v-else class="table-wrap kb-table">
           <table>
             <thead>

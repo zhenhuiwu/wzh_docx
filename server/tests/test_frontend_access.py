@@ -39,9 +39,26 @@ PENDING_PHASE2 = {"projects"}
 
 
 def _node() -> str:
+    """找 Node.js 22.6+（需要 --experimental-strip-types）。
+
+    本地缺 Node 时跳过；设置 DOCWB_REQUIRE_NODE=1（CI 后端 job 已设置）时改为失败，
+    避免一致性检查在 CI 里悄悄失效（09 复审 R2）。
+    """
     node = shutil.which("node")
-    if not node:
-        pytest.skip("需要 Node.js 22")
+    problem = "" if node else "找不到 node"
+    if node:
+        version = subprocess.run([node, "--version"], capture_output=True, text=True, check=False).stdout.strip()
+        try:
+            major, minor = (int(part) for part in version.lstrip("v").split(".")[:2])
+        except ValueError:
+            major, minor = 0, 0
+        if (major, minor) < (22, 6):
+            problem = f"Node.js 版本过低：{version or '未知'}"
+    if problem:
+        message = f"权限一致性检查需要 Node.js 22.6+（{problem}）"
+        if os.environ.get("DOCWB_REQUIRE_NODE") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
     return node
 
 

@@ -145,3 +145,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
     window.clearTimeout(timer);
   }
 }
+
+/**
+ * 按路径 id 读取对象时的“不存在”口径：404，以及 id 格式不合法时的 422（如 /projects/abc），
+ * 都按“不存在或无权访问”处理，不显示无意义的重试（09 复审 R4）。只用于按路径 id 的读取请求。
+ */
+export function isMissingResource(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 422);
+}

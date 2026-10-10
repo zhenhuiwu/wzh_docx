@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
-import { ApiError } from "../api/client";
+import { ApiError, isMissingResource } from "../api/client";
 import { documentStatusLabel, listDocuments, createDocument, type DocumentPermissions, type DocumentRecord } from "../api/documents";
 import { accessText } from "../saveModel";
 import StatePanel from "../components/StatePanel.vue";
@@ -91,9 +91,9 @@ async function load() {
     if (request !== listRequest || target !== projectId.value) return;
     phase.value = "error";
     // 02 P0-4：非成员与不存在不区分，不显示“重试”。
-    notFound.value = error instanceof ApiError && error.status === 404;
+    notFound.value = isMissingResource(error);
     accessDenied.value = error instanceof ApiError && error.status === 403;
-    errorText.value = notFound.value || accessDenied.value ? accessText(error as ApiError) : messageOf(error);
+    errorText.value = notFound.value ? "项目不存在或你无权访问。" : accessDenied.value ? accessText(error as ApiError) : messageOf(error);
   }
 }
 
