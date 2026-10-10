@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import DOMPurify from "dompurify";
 import { getDocumentVersion, listDocumentVersions, restoreDocumentVersion, type DocumentContentResult, type DocumentVersion, type DocumentVersionDetail } from "../api/documents";
 
-const props = defineProps<{ documentId: string; revision: number }>();
+const props = defineProps<{ documentId: string; revision: number; restoreBlockedReason?: string }>();
 const emit = defineEmits<{ close: []; restored: [result: DocumentContentResult]; busy: [value: boolean] }>();
 const items = ref<DocumentVersion[]>([]);
 const offset = ref(0);
@@ -45,6 +45,7 @@ async function load(next = 0) {
   finally { loading.value = false; }
 }
 async function restore() {
+  if (props.restoreBlockedReason) return;
   if (!detail.value || restoring.value || detail.value.revision === props.revision) return;
   restoring.value = true; emit("busy", true); detailError.value = "";
   try { emit("restored", await restoreDocumentVersion(props.documentId, detail.value.revision, props.revision)); }
@@ -71,7 +72,7 @@ onMounted(() => void load());
       <div v-if="detailError"><p class="history-error" role="alert">{{ detailError }}</p><button v-if="!detail" type="button" class="ghost" @click="load(offset)">重试</button></div>
       <template v-if="detail">
         <div class="version-preview" aria-label="历史版本正文" v-html="html"></div>
-        <footer><button type="button" class="primary" :disabled="restoring || detail.revision === revision" @click="restore">{{ restoring ? '恢复中…' : '恢复此版本' }}</button></footer>
+        <footer><p v-if="restoreBlockedReason" class="history-hint">{{ restoreBlockedReason }}</p><button type="button" class="primary" :disabled="restoring || detail.revision === revision || Boolean(restoreBlockedReason)" :title="restoreBlockedReason || undefined" @click="restore">{{ restoring ? '恢复中…' : '恢复此版本' }}</button></footer>
       </template>
     </template>
   </aside>
@@ -81,6 +82,7 @@ onMounted(() => void load());
 .history-panel { display:flex; flex-direction:column; gap:var(--space-3); min-height:0; min-width:0; padding:var(--space-5) var(--space-4); background:var(--sheet); border-left:1px solid var(--rule); font-family:var(--font); font-size:var(--text-sm); }
 header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
+.history-hint { margin:0 0 var(--space-2); color:var(--warning-700, var(--muted)); font-size:var(--text-sm); }
 p { margin:0; color:var(--ink-secondary); }
 .version-list { display:flex; flex-direction:column; gap:var(--space-1); }
 .version-list button { display:flex; justify-content:space-between; flex-wrap:wrap; gap:var(--space-2); text-align:left; height:auto; min-height:var(--space-6); padding:var(--space-2); font-size:var(--text-sm); font-weight:400; }

@@ -37,6 +37,14 @@ _PROTECTED_INLINE = (
 )
 
 
+class WordEditError(ValueError):
+    """A Word write-back failure tied to one Markdown top-level block (01 §4.10)."""
+
+    def __init__(self, message: str, block_index: int | None):
+        super().__init__(message)
+        self.block_index = block_index
+
+
 def _remove_element(element) -> None:
     if element.xpath(_PROTECTED_INLINE + "|.//w:sectPr|.//w:gridSpan|.//w:vMerge"):
         raise ValueError("此内容包含图片、域、合并单元格或分节信息，无法安全删除；请在原稿中修改。")
@@ -639,43 +647,79 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
     ):
         if operation == "equal":
             continue
-        old_blocks = blocks[old_start:old_end]
-        new_blocks = target[new_start:new_end]
-        if (old_blocks and new_blocks and len(old_blocks) != len(new_blocks)
-                and all(block.tag == "p" and len(block.elements) == 1 for block in old_blocks)
-                and all(element.tag == "p" and not _key(element)[2]
-                        for element in source[old_start:old_end] + new_blocks)):
-            resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
-            for block, old, new in zip(resized, previous, new_blocks):
-                _edit_block(doc, block, new, old)
-            continue
-        prefix = 0
-        while (prefix < min(len(old_blocks), len(new_blocks))
-               and old_blocks[prefix].tag == new_blocks[prefix].tag
-               and _key(source[old_start + prefix])[2] == _key(new_blocks[prefix])[2]):
-            _edit_block(doc, old_blocks[prefix], new_blocks[prefix], source[old_start + prefix])
-            prefix += 1
-        suffix = 0
-        while (suffix < min(len(old_blocks), len(new_blocks)) - prefix
-               and old_blocks[-1 - suffix].tag == new_blocks[-1 - suffix].tag
-               and _key(source[old_end - 1 - suffix])[2] == _key(new_blocks[-1 - suffix])[2]):
-            _edit_block(doc, old_blocks[-1 - suffix], new_blocks[-1 - suffix], source[old_end - 1 - suffix])
-            suffix += 1
-        old_blocks = old_blocks[prefix:len(old_blocks) - suffix if suffix else len(old_blocks)]
-        new_blocks = new_blocks[prefix:len(new_blocks) - suffix if suffix else len(new_blocks)]
-        anchor = (blocks[old_end - suffix].elements[0] if suffix else next(
-            (element for block in blocks[old_end:] for element in block.elements
-             if element.getparent() is not None),
-            doc.element.body.sectPr,
-        ))
-        for block in old_blocks:
-            for element in block.elements:
-                if element.getparent() is not None:
-                    _remove_element(element)
-        for element in new_blocks:
-            _insert_block(doc, element, anchor, image_sources=image_sources, outline_headings=outline_headings)
-            if element.tag == "p" and element.xpath('./img[starts-with(@src,"docx-image:test-")]'):
-                test_pictures.append(anchor.getprevious())
+        try:
+            _apply_operation(doc, blocks, source, target, old_start, old_end, new_start, new_end,
+                             image_sources, outline_headings, test_pictures)
+        except WordEditError:
+            raise
+        except ValueError as exc:
+            raise WordEditError(str(exc), _failing_index(exc, new_start, new_end, len(target))) from None
+    _finish_document(doc, test_pictures)
+    doc.save(output_path)
+
+
+def _failing_index(exc: ValueError, new_start: int, new_end: int, total: int) -> int | None:
+    index = getattr(exc, "block_index", None)
+    if index is not None:
+        return index
+    if new_end > new_start:
+        return new_start
+    return min(new_start, total - 1) if total else None
+
+
+def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start, new_end,
+                     image_sources, outline_headings, test_pictures) -> None:
+    old_blocks = blocks[old_start:old_end]
+    new_blocks = target[new_start:new_end]
+    if (old_blocks and new_blocks and len(old_blocks) != len(new_blocks)
+            and all(block.tag == "p" and len(block.elements) == 1 for block in old_blocks)
+            and all(element.tag == "p" and not _key(element)[2]
+                    for element in source[old_start:old_end] + new_blocks)):
+        resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
+        for offset, (block, old, new) in enumerate(zip(resized, previous, new_blocks)):
+            _located(new_start + offset, _edit_block, doc, block, new, old)
+        return
+    prefix = 0
+    while (prefix < min(len(old_blocks), len(new_blocks))
+           and old_blocks[prefix].tag == new_blocks[prefix].tag
+           and _key(source[old_start + prefix])[2] == _key(new_blocks[prefix])[2]):
+        _located(new_start + prefix, _edit_block, doc, old_blocks[prefix], new_blocks[prefix], source[old_start + prefix])
+        prefix += 1
+    suffix = 0
+    while (suffix < min(len(old_blocks), len(new_blocks)) - prefix
+           and old_blocks[-1 - suffix].tag == new_blocks[-1 - suffix].tag
+           and _key(source[old_end - 1 - suffix])[2] == _key(new_blocks[-1 - suffix])[2]):
+        _located(new_end - 1 - suffix, _edit_block, doc, old_blocks[-1 - suffix], new_blocks[-1 - suffix],
+                 source[old_end - 1 - suffix])
+        suffix += 1
+    old_blocks = old_blocks[prefix:len(old_blocks) - suffix if suffix else len(old_blocks)]
+    new_blocks = new_blocks[prefix:len(new_blocks) - suffix if suffix else len(new_blocks)]
+    anchor = (blocks[old_end - suffix].elements[0] if suffix else next(
+        (element for block in blocks[old_end:] for element in block.elements
+         if element.getparent() is not None),
+        doc.element.body.sectPr,
+    ))
+    for block in old_blocks:
+        for element in block.elements:
+            if element.getparent() is not None:
+                _remove_element(element)
+    for offset, element in enumerate(new_blocks):
+        _located(new_start + prefix + offset, _insert_block, doc, element, anchor,
+                 image_sources=image_sources, outline_headings=outline_headings)
+        if element.tag == "p" and element.xpath('./img[starts-with(@src,"docx-image:test-")]'):
+            test_pictures.append(anchor.getprevious())
+
+
+def _located(index: int, action, *args, **kwargs) -> None:
+    try:
+        action(*args, **kwargs)
+    except WordEditError:
+        raise
+    except ValueError as exc:
+        raise WordEditError(str(exc), index) from None
+
+
+def _finish_document(doc, test_pictures) -> None:
     # Apply after insertion so later body paragraphs do not inherit this binding.
     for picture in test_pictures:
         preceding = list(picture.itersiblings(preceding=True))[:2]
@@ -696,4 +740,3 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         for cell in header.cells:
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.keep_with_next = True
-    doc.save(output_path)

@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
+import SaveStatus from "../components/SaveStatus.vue";
+import LeaveDialog from "../components/LeaveDialog.vue";
+import { accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { listDrafts, recoverySummary, removeDraft, tabId as makeTabId, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -32,6 +36,7 @@ let originalController: AbortController | undefined;
 const markdownContent = ref("");
 const savedContent = ref("");
 const phase = ref<"loading" | "ready" | "error">("loading");
+const loadErrorStatus = ref(0);
 const errorText = ref("");
 const saving = ref(false);
 let savePromise: Promise<void> | undefined;
@@ -45,8 +50,33 @@ const skillBusy = ref(false);
 const refreshingEditor = ref(false);
 const undoingAi = ref(false);
 const aiUndo = ref<{ id: string; content: string; revision: number } | null>(null);
-const localDraft = ref<{ revision: number; content: string; html: string } | null>(null);
+const localDraft = ref<DraftV2 | null>(null);
+const localDrafts = ref<DraftV2[]>([]);
+const draftBusy = ref(false);
 const exporting = ref(false);
+const exportMenu = ref(false);
+const exportError = ref("");
+const actionNote = ref("");
+let actionNoteTimer: number | undefined;
+// 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
+const readonly = ref(false);
+const readonlyReason = ref("");
+const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string } | null>(null);
+const retrying = ref(false);
+const failures = ref(0);
+let failingSince: number | null = null;
+const online = ref(typeof navigator === "undefined" ? true : navigator.onLine);
+const savedAt = ref<number | null>(null);
+const showSaving = ref(false);
+const now = ref(Date.now());
+const storageFailed = ref(false);
+const leaveDialog = ref<{ mode: Exclude<LeaveDecision, "leave">; count: number; target: string } | null>(null);
+let leaveBypass = false;
+let retryTimer: number | undefined;
+let savingTimer: number | undefined;
+let clockTimer: number | undefined;
+let pendingKey: { content: string; key: string } | null = null;
+const browserTab = makeTabId(window.sessionStorage, () => crypto.randomUUID());
 const selectedHeading = ref<number | null>(null);
 const headingTitle = ref("");
 const headingPlacement = ref<"child" | "sibling">("child");
@@ -88,6 +118,25 @@ let autoSaveTimer: number | undefined;
 let layoutNeedsRefresh = false;
 
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
+const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
+const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : "");
+const pendingCount = computed(() => isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0);
+const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
+const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: offline.value && isDirty.value,
+  retrying: retrying.value && isDirty.value, saving: showSaving.value, dirty: isDirty.value }));
+const capsuleText = computed(() => capsuleLabel(capsule.value, { savedAt: savedAt.value, now: now.value, pending: pendingCount.value }));
+const capsuleDetail = computed(() => {
+  switch (capsule.value) {
+    case "clean": return savedAt.value ? `所有修改已保存到服务器（${new Date(savedAt.value).toLocaleTimeString("zh-CN", { hour12: false })}）` : "所有修改已保存到服务器";
+    case "dirty": return "停止输入 3 秒后自动保存，也可以按 Ctrl+S";
+    case "saving": return `正在保存 ${pendingCount.value} 处修改`;
+    case "retrying": return `第 ${failures.value} 次重试未成功，稍后自动再试。你的修改保存在本机`;
+    case "offline": return online.value ? "连不上服务器。你的修改保存在本机，恢复后会自动保存" : "网络已断开。你的修改保存在本机，联网后会自动保存";
+    case "blocked": return storageFailed.value && !blocked.value ? "浏览器存储已满，请下载你的修改" : blocked.value?.message || "保存失败";
+    case "readonly": return readonlyReason.value || "你没有修改正文的权限";
+  }
+  return "";
+});
 const outline = computed(() => documentHeadings(markdownContent.value));
 const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdownContent.value.trim()) : aiScope.value === "selection" ? Boolean(selectedText.value) : selectedHeading.value !== null);
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
@@ -110,6 +159,8 @@ async function load() {
   memoryOffset.value = 0;
   memoryHasMore.value = false;
   localDraft.value = null;
+  localDrafts.value = [];
+  resetSaveState();
   originalController?.abort();
   void pdfTask?.destroy();
   pdfTask = null;
@@ -126,6 +177,7 @@ async function load() {
   clearAiDraft();
   phase.value = "loading";
   errorText.value = "";
+  loadErrorStatus.value = 0;
   try {
     const record = await getDocument(id);
     const preview = await previewDocument(id);
@@ -138,19 +190,61 @@ async function load() {
     await nextTick();
     if (id !== documentId.value || version !== loadVersion) return;
     showEditorHtml(preview.html);
-    try {
-      const cached = JSON.parse(localStorage.getItem(draftKey(id)) || "null");
-      if (cached && typeof cached.content === "string" && typeof cached.html === "string" && Number.isInteger(cached.revision)) {
-        if (cached.content === record.markdownContent) localStorage.removeItem(draftKey(id));
-        else localDraft.value = cached;
-      }
-    } catch { /* A damaged local backup cannot replace the saved document. */ }
+    savedAt.value = Date.parse(record.updatedAt) || null;
+    findLocalDrafts(record);
     void refreshMemory();
   } catch (error) {
     if (id !== documentId.value || version !== loadVersion) return;
     phase.value = "error";
-    errorText.value = messageOf(error);
+    loadErrorStatus.value = error instanceof ApiError ? error.status : 0;
+    errorText.value = error instanceof ApiError && error.status === 404 ? accessText(error) : messageOf(error);
   }
+}
+function resetSaveState() {
+  window.clearTimeout(retryTimer);
+  window.clearTimeout(savingTimer);
+  readonly.value = false;
+  readonlyReason.value = "";
+  blocked.value = null;
+  retrying.value = false;
+  failures.value = 0;
+  failingSince = null;
+  showSaving.value = false;
+  storageFailed.value = false;
+  leaveDialog.value = null;
+  exportMenu.value = false;
+  exportError.value = "";
+  pendingKey = null;
+}
+function account() { return readSession()?.staffId || "user"; }
+function findLocalDrafts(record: DocumentRecord) {
+  const drafts = listDrafts(window.localStorage, account(), record.id)
+    .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent));
+  for (const draft of listDrafts(window.localStorage, account(), record.id)) {
+    if (draft.wholeDocument && draft.markdown === record.markdownContent) removeDraft(window.localStorage, account(), record.id, draft.tabId);
+  }
+  localDrafts.value = drafts;
+  localDraft.value = drafts[0] ?? null;
+}
+function headingPathsOf(markdown: string): string[][] {
+  // 变化块所在的章节（只用于恢复条提示，不参与保存）。
+  const base = savedContent.value.replace(/\r\n/g, "\n").split(/\n{2,}/).map(item => item.trim());
+  const known = new Set(base);
+  const paths: string[][] = [];
+  const stack: { level: number; text: string }[] = [];
+  for (const block of markdown.replace(/\r\n/g, "\n").split(/\n{2,}/).map(item => item.trim()).filter(Boolean)) {
+    const heading = /^(#{1,6})[ \t]+(.+)$/.exec(block);
+    if (heading) {
+      while (stack.length && stack[stack.length - 1].level >= heading[1].length) stack.pop();
+      stack.push({ level: heading[1].length, text: heading[2].replace(/\\([\\`*_{}\[\]<>|#])/g, "$1").trim() });
+    }
+    if (!known.has(block)) {
+      const path = stack.map(item => item.text);
+      if (!paths.some(item => item.join("/") === path.join("/"))) paths.push(path);
+      if (paths.length >= 5) break;
+    }
+  }
+  return paths;
 }
 async function refreshMemory(offset = 0) {
   const id = documentId.value;
@@ -235,7 +329,7 @@ async function acceptContent(result: DocumentContentResult) {
     }
   } finally {
     refreshingEditor.value = false;
-    if (editor.value) editor.value.contentEditable = String(!aiLocked.value && !addingHeading.value);
+    if (editor.value) editor.value.contentEditable = String(editable.value);
   }
 }
 async function addHeading() {
@@ -537,7 +631,7 @@ async function insertSection(insertMode: "append" | "replace") {
     aiError.value = messageOf(error);
   } finally {
     aiInserting.value = false;
-    if (editor.value) editor.value.contentEditable = String(!aiLocked.value && !addingHeading.value);
+    if (editor.value) editor.value.contentEditable = String(editable.value);
   }
 }
 async function undoAiChange() {
@@ -545,17 +639,16 @@ async function undoAiChange() {
   const snapshot = aiUndo.value;
   undoingAi.value = true;
   if (editor.value) editor.value.contentEditable = "false";
-  errorText.value = "";
   try {
     const result = await updateDocumentContent(snapshot.id, snapshot.revision, snapshot.content, undefined, snapshot.revision);
     aiUndo.value = null;
     await acceptContent(result);
     void refreshMemory();
   } catch (error) {
-    errorText.value = messageOf(error);
+    noteAction(`撤回失败：${messageOf(error)}`, 8000);
   } finally {
     undoingAi.value = false;
-    if (editor.value) editor.value.contentEditable = String(!aiLocked.value && !addingHeading.value);
+    if (editor.value) editor.value.contentEditable = String(editable.value);
   }
 }
 async function loadOriginal() {
@@ -643,84 +736,224 @@ function onEditorInput(event?: Event) {
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
   const html = copy.innerHTML;
   markdownContent.value = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
-  persistLocalDraft(html);
+  persistLocalDraft();
   editorVersion.value += 1;
   if (event instanceof InputEvent && ["insertParagraph", "insertFromDrop"].includes(event.inputType)) layoutNeedsRefresh = true;
   if (aiDraft.value) aiError.value = "文档已变化，请重新生成草稿。";
   window.clearTimeout(autoSaveTimer);
-  autoSaveTimer = window.setTimeout(() => void save(), 3000);
+  scheduleAutoSave();
 }
-function draftKey(id: string) { return `doc-workbench.draft:${readSession()?.staffId || 'user'}:${id}`; }
-function persistLocalDraft(html = editor.value?.innerHTML || "") {
-  if (!document.value) return;
-  try {
-    const key = draftKey(document.value.id);
-    if (!isDirty.value) localStorage.removeItem(key);
-    else localStorage.setItem(key, JSON.stringify({ revision: document.value.revision, content: markdownContent.value, html: DOMPurify.sanitize(html) }));
-  } catch { /* Server saving and navigation protection still apply when browser storage is full. */ }
-}
-function restoreLocalDraft() {
-  if (!localDraft.value || !document.value || localDraft.value.revision !== document.value.revision) return;
-  markdownContent.value = localDraft.value.content;
-  showEditorHtml(localDraft.value.html);
-  localDraft.value = null;
+function scheduleAutoSave(delay = 3000) {
   window.clearTimeout(autoSaveTimer);
-  autoSaveTimer = window.setTimeout(() => void save(), 3000);
+  autoSaveTimer = window.setTimeout(() => void save(), delay);
 }
-function discardLocalDraft() {
-  if (document.value) localStorage.removeItem(draftKey(document.value.id));
-  localDraft.value = null;
+function currentDraft(): DraftV2 | null {
+  const record = document.value;
+  if (!record) return null;
+  return {
+    v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: record.revision, savedAt: Date.now(),
+    wholeDocument: true, markdown: markdownContent.value, blocks: [], changed: pendingCount.value,
+    headingPaths: headingPathsOf(markdownContent.value), conflictsEdits: [], pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
+  };
 }
-function downloadLocalDraft() {
-  if (!localDraft.value) return;
-  const blob = new Blob([`<!doctype html><html><head><meta charset="utf-8"></head><body>${DOMPurify.sanitize(localDraft.value.html)}</body></html>`], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+/** 每次输入同步写本机草稿；没有未保存修改时删除本标签页的草稿。写入失败进入 blocked（01 §6.5 第7条）。 */
+function persistLocalDraft(): boolean {
+  const record = document.value;
+  if (!record) return false;
+  if (!isDirty.value) {
+    removeDraft(window.localStorage, account(), record.id, browserTab);
+    storageFailed.value = false;
+    return true;
+  }
+  const draft = currentDraft()!;
+  const ok = writeDraft(window.localStorage, account(), draft) === "ok";
+  storageFailed.value = !ok;
+  return ok;
+}
+/** 写入并读回校验；离开对话框是否提供“离开”取决于它（01 §6.3 第3条）。 */
+function persistAndVerify(): boolean {
+  if (!persistLocalDraft()) return false;
+  const draft = currentDraft();
+  return Boolean(draft) && verifyDraft(window.localStorage, account(), draft!);
+}
+function download(name: string, text: string, type = "text/markdown;charset=utf-8") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const link = window.document.createElement("a");
   link.href = url;
-  link.download = `${document.value?.name || '文档'}-未保存内容.html`;
+  link.download = name;
   window.document.body.appendChild(link);
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function save(): Promise<void> {
-  if (savePromise) return savePromise.then(() => isDirty.value && !errorText.value ? save() : undefined);
-  if (!document.value || !isDirty.value || aiPreviewHost.value) return Promise.resolve();
-  const record = document.value;
-  const content = markdownContent.value;
+function downloadMyChanges() {
+  if (!document.value) return;
+  download(myChangesFileName(document.value.name), markdownContent.value);
+}
+async function restoreLocalDraft() {
+  const draft = localDraft.value, record = document.value;
+  if (!draft || !record || draftBusy.value || readonly.value || !draft.markdown) return;
+  draftBusy.value = true;
+  try {
+    if (draft.docRevision !== record.revision) {
+      // 服务器版本已变化：不覆盖别人的修改，只提供下载（S5 起改为按块合并）。
+      noteAction("服务器上的文档在这之后被修改过，不能直接恢复。请先下载这份修改再手动合并。", 8000);
+      return;
+    }
+    markdownContent.value = draft.markdown;
+    await saveContent(draft.markdown, "manual");
+    if (!blocked.value) await refreshEditorFormatting(false);
+    if (!blocked.value) {
+      removeDraft(window.localStorage, account(), record.id, draft.tabId);
+      localDrafts.value = localDrafts.value.filter(item => item !== draft);
+      localDraft.value = localDrafts.value[0] ?? null;
+    }
+  } finally {
+    draftBusy.value = false;
+  }
+}
+function discardLocalDraft() {
+  const draft = localDraft.value;
+  if (!draft || !document.value) return;
+  if (!window.confirm("舍弃后这份本机修改将无法恢复，确定舍弃？")) return;
+  removeDraft(window.localStorage, account(), document.value.id, draft.tabId);
+  localDrafts.value = localDrafts.value.filter(item => item !== draft);
+  localDraft.value = localDrafts.value[0] ?? null;
+}
+function downloadLocalDraft() {
+  if (!localDraft.value?.markdown || !document.value) return;
+  download(myChangesFileName(document.value.name, new Date(localDraft.value.savedAt || Date.now())), localDraft.value.markdown);
+}
+function noteAction(message: string, ms = 4000) {
+  actionNote.value = message;
+  window.clearTimeout(actionNoteTimer);
+  actionNoteTimer = window.setTimeout(() => { actionNote.value = ""; }, ms);
+}
+function save(trigger: "auto" | "manual" = "auto"): Promise<void> {
+  if (savePromise) return savePromise.then(() => (isDirty.value && !retrying.value && !blockedFor(markdownContent.value) ? save(trigger) : undefined));
+  if (!document.value || !isDirty.value || aiPreviewHost.value || readonly.value) return Promise.resolve();
+  if (trigger === "auto" && blockedFor(markdownContent.value)) return Promise.resolve();
+  return saveContent(markdownContent.value, trigger);
+}
+function blockedFor(content: string) { return Boolean(blocked.value) && blocked.value!.content === content; }
+/** 单飞保存；同一内容的重试复用同一个 clientSaveKey（01 §6.3）。 */
+function saveContent(content: string, trigger: "auto" | "manual", baseRevision?: number): Promise<void> {
+  const record = document.value!;
   const memory = pendingMemory;
   const current = () => document.value === record && documentId.value === record.id;
+  window.clearTimeout(retryTimer);
+  window.clearTimeout(autoSaveTimer);
   saving.value = true;
-  errorText.value = "";
+  window.clearTimeout(savingTimer);
+  savingTimer = window.setTimeout(() => { if (saving.value) showSaving.value = true; }, 400);
+  if (!pendingKey || pendingKey.content !== content) pendingKey = { content, key: crypto.randomUUID() };
+  const key = pendingKey.key;
   savePromise = (async () => {
     try {
-      const result = await updateDocumentContent(record.id, record.revision, content, memory);
+      void key; // 阶段2 S5 起随请求发送 clientSaveKey（幂等重放）。
+      const result = await updateDocumentContent(record.id, baseRevision ?? record.revision, content, memory);
       if (!current()) return;
-      savedContent.value = content;
+      const typedNewer = markdownContent.value !== content;
+      savedContent.value = result.markdownContent ?? content;
       record.revision = result.revision;
       record.status = result.status;
-      record.markdownContent = content;
+      record.markdownContent = savedContent.value;
+      if (!typedNewer) markdownContent.value = savedContent.value;
+      pendingKey = null;
+      blocked.value = null;
+      retrying.value = false;
+      failures.value = 0;
+      failingSince = null;
+      savedAt.value = Date.now();
       persistLocalDraft();
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
       if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
-    } catch (error) { if (current()) errorText.value = messageOf(error); }
-    finally {
+    } catch (error) {
+      if (current()) handleSaveError(error, content, trigger);
+    } finally {
       saving.value = false;
+      showSaving.value = false;
+      window.clearTimeout(savingTimer);
       savePromise = undefined;
-      if (current() && isDirty.value && !errorText.value) {
-        window.clearTimeout(autoSaveTimer);
-        autoSaveTimer = window.setTimeout(() => void save(), 3000);
-      }
+      if (current() && isDirty.value && !retrying.value && !blockedFor(markdownContent.value) && !readonly.value) scheduleAutoSave();
     }
   })();
   return savePromise;
 }
+function handleSaveError(error: unknown, content: string, _trigger: "auto" | "manual") {
+  const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", messageOf(error));
+  switch (classifySaveError(apiError)) {
+    case "retry": {
+      failures.value += 1;
+      failingSince ??= Date.now();
+      retrying.value = true;
+      now.value = Date.now();
+      window.clearTimeout(retryTimer);
+      retryTimer = window.setTimeout(() => void save("auto"), backoffMs(failures.value));
+      return;
+    }
+    case "readonly":
+      readonly.value = true;
+      readonlyReason.value = accessText(apiError);
+      retrying.value = false;
+      blocked.value = { message: `${accessText(apiError)}未保存的修改可以下载。`, content, code: apiError.code };
+      return;
+    case "rekey":
+      pendingKey = null;
+      blocked.value = { message: apiError.message, content, code: apiError.code };
+      retrying.value = false;
+      return;
+    case "stale":
+      retrying.value = false;
+      blocked.value = { message: `${revisionConflictText(apiError.details)}你的修改已保留在本机。`, content, code: apiError.code };
+      return;
+    default: {
+      retrying.value = false;
+      const location = apiError.details?.location as LocationInfo | undefined;
+      blocked.value = { message: apiError.message, location, content, code: apiError.code };
+    }
+  }
+}
+function retryNow() {
+  failures.value = 0;
+  failingSince = null;
+  void save("manual");
+}
+/** 把编辑区滚动到保存失败的位置（按章节路径 + 第 N 段，找不到就停在章节标题）。 */
+function locateBlocked() {
+  const location = blocked.value?.location, root = editor.value;
+  if (!location || !root) return;
+  const path = location.headingPath || [];
+  const blocks = [...root.children] as HTMLElement[];
+  let start = 0;
+  if (path.length) {
+    const last = path[path.length - 1];
+    const index = blocks.findIndex(block => /^H[1-6]$/.test(block.tagName) && (block.textContent || "").trim() === last);
+    if (index >= 0) start = index;
+  }
+  let target: HTMLElement | undefined = blocks[start];
+  if (location.ordinal && location.kind && location.kind !== "heading") {
+    const tags: Record<string, RegExp> = { paragraph: /^(P|DIV|BLOCKQUOTE)$/, list_item: /^(UL|OL)$/, table: /^TABLE$/, image: /^(P|FIGURE|IMG)$/, code: /^PRE$/ };
+    let seen = 0;
+    for (const block of blocks.slice(path.length ? start + 1 : 0)) {
+      if (/^H[1-6]$/.test(block.tagName)) break;
+      if ((tags[location.kind] || /./).test(block.tagName) && ++seen === location.ordinal) { target = block; break; }
+    }
+  }
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function onOnline() {
+  online.value = true;
+  // 联网后立即重试，不等退避（02 P0-3）。
+  if (isDirty.value && !readonly.value) { failures.value = 0; failingSince = null; void save("auto"); }
+}
+function onOffline() { online.value = false; }
 function blockUnsupportedImages(event: ClipboardEvent | DragEvent) {
   const transfer = event instanceof ClipboardEvent ? event.clipboardData : event.dataTransfer;
   if (!transfer) return;
   if ([...transfer.files].some(file => file.type.startsWith("image/")) || /<img\b/i.test(transfer.getData("text/html"))) {
     event.preventDefault();
-    errorText.value = "不能直接粘贴或拖入图片。生成的图表请使用“插入正文”，原稿中的图片会保留。";
+    noteAction("不能直接粘贴或拖入图片。生成的图表请使用“插入正文”，原稿中的图片会保留。");
   }
 }
 async function pasteContent(event: ClipboardEvent) {
@@ -754,10 +987,8 @@ async function openDiagrams() {
   if (!isDirty.value) await diagrams.value?.open();
 }
 async function openHistory() {
-  if (aiLocked.value || addingHeading.value || saving.value) return;
-  window.clearTimeout(autoSaveTimer);
-  await save();
-  if (isDirty.value) return;
+  // 有未保存修改也能查看历史，只是不能恢复（02 P1）。
+  if (aiLocked.value || addingHeading.value) return;
   aiOpen.value = false;
   historyOpen.value = true;
 }
@@ -773,15 +1004,31 @@ async function acceptDiagram(result: DocumentContentResult & { formatTemplate: R
   clearAiDraft();
   await acceptContent(result);
 }
-async function leaveDocument() {
+async function leaveDocument(to?: RouteLocationNormalized) {
+  if (leaveBypass) { leaveBypass = false; return true; }
   if (skillOpen.value || skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || addingHeading.value || diagramBusy.value || refreshingEditor.value || undoingAi.value) {
-    errorText.value = "操作仍在进行，请完成或停止后再离开文档。";
+    noteAction("操作仍在进行，请完成或停止后再离开文档。");
     return false;
   }
   if (aiDraft.value && !window.confirm("尚未采纳的 AI 草稿会丢失，是否离开？")) return false;
   window.clearTimeout(autoSaveTimer);
-  await save();
-  return !isDirty.value;
+  if (isDirty.value && !readonly.value) {
+    // 最多等 5 秒把修改送到服务器（01 §6.3 第3条）。
+    await Promise.race([save("manual"), new Promise(resolve => window.setTimeout(resolve, 5000))]);
+  }
+  if (!isDirty.value) return true;
+  const decision = leaveDecision(pendingCount.value, persistAndVerify());
+  if (decision === "leave") return true;
+  leaveDialog.value = { mode: decision, count: pendingCount.value, target: to?.fullPath || router.resolve({ name: "project-documents", params: { id: projectId.value } }).fullPath };
+  return false;
+}
+function confirmLeave(downloadFirst: boolean) {
+  const target = leaveDialog.value?.target;
+  if (downloadFirst) downloadMyChanges();
+  leaveDialog.value = null;
+  if (!target) return;
+  leaveBypass = true;
+  void router.push(target).finally(() => { leaveBypass = false; });
 }
 function beforeUnload(event: BeforeUnloadEvent) {
   if (skillBusy.value || isDirty.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
@@ -838,17 +1085,17 @@ async function refreshEditorFormatting(saveFirst = true) {
         if (boundary === 0) restored.setStart(node || block, node ? remaining : 0);
         else restored.setEnd(node || block, node ? remaining : 0);
       }
-      root.contentEditable = "true";
+      root.contentEditable = String(editable.value);
       root.focus();
       selection?.removeAllRanges();
       selection?.addRange(restored);
     }
     if (scroll) scroll.scrollTop = scrollTop;
   } catch (error) {
-    errorText.value = `排版刷新失败：${messageOf(error)}`;
+    noteAction(`排版刷新失败：${messageOf(error)}`);
   } finally {
     refreshingEditor.value = false;
-    if (editor.value === root) root.contentEditable = String(!aiLocked.value && !addingHeading.value);
+    if (editor.value === root) root.contentEditable = String(editable.value);
   }
   captureEditorTarget();
 }
@@ -863,12 +1110,16 @@ function scrollToHeading(index: number) {
   editor.value?.querySelectorAll("h1,h2,h3,h4,h5,h6")[index]?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 async function handleExport() {
+  exportMenu.value = false;
   if (!document.value || exporting.value || aiLocked.value) return;
   window.clearTimeout(autoSaveTimer);
-  if (isDirty.value) await save();
-  if (isDirty.value) return;
+  if (isDirty.value && !readonly.value) await save("manual");
+  if (isDirty.value) {
+    exportError.value = "还有修改没有保存到服务器，导出的 Word 会是服务器上的版本。可以先下载“我的修改”。";
+    return;
+  }
   exporting.value = true;
-  errorText.value = "";
+  exportError.value = "";
   try {
     const result = await exportDocument(document.value.id, document.value.revision);
     const link = window.document.createElement("a");
@@ -878,30 +1129,61 @@ async function handleExport() {
     link.click();
     link.remove();
   } catch (error) {
-    errorText.value = messageOf(error);
+    // 导出失败只影响导出，不阻断编辑（02 P0-3）。
+    exportError.value = `导出失败：${messageOf(error)}`;
+  } finally {
+    exporting.value = false;
+  }
+}
+async function exportServerVersion() {
+  exportMenu.value = false;
+  if (!document.value || exporting.value) return;
+  if (!isDirty.value) return handleExport();
+  exporting.value = true;
+  exportError.value = "";
+  try {
+    const result = await exportDocument(document.value.id, document.value.revision);
+    const link = window.document.createElement("a");
+    link.href = `/api/v1/files/${result.fileId}/content`;
+    link.download = `${document.value.name}-服务器版本.docx`;
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    exportError.value = `导出失败：${messageOf(error)}`;
   } finally {
     exporting.value = false;
   }
 }
 async function goBack() {
   if (aiLocked.value) return;
-  window.clearTimeout(autoSaveTimer);
-  if (isDirty.value) await save();
-  if (!isDirty.value) void router.push({ name: "project-documents", params: { id: projectId.value } });
+  void router.push({ name: "project-documents", params: { id: projectId.value } });
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.ctrlKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    void save();
+    void save("manual");
   }
 }
 watch(documentId, () => void load());
 onBeforeRouteLeave(leaveDocument);
 onBeforeRouteUpdate(leaveDocument);
-onMounted(() => { window.addEventListener("beforeunload", beforeUnload); void load(); });
+onMounted(() => {
+  window.addEventListener("beforeunload", beforeUnload);
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+  clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
+  void load();
+});
 onUnmounted(() => {
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
+  window.removeEventListener("online", onOnline);
+  window.removeEventListener("offline", onOffline);
+  window.clearInterval(clockTimer);
+  window.clearTimeout(retryTimer);
+  window.clearTimeout(savingTimer);
+  window.clearTimeout(actionNoteTimer);
   clearAiDraft();
   window.clearTimeout(autoSaveTimer);
   originalController?.abort();
@@ -921,7 +1203,7 @@ onUnmounted(() => {
           <div class="document-heading"><h1>{{ document.name }}</h1></div>
         </div>
         <div class="toolbar-right">
-          <button v-if="mode === 'edit'" type="button" class="ghost" :disabled="aiLocked || addingHeading || saving" @click="openHistory">版本记录</button>
+          <button v-if="mode === 'edit'" type="button" class="ghost" :disabled="aiLocked || addingHeading" @click="openHistory">版本记录</button>
           <button v-if="mode === 'edit' && aiUndo" type="button" class="ghost" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
           <div class="mode-switch" role="group" aria-label="文档视图">
             <button type="button" class="ghost" :class="{ active: mode === 'original' }" :disabled="aiLocked || addingHeading" @click="switchMode('original')">查看原稿</button>
@@ -931,16 +1213,37 @@ onUnmounted(() => {
           <span class="toolbar-separator" aria-hidden="true"></span>
           <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download>下载原稿</a>
           <template v-else>
-            <button type="button" class="ghost" :disabled="saving || !isDirty || aiLocked" @click="save">{{ saving ? "保存中..." : "保存" }}</button>
-            <button type="button" class="primary" :disabled="exporting || saving || aiLocked" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
+            <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
+            <div class="export-group">
+              <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || aiLocked" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
+              <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu">▾</button>
+              <div v-if="exportMenu" class="export-menu card" role="menu" @keydown.esc="exportMenu = false">
+                <button type="button" class="ghost" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
+                <button type="button" class="ghost" role="menuitem" @click="exportMenu = false; downloadMyChanges()">我的修改（.md）</button>
+              </div>
+            </div>
           </template>
         </div>
       </header>
       <p v-if="errorText" class="error-notice" role="alert">{{ errorText }}</p>
-      <div v-if="localDraft" class="draft-recovery" role="status">
-        <span>{{ localDraft.revision === document.revision ? '发现未保存的本地编辑。' : '文档已更新，请下载本地编辑核对，不能直接覆盖。' }}</span>
-        <button type="button" class="ghost" :disabled="localDraft.revision !== document.revision" @click="restoreLocalDraft">恢复编辑</button>
-        <button type="button" class="ghost" @click="downloadLocalDraft">下载未保存内容</button>
+      <div v-if="blocked" class="notice danger save-blocked" role="alert" data-testid="save-blocked">
+        <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
+        <span class="acts">
+          <button v-if="blocked.location" type="button" class="ghost" @click="locateBlocked">定位</button>
+          <button v-if="!readonly" type="button" class="ghost" @click="retryNow">重试保存</button>
+          <button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button>
+        </span>
+      </div>
+      <div v-else-if="storageFailed" class="notice danger save-blocked" role="alert">
+        <span>浏览器存储已满，修改未能保存在本机。服务器保存仍在继续，建议先下载你的修改。</span>
+        <span class="acts"><button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button></span>
+      </div>
+      <p v-if="exportError" class="notice info" role="status">{{ exportError }} <button type="button" class="ghost" @click="exportError = ''">知道了</button></p>
+      <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>
+      <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
+        <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过。' }}<template v-if="localDrafts.length > 1">（另有 {{ localDrafts.length - 1 }} 份）</template></span>
+        <button type="button" class="primary" :disabled="draftBusy || readonly || localDraft.docRevision !== document.revision" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
+        <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
         <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
       </div>
       <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" />
@@ -994,7 +1297,7 @@ onUnmounted(() => {
             <button type="button" class="ghost" :disabled="!canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
             <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
           </fieldset>
-          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="!aiLocked && !addingHeading" :aria-readonly="aiLocked || addingHeading" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
+          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
         </main>
         <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
           <div class="ai-panel-head"><h2>写作助手</h2><button type="button" class="ghost" aria-label="关闭写作助手" @click="aiOpen = false">收起</button></div>
@@ -1039,7 +1342,7 @@ onUnmounted(() => {
           </details>
         </aside>
         <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
-        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" />
+        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
@@ -1056,6 +1359,7 @@ onUnmounted(() => {
           </section>
         </Teleport>
       </div>
+      <LeaveDialog v-if="leaveDialog" :mode="leaveDialog.mode" :count="leaveDialog.count" @download="downloadMyChanges" @stay="leaveDialog = null" @leave="confirmLeave(false)" @download-leave="confirmLeave(true)" />
     </template>
   </div>
 </template>
@@ -1071,6 +1375,15 @@ onUnmounted(() => {
 .document-heading { min-width:0; }
 .document-heading h1 { margin:0; font-size:var(--text-md); font-weight:600; overflow-wrap:anywhere; }
 .error-notice { margin:0; padding:var(--space-2) var(--space-5); background:var(--fault-wash); color:var(--fault-ink); border-bottom:1px solid var(--fault); }
+.notice { display:flex; align-items:center; gap:var(--space-2); min-height:40px; margin:0; padding:var(--space-1) var(--space-4); font-size:var(--text-sm); border-bottom:1px solid var(--border-default, var(--rule)); }
+.notice.info { background:var(--info-50, var(--sheet)); color:var(--gray-800, var(--ink)); }
+.notice.danger { background:var(--danger-50, var(--fault-wash)); color:var(--danger-700, var(--fault-ink)); }
+.notice .acts { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; flex-shrink:0; }
+.notice > span:first-child { overflow-wrap:anywhere; }
+.export-group { position:relative; display:flex; gap:1px; }
+.export-more { padding-inline:var(--space-2); }
+.export-menu { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:20; display:flex; flex-direction:column; min-width:180px; padding:var(--space-1); background:var(--bg-surface, var(--sheet)); border:1px solid var(--border-default, var(--rule)); }
+.export-menu button { justify-content:flex-start; text-align:left; border:0; }
 .draft-recovery { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-2) var(--space-5); background:var(--sheet); border-bottom:1px solid var(--rule); font-size:var(--text-sm); }
 .draft-recovery span { margin-right:auto; overflow-wrap:anywhere; }
 .workspace { display:grid; grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr); flex:1; min-height:0; }

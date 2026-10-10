@@ -76,11 +76,12 @@ export async function updateDocumentContent(
   expectedRevision: number,
   markdownContent: string,
   memory?: WritingMemory,
-  retractMemoryRevision?: number
+  retractMemoryRevision?: number,
+  options: { clientSaveKey?: string; allowMerge?: boolean } = {}
 ): Promise<{ id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string }> {
   const body = await apiRequest<{ data: any }>(`/documents/${id}/content`, {
     method: "PATCH",
-    json: { expectedRevision, markdownContent, memory, retractMemoryRevision },
+    json: { expectedRevision, markdownContent, memory, retractMemoryRevision, ...options },
   });
   if (!body?.data) throw new Error("更新响应不完整。");
   return body.data;

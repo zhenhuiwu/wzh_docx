@@ -250,7 +250,21 @@ def _check_word(connection, row, content: str, *, images: list[dict] | None = No
                                image_sources=diagram_images(images if images is not None else row[6].get("images", [])),
                                outline_headings=bool(row[6].get("wordOutlineHeadings")))
     except ValueError as exc:
-        raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
+        raise word_format_error(content, exc) from None
+
+
+def word_format_error(content: str, exc: ValueError) -> AppError:
+    """422 AI_FORMAT_INVALID with the failing block's location (01 §4.10)."""
+    from app.docx_export import _html_blocks
+    from app.document_location import compute_locations, html_block_items, location_text
+    index = getattr(exc, "block_index", None)
+    if index is None:
+        return AppError(422, "AI_FORMAT_INVALID", str(exc))
+    try:
+        location = compute_locations(html_block_items(_html_blocks(content)))[index]
+    except (IndexError, ValueError):
+        return AppError(422, "AI_FORMAT_INVALID", str(exc))
+    return AppError(422, "AI_FORMAT_INVALID", f"{location_text(location)}：{exc}", details={"location": location})
 
 
 def _content_result(request: Request, row: dict) -> dict[str, object]:

@@ -18,6 +18,7 @@ class AppError(Exception):
     message: str
     field_errors: list[dict[str, str]] = field(default_factory=list)
     current_revision: int | None = None
+    details: dict[str, object] | None = None
 
 
 def request_id_of(request: Request) -> str:
@@ -34,6 +35,8 @@ def error_content(request: Request, error: AppError) -> dict[str, object]:
         payload["fieldErrors"] = error.field_errors
     if error.current_revision is not None:
         payload["currentRevision"] = error.current_revision
+    if error.details is not None:
+        payload["details"] = error.details
     return {"error": payload, "requestId": request_id_of(request)}
 
 

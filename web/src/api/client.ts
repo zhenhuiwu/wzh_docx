@@ -9,9 +9,11 @@ export class ApiError extends Error {
   readonly fieldErrors: FieldError[];
   readonly currentRevision?: number;
   readonly requestId: string;
+  readonly details?: Record<string, any>;
 
-  constructor(status: number, code: string, message: string, requestId = "", fieldErrors: FieldError[] = [], currentRevision?: number) {
+  constructor(status: number, code: string, message: string, requestId = "", fieldErrors: FieldError[] = [], currentRevision?: number, details?: Record<string, any>) {
     super(message);
+    this.details = details;
     this.name = "ApiError";
     this.status = status;
     this.code = code;
@@ -114,6 +116,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
         typeof payload?.requestId === "string" ? payload.requestId : "",
         Array.isArray(error.fieldErrors) ? error.fieldErrors : [],
         typeof error.currentRevision === "number" ? error.currentRevision : undefined,
+        error.details && typeof error.details === "object" ? error.details : undefined,
       );
     }
     return payload as T;
