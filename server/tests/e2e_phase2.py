@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 import uuid
 from pathlib import Path
 
@@ -300,6 +299,20 @@ def main() -> int:
             assert "（断网关页）" in server
             shot(page, "09-草稿恢复后")
         offline_recovery()
+
+        @step("同一账号多标签提示（非阻断，可关闭）")
+        def multi_tab():
+            open_doc(a, data)
+            second = ctx_a.new_page()
+            open_pages.append(second)
+            open_doc(second, data)
+            expect(second.get_by_test_id("multi-tab")).to_be_visible(timeout=15000)
+            expect(a.get_by_test_id("multi-tab")).to_be_visible(timeout=15000)
+            shot(second, "10-多标签提示")
+            second.get_by_test_id("multi-tab").get_by_role("button", name="知道了").click()
+            expect(second.get_by_test_id("multi-tab")).to_have_count(0)
+            second.close()
+        multi_tab()
 
         browser.close()
     failed = [item for item in results if not item[1]]

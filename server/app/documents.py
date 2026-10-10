@@ -41,6 +41,8 @@ router = APIRouter()
 router.include_router(versions_router)
 router.include_router(objects_router)
 router.include_router(conflicts_router)
+from app.document_patch import router as patch_router  # noqa: E402 - 避免循环导入（document_patch 运行时才取 documents 内函数）
+router.include_router(patch_router)
 # S3（01 §5.5）：Word COM 仍串行，但只包住 COM 调用；同一预览目标按文件键加锁只生成一次；
 # 缓存命中与 edit_original_docx 都在锁外。进程内锁只对单进程部署有效。
 _COM_SLOT = BoundedSemaphore(1)
@@ -1264,10 +1266,16 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
         row = _document_row(conn, did, session.user_id, admin)
 
         from app.document_selection import decorate_selection_html
+        from app.document_objects import decorate_object_ids
         html = decorate_selection_html(row[7], _editing_html(conn, row))
+        # S7：能证明一一对应时为顶层块加对象 ID；ensure 可能补建对象行，需提交。
+        ensure_document_objects(conn, did)
+        if conn.in_transaction:
+            conn.commit()
+        html, object_model = decorate_object_ids(conn, did, html)
 
         return {
-            "data": {"html": html},
+            "data": {"html": html, "objectModel": object_model, "revision": row[12]},
             "requestId": request.state.request_id,
         }
 

@@ -9,6 +9,7 @@ import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel } from "../conflictModel";
+import { otherTabOpen } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { listDrafts, recoverySummary, removeDraft, tabId as makeTabId, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import DOMPurify from "dompurify";
@@ -85,6 +86,10 @@ const conflictOpen = ref(false);
 const conflictSummary = ref<ConflictSummary | null>(null);
 const conflictPanel = ref<InstanceType<typeof DocumentConflictPanel> | null>(null);
 const mineConflicts = computed(() => conflictCount(conflictSummary.value));
+// 多标签提示（决策4：提示，不阻止；02 §3.3）：只覆盖同一浏览器。
+const multiTab = ref(false);
+let presence: BroadcastChannel | null = null;
+const lastPresenceTabs = new Set<string>();
 const capabilities = ref<Capabilities | null>(null);
 // 打开文档时的账号：会话失效后 readSession() 为空，草稿仍要写到原账号名下（G1）。
 let draftAccount = "";
@@ -216,6 +221,7 @@ async function load() {
     findLocalDrafts(record);
     void refreshMemory();
     void refreshConflicts();
+    openPresence(record.id);
   } catch (error) {
     if (id !== documentId.value || version !== loadVersion) return;
     phase.value = "error";
@@ -293,6 +299,40 @@ function derivedConflict(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.code !== "OBJECT_CONFLICT" || !document.value) return false;
   handleSaveError(error, markdownContent.value, "manual", document.value.revision);
   return true;
+}
+function dismissedTabs(docId: string): string[] {
+  try { return JSON.parse(window.sessionStorage.getItem(`doc-workbench.multitab:${docId}`) || "[]"); } catch { return []; }
+}
+function openPresence(docId: string) {
+  closePresence();
+  multiTab.value = false;
+  if (typeof BroadcastChannel === "undefined") return;
+  const self = { tabId: browserTab, userId: account() };
+  presence = new BroadcastChannel(`doc-workbench:${docId}`);
+  presence.onmessage = (event: MessageEvent) => {
+    const message = event.data as { type?: string; tabId?: string };
+    if (!otherTabOpen(message, self)) return;
+    lastPresenceTabs.add(String(message.tabId));
+    if (message.type === "presence") presence?.postMessage({ type: "presence-reply", ...self });
+    // “知道了”后本标签不再为同一个标签提示；新的标签页出现时重新提示
+    if (!dismissedTabs(docId).includes(String(message.tabId))) multiTab.value = true;
+  };
+  presence.postMessage({ type: "presence", ...self });
+}
+function closePresence() {
+  if (!presence) return;
+  presence.postMessage({ type: "bye", tabId: browserTab, userId: account() });
+  presence.close();
+  presence = null;
+}
+function dismissMultiTab() {
+  multiTab.value = false;
+  if (!document.value) return;
+  // 记下当前已知的其他标签：回复过 presence 的都算
+  const key = `doc-workbench.multitab:${document.value.id}`;
+  const known = new Set(dismissedTabs(document.value.id));
+  for (const tab of lastPresenceTabs) known.add(tab);
+  window.sessionStorage.setItem(key, JSON.stringify([...known]));
 }
 async function refreshConflicts() {
   const record = document.value;
@@ -1085,6 +1125,13 @@ function onPageHide() {
   persistLocalDraft();
   void updateDocumentContent(record.id, mergeBase ?? record.revision, content, undefined, undefined, { clientSaveKey: pendingKey.key, allowMerge: true, keepalive: true }).catch(() => undefined);
 }
+/** 02 P1-3：编辑区内部拖拽会把段落整块搬走（产生移动/冲突），默认禁止；外部拖入仍走粘贴清洗。 */
+function blockInternalDrag(event: DragEvent) {
+  if (editor.value && event.target instanceof Node && editor.value.contains(event.target)) {
+    event.preventDefault();
+    noteAction("编辑区内不支持拖动段落，请使用剪切和粘贴。");
+  }
+}
 function blockUnsupportedImages(event: ClipboardEvent | DragEvent) {
   const transfer = event instanceof ClipboardEvent ? event.clipboardData : event.dataTransfer;
   if (!transfer) return;
@@ -1099,7 +1146,8 @@ async function pasteContent(event: ClipboardEvent) {
   event.preventDefault();
   if (aiLocked.value || addingHeading.value || !event.clipboardData) return;
   const html = event.clipboardData.getData("text/html");
-  if (html) window.document.execCommand("insertHTML", false, DOMPurify.sanitize(html, { FORBID_ATTR: ["style", "class", "id"] }));
+  // S7：对象 ID / 选区 ID 不随粘贴复制（否则产生重复 ID，01 §6.2）
+  if (html) window.document.execCommand("insertHTML", false, DOMPurify.sanitize(html, { FORBID_ATTR: ["style", "class", "id", "data-object-id", "data-object-revision", "data-selection-id"] }));
   else window.document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
   onEditorInput();
   await refreshEditorFormatting();
@@ -1376,6 +1424,7 @@ onUnmounted(() => {
   window.clearTimeout(autoSaveTimer);
   originalController?.abort();
   void pdfTask?.destroy();
+  closePresence();
 });
 </script>
 
@@ -1431,6 +1480,7 @@ onUnmounted(() => {
       </div>
       <p v-if="exportError" class="notice info" role="status">{{ exportError }} <button type="button" class="ghost" @click="exportError = ''">知道了</button></p>
       <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>
+      <p v-if="multiTab && !localDraft && !blocked" class="notice info" role="status" data-testid="multi-tab">此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。 <button type="button" class="ghost" @click="dismissMultiTab">知道了</button></p>
       <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
         <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}<template v-if="localDrafts.length > 1">（另有 {{ localDrafts.length - 1 }} 份）</template></span>
         <button type="button" class="primary" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
@@ -1488,7 +1538,7 @@ onUnmounted(() => {
             <button type="button" class="ghost" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
             <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
           </fieldset>
-          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
+          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
         </main>
         <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
           <div class="ai-panel-head"><h2>写作助手</h2><button type="button" class="ghost" aria-label="关闭写作助手" @click="aiOpen = false">收起</button></div>

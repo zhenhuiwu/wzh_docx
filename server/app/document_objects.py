@@ -98,7 +98,7 @@ def _insert_change(connection, document_id: UUID, *, doc_revision: int, base_rev
 
 
 def _sync(connection, document_id: UUID, blocks: list[Block], doc_revision: int, actor: UUID | None,
-          change_id: UUID | None) -> int:
+          change_id: UUID | None, identities: list[str | None] | None = None, moved: set[str] | None = None) -> int:
     """把存活对象对齐到 blocks；返回“处”数（插入/实质修改/删除的对象数）。
 
     规范键相同的块保留 ID 与 revision（只同步字节）；替换区间内 kind 相同的 1:1 保留 ID 并 revision+1；其余增删。
@@ -152,8 +152,29 @@ def _sync(connection, document_id: UUID, blocks: list[Block], doc_revision: int,
         )
         records.append(("delete", row["id"], row["revision"], None, row["body"], None, old_index, 1))
 
-    matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    by_id = {str(row["id"]): (index, row) for index, row in enumerate(live)}
+    if identities is not None and len(identities) == len(blocks) and \
+            all(value is None or value in by_id for value in identities) and \
+            len({value for value in identities if value}) == len([value for value in identities if value]):
+        # 2b 补丁（S7）：前端带对象 ID，按 ID 对应，不靠 diff 猜测（复制相同文字、移动后 ID 仍指向原段）。
+        kept = {value for value in identities if value}
+        for old_index, row in enumerate(live):
+            if str(row["id"]) not in kept:
+                delete(row, old_index)
+        for index, (value, block) in enumerate(zip(identities, blocks)):
+            if value is None:
+                insert(block, index)
+                continue
+            row = by_id[value][1]
+            before = len(records)
+            keep(row, block, index)
+            if moved and value in moved and len(records) == before:
+                records.append(("move", row["id"], row["revision"], row["revision"], row["body"], row["body"], index, None))
+        old = new  # 跳过下面的 diff 对齐
+        matcher_ops: list = []
+    else:
+        matcher_ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+    for tag, i1, i2, j1, j2 in matcher_ops:
         if tag == "equal":
             for offset in range(i2 - i1):
                 keep(live[i1 + offset], blocks[j1 + offset], j1 + offset)
@@ -237,7 +258,8 @@ def ensure_committed(connection, document_id: UUID) -> bool:
 
 def record_commit(connection, document_id: UUID, *, base_revision: int, markdown: str | None, kind: str,
                   actor: UUID | None = None, merged: bool = False, ai_assisted: bool = False,
-                  client_save_key: str | None = None, request_hash: str | None = None) -> UUID:
+                  client_save_key: str | None = None, request_hash: str | None = None,
+                  identities: list[str | None] | None = None, moved: set[str] | None = None) -> UUID:
     """在 documents 已经 CAS 写成 base_revision+1 之后调用：同步对象、写修改记录、版本操作人。
 
     markdown=None 表示本次提交没有改正文（例如编写规范设置）。调用方须在写 documents 之前调用 ensure_document_objects。
@@ -256,7 +278,7 @@ def record_commit(connection, document_id: UUID, *, base_revision: int, markdown
         else:
             prefix, blocks = split(markdown)
             if assemble(prefix, blocks) == markdown:
-                changed = _sync(connection, document_id, blocks, revision, actor, change_id)
+                changed = _sync(connection, document_id, blocks, revision, actor, change_id, identities, moved)
         if changed is not None:
             connection.execute(
                 "UPDATE documents SET objects_revision=%s, objects_prefix=COALESCE(%s, objects_prefix) WHERE id=%s",
@@ -456,3 +478,39 @@ def _cli(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_cli())
+
+
+# ---------------------------------------------------------------- 预览对象 ID（01 §4.1，S7）
+
+def decorate_object_ids(connection, document_id: UUID, html: str) -> tuple[str, bool]:
+    """给预览的顶层块（p/h1-6/table/pre…，列表取顶层 li）加 data-object-id / data-object-revision。
+
+    只在能证明一一对应时添加：顶层节点数与存活对象数相同，且逐个纯文本一致；否则原样返回，前端走整篇保存。
+    返回 (html, objectModel)。
+    """
+    from lxml import html as html_dom
+    from app.markdown_blocks import plain_text
+
+    if not html:
+        return html, False
+    rows = live_objects(connection, document_id)
+    root = html_dom.fragment_fromstring(html, create_parent="div")
+    nodes = []
+    for child in root:
+        if not isinstance(child.tag, str):
+            continue
+        if child.tag in {"ul", "ol"}:
+            nodes.extend(item for item in child if isinstance(item.tag, str) and item.tag == "li")
+        else:
+            nodes.append(child)
+    if len(nodes) != len(rows):
+        return html, False
+    for node, row in zip(nodes, rows):
+        if " ".join("".join(node.itertext()).split()) != plain_text(row["body"]):
+            return html, False
+    for node, row in zip(nodes, rows):
+        node.set("data-object-id", str(row["id"]))
+        node.set("data-object-revision", str(row["revision"]))
+    from html import escape
+    serialized = escape(root.text or "", quote=False) + "".join(html_dom.tostring(child, encoding="unicode", method="html") for child in root)
+    return serialized, True
