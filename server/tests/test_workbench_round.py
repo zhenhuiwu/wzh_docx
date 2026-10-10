@@ -81,3 +81,16 @@ def test_preview_object_ids_match_tables_ignoring_whitespace(monkeypatch):
     monkeypatch.setattr(objects, "live_objects", lambda connection, document_id: nested)
     _, ok = objects.decorate_object_ids(None, uuid4(), "<ul><li>一<ul><li>一点一</li></ul></li><li>二</li></ul>")
     assert ok is False
+
+
+def test_removal_reason_spaces_before_word():
+    """终审：拒绝原因里“含 Word 域”中英文之间留空格；中文开头的原因不加空格。"""
+    from docx.oxml import parse_xml
+
+    from app.docx_export import _removal_reason
+
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    field = parse_xml(f'<w:p {w}><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>')
+    assert "此内容含 Word 域" in _removal_reason(field)
+    bookmark = parse_xml(f'<w:p {w}><w:bookmarkStart w:id="1" w:name="x"/><w:r><w:t>a</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>')
+    assert "此内容含书签" in _removal_reason(bookmark)

@@ -128,7 +128,7 @@ def check_project(connection, project_id: UUID, role: str | None, admin: bool, n
         action = {"read": "查看", "edit": "修改", "export": "导出"}[need]
         if role == AUDIT_PROJECT_ROLE:
             # 三审：审计员是全局只读，不提示“请联系负责人开通”
-            raise AppError(403, "FORBIDDEN", f"审计查看者只能查看和导出，不能{action}文档。",
+            raise AppError(403, "FORBIDDEN", f"你以审计身份只读查看该项目，不能{action}文档。",
                            details={"projectRole": role, "ownerName": None})
         owner = _owner_name(connection, project_id)
         tail = f"如需开通请联系负责人 {owner}。" if owner else "如需开通请联系项目负责人。"

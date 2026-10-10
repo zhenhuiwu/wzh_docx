@@ -79,6 +79,8 @@ def _removal_reason(element, heading: bool = False) -> str:
     """界面复验 N8：拒绝删除时写明实际原因；删掉/并掉的是标题行时单独说明。"""
     found = [label for path, label in _REMOVE_KINDS if element.xpath(path)]
     what = "、".join(found) or "受保护的 Word 内容"
+    # 终审：中文与英文之间留空格（“含 Word 域”）
+    what = f" {what}" if what[:1].isascii() and what[:1].isalnum() else what
     if heading:
         return f"删除或合并了一个标题行，这个标题含{what}，无法安全删除；请保留标题行，或在原稿中修改。"
     return f"此内容含{what}，无法安全删除；请在原稿中修改。"
