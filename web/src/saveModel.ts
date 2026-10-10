@@ -152,3 +152,13 @@ export function draftSizeText(bytes: number): string {
   const mb = bytes / 1048576;
   return mb < 0.1 ? "不到 0.1 MB" : `约 ${mb.toFixed(1)} MB`;
 }
+
+export interface WhitespaceNotes { whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
+/** 合并时只改空白的修改没被写入或被覆盖的提示（终验 S-1 及终审建议）；没有时返回空串。 */
+export function whitespaceNoteText(notes: WhitespaceNotes): string {
+  const parts: string[] = [];
+  if (notes.whitespaceDropped) parts.push(`你有 ${notes.whitespaceDropped} 处只改了空格，对方同时也改了这里，已保留对方的写法`);
+  if (notes.whitespaceDeleted) parts.push(`你有 ${notes.whitespaceDeleted} 处只改了空格的段落已被对方删除`);
+  if (notes.theirsWhitespaceOverridden) parts.push(`对方有 ${notes.theirsWhitespaceOverridden} 处只调整了空格，你同时改了这些段落的文字，已采用你的写法（对方的空格调整没有保留）`);
+  return parts.length ? `${parts.join("；")}，请核对。` : "";
+}

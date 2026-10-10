@@ -73,11 +73,40 @@ export function typedInsertion(before: string[], after: string[], caret?: { inde
   if (prefix + suffix !== old.length) return null;
   return { index, text: old, offset: prefix, insert: now.slice(prefix, now.length - suffix) };
 }
-/** 在新版式里找到“打字前那一段”（原文一字不差、离原位置最近的一段）。 */
-export function matchBlock(texts: string[], carry: { index: number; text: string }): number {
-  let best = -1;
-  texts.forEach((text, index) => {
-    if (text === carry.text && (best < 0 || Math.abs(index - carry.index) < Math.abs(best - carry.index))) best = index;
-  });
-  return best;
+/**
+ * 终审必改：把重绘前的段落下标换算到重绘后的版式里。前后两版段落文字做 LCS 对齐，
+ * 分别取“尽早配对”和“尽晚配对”两种极端对齐；两种都把该段配到同一位置才算确定，否则返回 -1（调用方放弃写回）。
+ * 不再按“文字相同、位置最近”找段——模板里重复的“无。”会因此写进另一段。
+ */
+export function mapBlockIndex(before: string[], after: string[], index: number, limit = 4_000_000): number {
+  const n = before.length, m = after.length;
+  if (index < 0 || index >= n || (n + 1) * (m + 1) > limit) return -1;
+  const first = alignedIndex(before, after, index);
+  const reversed = alignedIndex([...before].reverse(), [...after].reverse(), n - 1 - index);
+  const last = reversed < 0 ? -1 : m - 1 - reversed;
+  return first >= 0 && first === last ? first : -1;
+}
+/** 一种 LCS 对齐（能配就配、配不上先跳过新版的段）：返回 before[index] 配到的 after 下标，未配上为 -1。 */
+function alignedIndex(before: string[], after: string[], index: number): number {
+  const n = before.length, m = after.length, width = m + 1;
+  const dp = new Int32Array((n + 1) * width);  // dp[i*width+j] = before[i:] 与 after[j:] 的 LCS 长度
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * width + j] = before[i] === after[j] ? dp[(i + 1) * width + j + 1] + 1 : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
+    }
+  }
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    const here = dp[i * width + j];
+    if (before[i] === after[j] && here === dp[(i + 1) * width + j + 1] + 1) {
+      if (i === index) return j;
+      i += 1; j += 1;
+    } else if (dp[i * width + j + 1] === here) {
+      j += 1;
+    } else {
+      if (i === index) return -1;
+      i += 1;
+    }
+  }
+  return -1;
 }

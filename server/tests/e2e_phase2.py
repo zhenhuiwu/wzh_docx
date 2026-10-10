@@ -438,6 +438,84 @@ def main() -> int:
             shot(b, "28-他人更新时打字不丢字")
         typing_while_others_update()
 
+        @step("重复段落（两个“无。”）：重绘时写回不落进另一个同文段落（终审必改）")
+        def duplicate_paragraph_carry():
+            def append_probe(tag: str):
+                record = data["zhang"].call("GET", f"/documents/{doc_id}")
+                tail = f"\n\n探针{tag}甲段落。\n\n无。\n\n探针{tag}乙段落。\n\n无。\n\n探针{tag}丙段落。\n"
+                data["zhang"].call("PATCH", f"/documents/{doc_id}/content", json={
+                    "expectedRevision": record["revision"], "markdownContent": record["markdownContent"].rstrip("\n") + tail,
+                    "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+
+            def insert_before(tag: str):
+                record = data["zhang"].call("GET", f"/documents/{doc_id}")
+                md = record["markdownContent"].replace(f"探针{tag}甲段落。", f"张工在{tag}甲前插入的一段。\n\n探针{tag}甲段落。")
+                data["zhang"].call("PATCH", f"/documents/{doc_id}/content", json={
+                    "expectedRevision": record["revision"], "markdownContent": md, "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+
+            # 预览请求在页面里改慢（mode=delay）或先失败一次再慢（mode=fail-then-delay，走锁定兜底路径）
+            slow_preview = """(mode) => { const original = window.__origFetch || window.fetch; window.__origFetch = original; let first = true;
+                window.fetch = (input, init) => {
+                    const url = String(input instanceof Request ? input.url : input);
+                    if (!url.includes('/preview')) return original(input, init);
+                    if (mode === 'fail-then-delay' && first) { first = false; return Promise.reject(new TypeError('probe')); }
+                    return new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)); }; }"""
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            login(page, f"e2e-li-{RUN}")
+
+            def second_none(tag: str):
+                return paragraph(page, f"探针{tag}乙段落").locator("xpath=following-sibling::p[1]")
+
+            # 1) 不锁的写回路径（审查员探针）：重绘载入期间在乙后的“无。”里打字
+            append_probe("A")
+            open_doc(page, data)
+            page.wait_for_timeout(1500)
+            type_after(page, "探针A丙段落", "（李工改丙A）")
+            insert_before("A")
+            page.evaluate(slow_preview, "delay")
+            expect(page.get_by_test_id("editor-refreshing")).to_be_visible(timeout=20000)
+            target = second_none("A")
+            target.click()
+            page.keyboard.press("End")
+            page.keyboard.type("（写在乙A后的无）", delay=40)
+            page.wait_for_timeout(6000)
+            wait_saved(page, 40000)
+            page.wait_for_timeout(4000)
+            wait_saved(page, 40000)
+            page.evaluate("() => { window.fetch = window.__origFetch; }")
+            server = server_markdown()
+            seg = server[server.find("张工在A甲前"):]
+            assert "探针A乙段落。\n\n无。（写在乙A后的无）" in seg, repr(seg[:300])
+            assert "探针A甲段落。\n\n无。\n\n" in seg, repr(seg[:300])
+            expect(page.locator(".paper-content")).to_contain_text("张工在A甲前插入的一段。", timeout=20000)
+            # 2) 锁定重绘的兜底路径：后台取版式失败一次 → 锁定重绘；光标在乙后的“无。”，锁定期间敲的键解锁后写回
+            append_probe("B")
+            page.reload()
+            expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+            wait_saved(page)
+            page.wait_for_timeout(1500)
+            type_after(page, "探针B丙段落", "（李工改丙B）")
+            target = second_none("B")
+            target.click()
+            page.keyboard.press("End")
+            insert_before("B")
+            page.evaluate(slow_preview, "fail-then-delay")
+            expect(page.locator(".paper-content")).to_have_attribute("aria-busy", "true", timeout=20000)
+            expect(page.locator(".paper-content.refreshing")).to_have_count(1, timeout=20000)
+            page.keyboard.type("LOCKB", delay=40)
+            expect(page.locator(".paper-content.refreshing")).to_have_count(0, timeout=30000)
+            page.wait_for_timeout(4000)
+            wait_saved(page, 40000)
+            page.evaluate("() => { window.fetch = window.__origFetch; }")
+            server = server_markdown()
+            seg = server[server.find("张工在B甲前"):]
+            assert "探针B乙段落。\n\n无。LOCKB" in seg, repr(seg[:300])
+            assert "探针B甲段落。\n\n无。\n\n" in seg, repr(seg[:300])
+            shot(page, "29-重复段落写回不串段")
+            ctx.close()
+        duplicate_paragraph_carry()
+
         @step("同段冲突保留草稿，面板可处理")
         def same_paragraph_conflict():
             open_doc(a, data)

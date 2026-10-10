@@ -10,8 +10,8 @@ import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
-import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { countChars, matchBlock, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
+import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { countChars, mapBlockIndex, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -80,6 +80,8 @@ let lastInputAt = 0;
 let typedDuringLock = "";
 let lockHadFocus = false;
 let lockCaret: { index: number; offset: number }[] = [];
+let lockBlocks: string[] = [];
+let imeDuringLock = false;
 function typingRecently(): boolean {
   if (Date.now() - lastInputAt < 2000) return true;
   const root = editor.value, selection = window.getSelection();
@@ -514,12 +516,13 @@ function isRevisionConflict(error: unknown): error is ApiError {
 }
 /** S6：AI 采纳、标题、图表插入都带 allowMerge（01 §4.3），每次操作一个新键。 */
 function mergeRequest() { return { allowMerge: true, clientSaveKey: crypto.randomUUID() }; }
-function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }>; whitespaceDropped?: number }): boolean {
+function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }> } & WhitespaceNotes): boolean {
   if (!result.merged) return false;
   const text = changedByText(result.changedBy);
-  // 终验 S-1：我方只改了空白、对方同时也改了这一处——保留对方写法，明确告诉用户（不静默丢弃）
-  if (result.whitespaceDropped) {
-    noteAction(`${text}你有 ${result.whitespaceDropped} 处只改了空格，对方同时也改了这里，已保留对方的写法，请核对。`, 10000);
+  // 终验 S-1 及终审建议：只改空白的修改没写入/被覆盖时，明确告诉用户（不静默丢弃）
+  const whitespace = whitespaceNoteText(result);
+  if (whitespace) {
+    noteAction(`${text}${whitespace}`, 10000);
     return true;
   }
   // 审查员第 2 条：提示条显示期间不再弹“已合并…”短提示
@@ -978,12 +981,33 @@ function restoreCaret(root: HTMLElement, positions: { index: number; offset: num
   return true;
 }
 /** 终验 F-M1：锁定期间（焦点原在编辑区）敲下的字先记下，不让它们无声消失。 */
-function bufferLockedTyping(event: KeyboardEvent) {
-  if (!refreshingEditor.value || !lockHadFocus || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+function lockedTarget(event: Event): boolean {
+  if (!refreshingEditor.value || !lockHadFocus) return false;
   const target = event.target as Node | null;
   const root = editor.value;
-  if (target && root && !(target === window.document.body || root.contains(target))) return;
+  return !(target && root && !(target === window.document.body || root.contains(target)));
+}
+/** 终审建议：锁定期间的输入法输入（组字）无法缓冲，至少在解锁时提示，不能静默丢掉。 */
+function noteLockedComposition(event: Event) {
+  if (lockedTarget(event)) imeDuringLock = true;
+}
+function bufferLockedTyping(event: KeyboardEvent) {
+  if (!lockedTarget(event)) return;
+  if (event.isComposing || event.key === "Process") { imeDuringLock = true; return; }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   if (event.key.length === 1) { typedDuringLock += event.key; event.preventDefault(); }
+}
+/** 重绘后按段落序列对齐恢复光标；对不上（或光标所在段被改了）就不放光标，免得接着打的字落进别的段。 */
+function restoreMappedCaret(root: HTMLElement, before: string[], caret: { index: number; offset: number }[]): boolean {
+  const after = blockTexts(root);
+  const mapped = caret.map(point => ({ index: mapBlockIndex(before, after, point.index), offset: point.offset }));
+  if (mapped.length === 2 && mapped.every((point, n) => point.index >= 0 && after[point.index] === before[caret[n].index]) && restoreCaret(root, mapped)) return true;
+  leaveEditorCaret(root);
+  return false;
+}
+function leaveEditorCaret(root: HTMLElement) {
+  window.getSelection()?.removeAllRanges();
+  if (window.document.activeElement === root || root.contains(window.document.activeElement)) root.blur();
 }
 function beginEditorLock(reason: string) {
   const root = editor.value;
@@ -991,6 +1015,8 @@ function beginEditorLock(reason: string) {
   if (!refreshingEditor.value) {
     lockHadFocus = Boolean(root && (window.document.activeElement === root || root.contains(window.document.activeElement)));
     lockCaret = root && lockHadFocus ? captureCaret(root) : [];
+    lockBlocks = root && lockHadFocus ? blockTexts(root) : [];
+    imeDuringLock = false;
   }
   refreshReason.value = reason;
   refreshingEditor.value = true;
@@ -1006,9 +1032,15 @@ function endEditorLock() {
   if (root) root.contentEditable = String(editable.value);
   const typed = typedDuringLock;
   typedDuringLock = "";
+  const ime = imeDuringLock;
+  imeDuringLock = false;
+  const before = lockBlocks;
+  lockBlocks = [];
   if (!root || !lockHadFocus) return;
   lockHadFocus = false;
-  const placed = editable.value && restoreCaret(root, caret);
+  // 终审必改：按重绘前后段落序列对齐换算光标所在段；对不上就不写入，只提示
+  const placed = editable.value && restoreMappedCaret(root, before, caret);
+  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000);
   if (!typed) return;
   if (placed && window.document.execCommand("insertText", false, typed)) return;
   noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000);
@@ -1038,7 +1070,8 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
       if (!carry) return false;
       const probe = window.document.createElement("div");
       probe.innerHTML = preview.html;
-      target = matchBlock(blockTexts(probe), carry);
+      // 终审必改：按前后两版段落序列对齐换算位置；对不上或不唯一就放弃重绘（保留编辑区，下次保存由服务器合并）
+      target = mapBlockIndex(before, blockTexts(probe), carry.index);
       if (target < 0) return false;
     }
     if (result.formatTemplate) record.formatTemplate = result.formatTemplate;
@@ -1053,16 +1086,17 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
     }
     const root = editor.value;
     const caret = root && window.document.activeElement === root ? captureCaret(root) : [];
+    const shownBefore = root ? blockTexts(root) : [];
     showEditorHtml(preview.html, preview.objectModel);
     if (root && carry) {
-      const index = matchBlock(blockTexts(root), carry);
-      const point = { index: index >= 0 ? index : target, offset: carry.offset };
-      const placed = index >= 0 && restoreCaret(root, [point, point]) && window.document.execCommand("insertText", false, carry.insert);
+      const point = { index: target, offset: carry.offset };
+      const placed = blockTexts(root)[target] === carry.text && restoreCaret(root, [point, point]) && window.document.execCommand("insertText", false, carry.insert);
       if (!placed) {
-        // 极少见：新版式里找不到原段落。把字留在提示里，不让它无声消失
+        // 极少见：实际版式与预取的不一致。不猜位置，把字留在提示里
+        leaveEditorCaret(root);
         noteAction(`载入期间输入的“${carry.insert.slice(0, 40)}”没能写入正文，请在需要的位置重新输入。`, 15000);
       }
-    } else if (root && caret.length) restoreCaret(root, caret);
+    } else if (root && caret.length) restoreMappedCaret(root, shownBefore, caret);
     return true;
   }
   if (result.formatTemplate) record.formatTemplate = result.formatTemplate;
@@ -1614,6 +1648,11 @@ async function restoreLocalDraft() {
   try {
     // 审查 S6：先等在途的保存结束，保持单飞。
     if (savePromise) await savePromise.catch(() => undefined);
+    // 终审建议：恢复别的标签的草稿时，本标签的旧草稿先换个键保存——恢复后的编辑会写本标签的键，不能把它覆盖掉
+    if (draft.tabId !== browserTab && !keepOwnDraftAside(record)) {
+      noteAction("本机存储写入失败，请先处理本标签的草稿（恢复、下载或舍弃）再恢复这一份。", 10000);
+      return;
+    }
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
     await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
@@ -1629,6 +1668,17 @@ async function restoreLocalDraft() {
   } finally {
     draftBusy.value = false;
   }
+}
+/** 本标签的旧草稿改存到 “<tabId>-kept-<时间>” 键下（仍列在恢复条里）；没有这份草稿或改存成功时返回 true。 */
+function keepOwnDraftAside(record: DocumentRecord): boolean {
+  const own = localDrafts.value.find(item => item.tabId === browserTab);
+  if (!own) return true;
+  const moved: DraftV2 = { ...own, tabId: `${browserTab}-kept-${own.savedAt}` };
+  if (writeDraft(window.localStorage, account(), moved) !== "ok") return false;
+  removeDraft(window.localStorage, account(), record.id, own.tabId, { savedAt: own.savedAt });
+  localDrafts.value = localDrafts.value.map(item => item === own ? moved : item);
+  if (localDraft.value === own) localDraft.value = moved;
+  return true;
 }
 /** 审查/验收 S11：舍弃用应用内二次确认（不再用浏览器原生 confirm）。 */
 function discardLocalDraft() {
@@ -2216,6 +2266,7 @@ onMounted(() => {
   updateTimer = window.setInterval(() => void checkOthersUpdated(), 45000);
   window.addEventListener("resize", scheduleMarks);
   window.addEventListener("keydown", bufferLockedTyping, true);
+  window.addEventListener("compositionstart", noteLockedComposition, true);
   void load();
 });
 onUnmounted(() => {
@@ -2231,6 +2282,7 @@ onUnmounted(() => {
   window.clearInterval(updateTimer);
   window.removeEventListener("resize", scheduleMarks);
   window.removeEventListener("keydown", bufferLockedTyping, true);
+  window.removeEventListener("compositionstart", noteLockedComposition, true);
   window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
   window.cancelAnimationFrame(marksFrame);
   window.clearTimeout(retryTimer);
