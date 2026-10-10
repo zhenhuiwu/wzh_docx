@@ -11,7 +11,7 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { countChars, mapBlockIndex, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
+import { countChars, caretBlockIndex, mapBlockIndex, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -92,6 +92,8 @@ const aiUndo = ref<{ id: string; content: string; revision: number } | null>(nul
 const localDraft = ref<DraftV2 | null>(null);
 const localDrafts = ref<DraftV2[]>([]);
 const draftBusy = ref(false);
+/** 最后一审建议 3：恢复的草稿还没存上服务器（保存在重试）。存上前草稿不删、恢复条保持“恢复中…”、编辑区保持锁定。 */
+const restorePending = ref<{ draft: DraftV2; record: DocumentRecord } | null>(null);
 const exporting = ref(false);
 const exportMenu = ref(false);
 const exportError = ref("");
@@ -333,7 +335,7 @@ const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiIns
 // 8.2 第 7 条：aiLocked 仍是“编辑区锁”（版本记录打开、AI 预览、本机草稿未处理、重绘中都不能编辑正文），只锁编辑区与格式工具栏。
 // 终验回归 H1：打开文档后、查完本机草稿之前编辑区不可输入（否则新输入会覆盖本标签的旧草稿）
 const checkingDrafts = ref(false);
-const aiLocked = computed(() => checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value));
+const aiLocked = computed(() => checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value) || Boolean(restorePending.value));
 // 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
 const opBusy = computed(() => skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
 const canUndoAi = computed(() => Boolean(aiUndo.value) && aiUndo.value?.id === document.value?.id && aiUndo.value?.revision === document.value?.revision && !isDirty.value && !aiLocked.value && !saving.value && !addingHeading.value);
@@ -438,6 +440,7 @@ async function load() {
 }
 function resetSaveState() {
   window.clearTimeout(retryTimer);
+  if (restorePending.value) { restorePending.value = null; draftBusy.value = false; }
   window.clearTimeout(savingTimer);
   readonly.value = false;
   readonlyReason.value = "";
@@ -1000,7 +1003,8 @@ function bufferLockedTyping(event: KeyboardEvent) {
 /** 重绘后按段落序列对齐恢复光标；对不上（或光标所在段被改了）就不放光标，免得接着打的字落进别的段。 */
 function restoreMappedCaret(root: HTMLElement, before: string[], caret: { index: number; offset: number }[]): boolean {
   const after = blockTexts(root);
-  const mapped = caret.map(point => ({ index: mapBlockIndex(before, after, point.index), offset: point.offset }));
+  // 对齐不确定（含超大文档）时退一步放到文字在前后两版都唯一的段（最后一审建议 2：尽量不无谓失焦）
+  const mapped = caret.map(point => ({ index: caretBlockIndex(before, after, point.index), offset: point.offset }));
   if (mapped.length === 2 && mapped.every((point, n) => point.index >= 0 && after[point.index] === before[caret[n].index]) && restoreCaret(root, mapped)) return true;
   leaveEditorCaret(root);
   return false;
@@ -1645,9 +1649,15 @@ async function restoreLocalDraft() {
   const draft = localDraft.value, record = document.value;
   if (!draft || !record || draftBusy.value || readonly.value || !draft.markdown) return;
   draftBusy.value = true;
+  let pending = false;
   try {
     // 审查 S6：先等在途的保存结束，保持单飞。
     if (savePromise) await savePromise.catch(() => undefined);
+    // 最后一审建议 3：上一份恢复的内容还没存上服务器（重试中/冲突未处理）时不恢复下一份，否则会把它覆盖掉
+    if (isDirty.value || retrying.value || blocked.value) {
+      noteAction("编辑区还有没保存到服务器的内容（可能是刚恢复的那份）。等保存成功或处理完冲突后再恢复下一份，以免覆盖。", 10000);
+      return;
+    }
     // 终审建议：恢复别的标签的草稿时，本标签的旧草稿先换个键保存——恢复后的编辑会写本标签的键，不能把它覆盖掉
     if (draft.tabId !== browserTab && !keepOwnDraftAside(record)) {
       noteAction("本机存储写入失败，请先处理本标签的草稿（恢复、下载或舍弃）再恢复这一份。", 10000);
@@ -1656,19 +1666,44 @@ async function restoreLocalDraft() {
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
     await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
-    // 编辑区按服务器正文重绘（草稿条存在时 refreshEditorFormatting 会被锁住）。
-    if (!blocked.value && !isDirty.value && document.value === record) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
-    if (!blocked.value) {
-      removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
-      localDrafts.value = localDrafts.value.filter(item => item !== draft);
-      localDraft.value = localDrafts.value[0] ?? null;
-      // 恢复的是本标签自己的草稿时，保存期间写下的同键草稿已经落库，按本页面写入者清掉
-      if (document.value === record) persistLocalDraft();
+    if (blocked.value || document.value !== record) return;
+    if (retrying.value || saving.value) {
+      // 最后一审建议 3：没存上服务器之前不删这份草稿，也不解锁编辑区（编辑区里仍是旧正文，解锁后一输入就会把恢复的内容冲掉）。
+      // 重试存上后由下面的 watch 收尾：按服务器正文重绘、删草稿、显示下一份。
+      restorePending.value = { draft, record };
+      pending = true;
+      noteAction("恢复的内容还没存上服务器，正在自动重试；存上后会显示在编辑区，再处理下一份草稿。", 10000);
+      return;
     }
+    await finishRestore(draft, record);
   } finally {
-    draftBusy.value = false;
+    if (!pending) draftBusy.value = false;
   }
 }
+async function finishRestore(draft: DraftV2, record: DocumentRecord) {
+  // 编辑区按服务器正文重绘（草稿条存在时 refreshEditorFormatting 会被锁住）。
+  // 仍有未存上的部分（如冲突已转为冲突副本）时不重绘，与原逻辑一致。
+  if (!isDirty.value && document.value === record) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
+  removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
+  localDrafts.value = localDrafts.value.filter(item => item !== draft);
+  localDraft.value = localDrafts.value[0] ?? null;
+  // 恢复的是本标签自己的草稿时，保存期间写下的同键草稿已经落库，按本页面写入者清掉
+  if (document.value === record) persistLocalDraft();
+}
+watch([restorePending, isDirty, retrying, saving, blocked], async () => {
+  const pending = restorePending.value;
+  if (!pending || saving.value || retrying.value) return;
+  if (document.value !== pending.record) { restorePending.value = null; draftBusy.value = false; return; }
+  if (blocked.value) {
+    // 冲突/被拒：草稿保留在恢复条里，交给冲突处理；此时恢复下一份会被 restoreLocalDraft 拒绝
+    restorePending.value = null;
+    draftBusy.value = false;
+    return;
+  }
+  restorePending.value = null;
+  try { await finishRestore(pending.draft, pending.record); }
+  finally { draftBusy.value = false; }
+});
 /** 本标签的旧草稿改存到 “<tabId>-kept-<时间>” 键下（仍列在恢复条里）；没有这份草稿或改存成功时返回 true。 */
 function keepOwnDraftAside(record: DocumentRecord): boolean {
   const own = localDrafts.value.find(item => item.tabId === browserTab);
@@ -1683,7 +1718,7 @@ function keepOwnDraftAside(record: DocumentRecord): boolean {
 /** 审查/验收 S11：舍弃用应用内二次确认（不再用浏览器原生 confirm）。 */
 function discardLocalDraft() {
   const draft = localDraft.value;
-  if (!draft || !document.value) return;
+  if (!draft || !document.value || draftBusy.value) return;
   if (!draftConfirmDiscard.value) { draftConfirmDiscard.value = true; return; }
   draftConfirmDiscard.value = false;
   removeDraft(window.localStorage, account(), document.value.id, draft.tabId, { savedAt: draft.savedAt });
@@ -2399,7 +2434,7 @@ onUnmounted(() => {
                 <button type="button" class="subtle sm" :aria-expanded="draftDiffOpen" @click="draftDiffOpen = !draftDiffOpen">查看差异</button>
                 <button type="button" class="primary sm" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
                 <button type="button" class="ghost sm" @click="downloadLocalDraft">下载</button>
-                <button type="button" class="ghost sm" @click="discardLocalDraft">舍弃</button>
+                <button type="button" class="ghost sm" :disabled="draftBusy" @click="discardLocalDraft">舍弃</button>
               </template>
             </span>
           </div>

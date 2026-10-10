@@ -44,6 +44,9 @@ open_pages: list = []
 def step(name: str):
     def wrap(fn):
         def run(*args, **kwargs):
+            if os.environ.get("E2E_ONLY") and os.environ["E2E_ONLY"] not in name:  # 调试用：只跑名字含该词的步骤
+                print(f"SKIP {name}", flush=True)
+                return
             try:
                 fn(*args, **kwargs)
                 results.append((name, True, ""))
@@ -470,7 +473,6 @@ def main() -> int:
             # 1) 不锁的写回路径（审查员探针）：重绘载入期间在乙后的“无。”里打字
             append_probe("A")
             open_doc(page, data)
-            page.wait_for_timeout(1500)
             type_after(page, "探针A丙段落", "（李工改丙A）")
             insert_before("A")
             page.evaluate(slow_preview, "delay")
@@ -494,7 +496,6 @@ def main() -> int:
             page.reload()
             expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
             wait_saved(page)
-            page.wait_for_timeout(1500)
             type_after(page, "探针B丙段落", "（李工改丙B）")
             target = second_none("B")
             target.click()
@@ -684,6 +685,84 @@ def main() -> int:
             expect(bar).to_have_count(0)
             ctx.close()
         session_expired_recovery()
+
+        @step("草稿边角：本标签旧草稿改存；恢复的一份没存上前不删草稿、不恢复下一份（最后一审建议 3）")
+        def draft_corner_cases():
+            record = data["zhang"].call("GET", f"/documents/{doc_id}")
+            tail = "\n\n草稿探针甲段落。\n\n草稿探针乙段落。\n\n草稿探针丙段落。\n"
+            data["zhang"].call("PATCH", f"/documents/{doc_id}/content", json={
+                "expectedRevision": record["revision"], "markdownContent": record["markdownContent"].rstrip("\n") + tail,
+                "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+            fail_saves = lambda route: route.abort() if route.request.method == "PATCH" else route.continue_()  # noqa: E731
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            open_pages.append(page)
+            login(page, f"e2e-li-{RUN}")
+            # 1) 本标签（page）写下草稿 O：保存一直失败
+            open_doc(page, data)
+            page.route("**/documents/*/content", fail_saves)
+            type_after(page, "草稿探针乙段落", "（O本标签）")
+            draft_has = "text => Object.entries(localStorage).some(([k, v]) => k.startsWith('doc-workbench.draft.v2:') && v.includes(text))"
+            page.wait_for_function(draft_has, arg="（O本标签）", timeout=20000)
+            # 2) 另一个标签写下草稿 X 后关闭
+            other = ctx.new_page()
+            open_doc(other, data)
+            other.route("**/documents/*/content", fail_saves)
+            type_after(other, "草稿探针甲段落", "（X别的标签）")
+            other.wait_for_function(draft_has, arg="（X别的标签）", timeout=20000)
+            # 关页时的 keepalive 保存不受 route/断网模拟拦截、会落库；这里让它失败，模拟“没来得及存上就关了”
+            other.evaluate("""() => { const original = window.fetch;
+                window.fetch = (url, init) => init && init.keepalive ? Promise.reject(new TypeError('offline')) : original(url, init); }""")
+            other.close()
+            page.wait_for_timeout(1000)
+            # 3) 本标签离开文档再回来（同一页面），两份草稿都列出
+            page.get_by_role("button", name="返回文档列表").click()
+            expect(page.get_by_role("alertdialog")).to_be_visible(timeout=20000)
+            page.get_by_test_id("leave-confirm").click()
+            expect(page.locator(".paper-content")).to_have_count(0, timeout=30000)
+            page.go_back()
+            expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+            bar = page.get_by_test_id("draft-recovery")
+            expect(bar).to_be_visible(timeout=20000)
+            pick = bar.locator("select")
+            expect(pick.locator("option")).to_have_count(2, timeout=10000)
+            stored = lambda: page.evaluate("JSON.stringify(Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith('doc-workbench.draft.v2:'))))")  # noqa: E731
+            # 选中 X（看差异里有 X 的那份）
+            bar.get_by_role("button", name="查看差异").click()
+            if "（X别的标签）" not in page.locator(".draft-recovery").inner_text():
+                pick.select_option(index=1 - int(pick.input_value()))
+            expect(page.locator(".draft-recovery")).to_contain_text("（X别的标签）", timeout=10000)
+            # 4) 恢复 X（保存失败，进入重试）：本标签的旧草稿 O 改存到新键；X 没存上之前草稿不删、
+            #    恢复条停在“恢复中…”（不能切换/恢复下一份/舍弃），编辑区保持锁定
+            bar.get_by_role("button", name="恢复并保存").click()
+            page.wait_for_timeout(3000)  # 经过至少一次自动重试
+            # 恢复条仍是 X 这份（差异里是 X 的修改），没有换成下一份 O
+            expect(page.locator(".draft-diff")).to_contain_text("（X别的标签）", timeout=1000)
+            drafts = stored()
+            assert "-kept-" in drafts and "（O本标签）" in drafts, "本标签的旧草稿 O 没有改存"
+            assert "（X别的标签）" not in server_markdown()
+            expect(page.locator(".wb-notice.info")).to_contain_text("还没存上服务器", timeout=20000)
+            expect(bar.get_by_role("button", name="恢复中…")).to_be_disabled()
+            expect(pick).to_be_disabled()
+            expect(bar.get_by_role("button", name="舍弃")).to_be_disabled()
+            expect(page.locator(".paper-content")).to_have_attribute("contenteditable", "false")
+            # 5) 网络恢复：X 存上服务器后才显示在编辑区、删掉 X 草稿，恢复条换成 O
+            page.unroute("**/documents/*/content")
+            page.evaluate("window.dispatchEvent(new Event('online'))")
+            expect(page.locator(".paper-content")).to_contain_text("（X别的标签）", timeout=60000)
+            assert "（X别的标签）" in server_markdown()
+            expect(pick).to_have_count(0, timeout=20000)  # 只剩 O
+            expect(bar.get_by_role("button", name="恢复并保存")).to_be_enabled()
+            assert "（X别的标签）" not in stored() and "（O本标签）" in stored()
+            # 6) 再恢复 O：两份都在服务器上
+            bar.get_by_role("button", name="恢复并保存").click()
+            expect(bar).to_have_count(0, timeout=30000)
+            wait_saved(page, 30000)
+            server = server_markdown()
+            assert "（X别的标签）" in server and "（O本标签）" in server, server[-300:]
+            shot(page, "30-两份草稿依次恢复")
+            ctx.close()
+        draft_corner_cases()
 
         @step("同一账号多标签提示（非阻断，可关闭）")
         def multi_tab():
