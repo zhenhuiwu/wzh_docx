@@ -83,7 +83,7 @@ let actionNoteTimer: number | undefined;
 // 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
 const readonly = ref(false);
 const readonlyReason = ref("");
-const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string } | null>(null);
+const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string; deletedText?: string } | null>(null);
 const revertingBlock = ref(false);
 const retrying = ref(false);
 const failures = ref(0);
@@ -251,10 +251,13 @@ async function load() {
     await browserTabId();
     browserTab = browserTabIdentity().current;
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
-    const record = await getDocument(id);
+    const fetched = await getDocument(id);
     const preview = await previewDocument(id);
     if (id !== documentId.value || version !== loadVersion) return;
-    document.value = record;
+    document.value = fetched;
+    // 界面复验 N3：document 是深层 ref，之后的 “document.value === record” 比较要用它返回的代理对象，
+    // 否则加载时取到的 objectModel（整篇保存标签）、草稿落库核对等都会被当成“文档已切换”而丢掉。
+    const record = document.value!;
     if (record.permissions && !record.permissions.canEdit) {
       // 01 §6.1：canEdit=false 直接只读，不必等第一次 403。
       readonly.value = true;
@@ -1433,7 +1436,8 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       // 界面验收 S8：位置单独显示，说明文字只用原因（details.reason），不再写两遍。
       const reason = typeof apiError.details?.reason === "string" ? apiError.details.reason : apiError.message;
       const blockText = typeof apiError.details?.blockText === "string" ? apiError.details.blockText : undefined;
-      blocked.value = { message: location ? reason : apiError.message, location, content, code: apiError.code, blockText };
+      const deletedText = typeof apiError.details?.deletedText === "string" ? apiError.details.deletedText : undefined;
+      blocked.value = { message: location ? reason : apiError.message, location, content, code: apiError.code, blockText, deletedText };
     }
   }
 }
@@ -1441,12 +1445,18 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
 async function revertBlockedBlock() {
   const record = document.value, failed = blocked.value;
   if (!record || !failed?.blockText || revertingBlock.value) return;
-  const reverted = revertBlock(savedContent.value, markdownContent.value, failed.blockText);
+  const reverted = revertBlock(savedContent.value, markdownContent.value, failed.blockText, failed.deletedText);
   if (reverted === null) {
     noteAction("没能自动找到这一段，请手动改回这一段，或先下载你的修改。", 8000);
     return;
   }
   revertingBlock.value = true;
+  // 界面复验 N2：撤销期间锁住编辑区（编辑区还是撤销前的样子，任何输入都会把这一段再删掉），
+  // 保存成功后总是按服务器正文重绘，不依赖差异判断。
+  refreshingEditor.value = true;
+  if (editor.value) editor.value.contentEditable = "false";
+  const previous = markdownContent.value;
+  let rendered = false;
   try {
     if (savePromise) await savePromise.catch(() => undefined);
     markdownContent.value = reverted;
@@ -1454,12 +1464,26 @@ async function revertBlockedBlock() {
     failures.value = 0;
     failingSince = null;
     await saveContent(reverted, "manual");
-    if (!blocked.value && !isDirty.value && document.value === record) {
+    if (document.value?.id !== record.id) return;
+    if (!blocked.value && markdownContent.value === savedContent.value) {
+      const scroller = editor.value?.closest(".page-scroll");
+      const top = scroller?.scrollTop ?? 0;
       await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
+      rendered = true;
+      if (scroller) scroller.scrollTop = top;
       noteAction("已撤销这一段的修改，其余修改已保存。");
+    } else if (markdownContent.value === reverted) {
+      // 没保存成功：正文回到与编辑区一致的内容（编辑区没重绘，不能让两者不一致），可以再点一次撤销
+      markdownContent.value = previous;
+      if (!blocked.value) blocked.value = failed;
+      noteAction("撤销没有保存成功，请稍后再点一次“撤销这一段的修改”。", 8000);
     }
   } finally {
     revertingBlock.value = false;
+    if (!rendered) {
+      refreshingEditor.value = false;
+      if (editor.value) editor.value.contentEditable = String(editable.value);
+    }
   }
 }
 function retryNow() {

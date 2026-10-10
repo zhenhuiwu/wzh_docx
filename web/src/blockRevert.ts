@@ -33,7 +33,31 @@ function hunks(a: string[], b: string[]): Hunk[] {
   return found;
 }
 
-export function revertBlock(saved: string, current: string, blockText: string): string | null {
+const sameText = (block: string, target: string) => {
+  const text = normalize(block);
+  return Boolean(text) && Boolean(target) && (text === target || text.includes(target) || target.includes(text));
+};
+
+/**
+ * 界面复验 N1：被拒的是“删除整段”时（服务器给出 deletedText），被删的段落只在上次保存的正文里。
+ * 在有变化的片段里按“旧内容”找这一段；它在新内容里已不存在时把整个片段换回保存时的原文（插回原位置）。
+ */
+export function restoreDeletedBlock(saved: string, current: string, deletedText: string): string | null {
+  const before = blocks(saved), after = blocks(current);
+  const target = normalize(deletedText);
+  const match = hunks(before, after).filter(hunk =>
+    before.slice(hunk.oldStart, hunk.oldEnd).some(block => sameText(block, target))
+    && !after.slice(hunk.newStart, hunk.newEnd).some(block => normalize(block) === normalize(before.slice(hunk.oldStart, hunk.oldEnd).find(item => sameText(item, target))!)));
+  if (match.length !== 1) return null;
+  const [hunk] = match;
+  return [...after.slice(0, hunk.newStart), ...before.slice(hunk.oldStart, hunk.oldEnd), ...after.slice(hunk.newEnd)].join("\n\n");
+}
+
+export function revertBlock(saved: string, current: string, blockText: string, deletedText?: string): string | null {
+  if (deletedText) {
+    const restored = restoreDeletedBlock(saved, current, deletedText);
+    if (restored !== null) return restored;
+  }
   const before = blocks(saved), after = blocks(current);
   const target = normalize(blockText);
   const changed = hunks(before, after);

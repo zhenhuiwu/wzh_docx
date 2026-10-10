@@ -357,7 +357,11 @@ def word_format_error(content: str, exc: ValueError) -> AppError:
     except (IndexError, ValueError):
         return AppError(422, WORD_BLOCK_PROTECTED, str(exc))
     # details.reason 只写原因，界面说明条用它避免位置写两遍（界面验收 S8）；message 保留位置给其他入口。
-    return AppError(422, WORD_BLOCK_PROTECTED, f"{location_text(location)}：{exc}", details={"location": location, "reason": str(exc), "blockText": block_text[:2000]})
+    details = {"location": location, "reason": str(exc), "blockText": block_text[:2000]}
+    removed = getattr(exc, "removed_text", None)
+    if removed:
+        details["deletedText"] = removed[:2000]  # 界面复验 N1：被拒的删除，原段落文字
+    return AppError(422, WORD_BLOCK_PROTECTED, f"{location_text(location)}：{exc}", details=details)
 
 
 def _content_result(request: Request, row: dict) -> dict[str, object]:

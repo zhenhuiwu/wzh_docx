@@ -159,8 +159,9 @@ def test_local_storage_claim_does_not_grant_access(client: TestClient) -> None:
     assert signed_in.status_code == 200
     assert "files.read" not in signed_in.json()["data"]["permissions"]
     denied = client.get("/api/v1/files/00000000-0000-4000-8000-000000000001/content")
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "FORBIDDEN"
+    # 复审 S9：读文件“不能读”与“不存在”统一 404，不泄露文件是否存在（伪造本地角色仍无效）
+    assert denied.status_code == 404
+    assert denied.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_change_password_revokes_other_sessions(client: TestClient) -> None:

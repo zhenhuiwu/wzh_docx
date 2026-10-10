@@ -48,14 +48,22 @@ _PROTECTED_EDIT = (
 class WordEditError(ValueError):
     """A Word write-back failure tied to one Markdown top-level block (01 §4.10)."""
 
-    def __init__(self, message: str, block_index: int | None):
+    def __init__(self, message: str, block_index: int | None, removed_text: str | None = None):
         super().__init__(message)
         self.block_index = block_index
+        # 界面复验 N1：被拒的是“删除整段”时，被删段落在原稿里的文字（编辑稿里已没有它），供“撤销这一段”按原内容找回。
+        self.removed_text = removed_text
+
+
+class _RemoveRefused(ValueError):
+    def __init__(self, message: str, removed_text: str):
+        super().__init__(message)
+        self.removed_text = removed_text
 
 
 def _remove_element(element) -> None:
     if element.xpath(_PROTECTED_INLINE + "|.//w:sectPr|.//w:gridSpan|.//w:vMerge"):
-        raise ValueError("此内容包含图片、域、合并单元格或分节信息，无法安全删除；请在原稿中修改。")
+        raise ValueError("此内容包含图片、域、书签、合并单元格或分节信息，无法安全删除；请在原稿中修改。")
     element.getparent().remove(element)
 
 
@@ -737,7 +745,8 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         except WordEditError:
             raise
         except ValueError as exc:
-            raise WordEditError(str(exc), _failing_index(exc, new_start, new_end, len(target))) from None
+            raise WordEditError(str(exc), _failing_index(exc, new_start, new_end, len(target)),
+                                getattr(exc, "removed_text", None)) from None
     _finish_document(doc, test_pictures)
     doc.save(output_path)
 
@@ -783,10 +792,14 @@ def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start,
          if element.getparent() is not None),
         doc.element.body.sectPr,
     ))
-    for block in old_blocks:
+    for position, block in enumerate(old_blocks):
         for element in block.elements:
             if element.getparent() is not None:
-                _remove_element(element)
+                try:
+                    _remove_element(element)
+                except ValueError as exc:
+                    removed = " ".join("".join(source[old_start + prefix + position].itertext()).split())
+                    raise _RemoveRefused(str(exc), removed) from None
     for offset, element in enumerate(new_blocks):
         _located(new_start + prefix + offset, _insert_block, doc, element, anchor,
                  image_sources=image_sources, outline_headings=outline_headings)
