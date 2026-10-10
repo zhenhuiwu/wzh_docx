@@ -1148,3 +1148,8 @@ dialog::backdrop {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* 带放大镜图标的搜索框：<label class="search-box"><svg class="ico">…</svg><input class="control"></label> */
+.search-box { position: relative; display: block; width: calc(var(--space-7) * 7); }
+.search-box .ico { position: absolute; top: 8px; left: 10px; color: var(--text-tertiary); pointer-events: none; }
+.search-box .control { width: 100%; padding-left: 32px; }

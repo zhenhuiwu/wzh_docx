@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import StatePanel from "../components/StatePanel.vue";
 import { useRoute } from "vue-router";
 import { ApiError } from "../api/client";
 import { uploadFile } from "../api/files";
@@ -57,45 +58,50 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <section class="card">
-    <div class="head">
-      <h1>{{ base?.name || "知识库" }}</h1>
-      <router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link>
-    </div>
-    <p v-if="phase === 'loading'" class="empty">正在读取</p>
-    <p v-else-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
+  <section class="view fill">
+    <header class="page-head">
+      <div>
+        <h1>{{ base?.name || "知识库" }}</h1>
+        <p v-if="base" class="page-desc"><span class="tag plain">{{ base.scope === "project" ? "项目知识库" : "单位知识库" }}</span><span v-if="base.summary" class="summary">{{ base.summary }}</span></p>
+      </div>
+      <div class="page-actions"><router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link></div>
+    </header>
+    <div v-if="phase === 'loading'" class="card"><StatePanel kind="loading" text="正在读取知识库…" /></div>
+    <div v-else-if="phase === 'error'" class="card"><StatePanel kind="error" title="知识库没有载入" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
     <template v-else>
-      <div class="tabs">
-        <button type="button" :class="{ on: tab === 'materials' }" @click="tab = 'materials'">资料</button>
-        <button type="button" :class="{ on: tab === 'search' }" @click="tab = 'search'">检索</button>
+      <nav class="tabs" aria-label="知识库内容">
+        <button type="button" :class="{ on: tab === 'materials' }" :aria-current="tab === 'materials' ? 'page' : undefined" @click="tab = 'materials'">资料<span class="count">{{ sources.length }}</span></button>
+        <button type="button" :class="{ on: tab === 'search' }" :aria-current="tab === 'search' ? 'page' : undefined" @click="tab = 'search'">检索</button>
+      </nav>
+      <div v-if="tab === 'search'" class="card">
+        <StatePanel title="检索尚未接入" text="未发布和未解析的资料不会出现在检索结果里。" />
       </div>
-      <div v-if="tab === 'search'">
-        <p class="empty">检索尚未接入。未发布和未解析的资料不会出现在检索结果里。</p>
-      </div>
-      <div v-else>
-        <form class="create" @submit.prevent="submitFile">
-          <label>资料名称<input v-model="name" class="control" type="text" :disabled="submitting" /></label>
-          <label>文件<input class="control" type="file" :disabled="submitting" @change="file = ($event.target as HTMLInputElement).files?.[0] ?? null" /></label>
-          <button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button>
+      <div v-else class="card kb-card">
+        <form class="query upload" @submit.prevent="submitFile">
+          <div class="query-fields">
+            <label><span>资料名称</span><input v-model="name" class="control" type="text" :disabled="submitting" /></label>
+            <label><span>文件</span><input class="control file" type="file" :disabled="submitting" @change="file = ($event.target as HTMLInputElement).files?.[0] ?? null" /></label>
+          </div>
+          <div class="query-actions"><button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button></div>
         </form>
         <p v-if="notice" class="notice" role="status">{{ notice }}</p>
-        <p v-if="sources.length === 0" class="empty">还没有资料</p>
-        <div v-else class="table-wrap">
+        <StatePanel v-if="sources.length === 0" title="还没有资料" text="选择文件并登记后，资料会出现在这里。" />
+        <div v-else class="table-wrap kb-table">
           <table>
             <thead>
               <tr>
                 <th>资料名</th>
-                <th>版本</th>
-                <th>状态</th>
-                <th class="from-mid">说明</th>
+                <th class="col-ver">版本</th>
+                <th class="col-state">状态</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="item in sources" :key="item.id">
                 <td>{{ item.name }}</td>
-                <td>{{ item.version }}</td>
-                <td>{{ item.status === "uploaded" ? "已上传" : item.status }}</td>
-                <td class="from-mid">{{ item.message || "—" }}</td>
+                <td class="num">v{{ item.version }}</td>
+                <td><span class="tag" :class="item.status === 'uploaded' ? 'plain' : 'warning'">{{ item.status === "uploaded" ? "已上传" : item.status }}</span></td>
+                <td class="muted">{{ item.message || "—" }}</td>
               </tr>
             </tbody>
           </table>
@@ -106,11 +112,13 @@ onMounted(() => void load());
 </template>
 
 <style scoped>
-.create { display: grid; gap: 8px; max-width: 420px; margin-bottom: 16px; }
-.create label { display: grid; gap: 4px; }
-.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
-.tabs button.on { border-color: var(--stamp); }
-@media (max-width: 767px) {
-  .from-mid { display: none; }
-}
+.page-desc { display: flex; align-items: center; gap: var(--space-2); }
+.summary { color: var(--text-secondary); }
+.kb-card { overflow: hidden; }
+.kb-table { flex: 1; min-height: 0; overflow-y: auto; }
+.kb-table table { table-layout: fixed; }
+.col-ver { width: 10%; }
+.col-state { width: 12%; }
+.kb-table td { white-space: normal; overflow-wrap: anywhere; }
+.upload .file { width: calc(var(--space-7) * 9); }
 </style>

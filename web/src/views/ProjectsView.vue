@@ -225,9 +225,6 @@ onMounted(async () => {
 <style scoped>
 .project-surface { overflow:hidden; }
 .project-query { display:flex; flex-shrink:0; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-subtle); }
-.search-box { position:relative; display:block; width:calc(var(--space-7) * 7); }
-.search-box .ico { position:absolute; top:8px; left:10px; color:var(--text-tertiary); }
-.search-box .control { padding-left:32px; }
 .inline-field { display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); font-size:var(--text-sm); white-space:nowrap; }
 .inline-field .control { width:calc(var(--space-7) * 3); }
 .project-list { flex:1; min-height:0; overflow-y:auto; }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref, watch } from "vue";
+import StatePanel from "../components/StatePanel.vue";
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { getCurrentSession } from "../api/identity";
@@ -62,6 +63,19 @@ async function submitCreate() {
   }
 }
 
+const createDialog = ref<HTMLDialogElement | null>(null);
+const nameInput = ref<HTMLInputElement | null>(null);
+watch(creating, async (open) => {
+  await nextTick();
+  const dialog = createDialog.value;
+  if (!dialog) return;
+  if (open && !dialog.open) { dialog.showModal(); nameInput.value?.focus(); }
+  if (!open && dialog.open) dialog.close();
+});
+function dismissCreate() {
+  if (!submitting.value) { creating.value = false; formError.value = ""; }
+}
+
 onMounted(async () => {
   try {
     ownerId.value = (await getCurrentSession()).user.id;
@@ -75,71 +89,82 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="card">
-    <div class="head">
-      <h1>知识库</h1>
-      <button v-if="!creating" type="button" class="primary" @click="creating = true">新建知识库</button>
-    </div>
-    <p class="notice">只显示你有权查看的知识库。上传成功还不等于可以检索。公司资料格式和检索范围还没有定。</p>
-    <p v-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
-    <form class="query" @submit.prevent="load">
-      <div class="query-fields">
-        <label><span>名称</span><input v-model="nameQuery" class="control" type="search" /></label>
+  <section class="view fill">
+    <header class="page-head">
+      <div><h1>知识库</h1><p class="page-desc">只显示你有权查看的知识库。上传成功还不等于可以检索；公司资料格式和检索范围尚未确定。</p></div>
+      <div class="page-actions"><button type="button" class="primary" :disabled="creating" @click="creating = true"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建知识库</button></div>
+    </header>
+    <div class="card kb-card">
+      <form class="query" @submit.prevent="load">
+        <div class="query-fields">
+          <label class="search-box"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5" /></svg><input v-model="nameQuery" class="control" type="search" placeholder="搜索知识库名称" aria-label="名称" /></label>
+        </div>
+        <div class="query-actions"><button type="submit" class="primary">查询</button></div>
+      </form>
+      <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取知识库…" />
+      <StatePanel v-else-if="phase === 'error'" kind="error" title="知识库加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
+      <StatePanel v-else-if="items.length === 0" :title="nameQuery.trim() ? '没有符合条件的知识库' : '还没有你能查看的知识库'" text="知识库用于存放项目或单位的参考资料。" />
+      <div v-else class="table-wrap kb-table">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name">名称</th>
+              <th class="col-scope">归属</th>
+              <th class="col-state">状态</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in items" :key="item.id">
+              <td><router-link class="link" :to="{ name: 'knowledge-base', params: { id: item.id } }">{{ item.name }}</router-link></td>
+              <td><span class="tag plain">{{ item.scope === "project" ? "项目" : "单位" }}</span></td>
+              <td><span class="status" :data-status="item.state === 'active' ? '启用' : '已归档'">{{ item.state === "active" ? "启用" : "已归档" }}</span></td>
+              <td class="muted">{{ item.summary || "—" }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <div class="query-actions"><button type="submit" class="primary">查询</button></div>
-    </form>
-    <form v-if="creating" class="create" @submit.prevent="submitCreate">
-      <label>名称<input v-model="name" class="control" type="text" :disabled="submitting" /></label>
-      <label>说明<input v-model="summary" class="control" type="text" :disabled="submitting" /></label>
-      <label>归属
-        <select v-model="scope" class="control" :disabled="submitting">
-          <option value="project">项目</option>
-          <option value="organization">单位</option>
-        </select>
-      </label>
-      <label v-if="scope === 'project'">项目
-        <select v-model="projectId" class="control" :disabled="submitting">
-          <option value="">请选择</option>
-          <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
-        </select>
-      </label>
-      <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
-      <div class="actions">
-        <button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在创建" : "创建" }}</button>
-        <button type="button" class="ghost" @click="creating = false">取消</button>
-      </div>
-    </form>
-    <p v-if="phase === 'loading'" class="empty">正在读取知识库</p>
-    <p v-else-if="items.length === 0" class="empty">还没有你能查看的知识库</p>
-    <div v-else class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>归属</th>
-            <th>状态</th>
-            <th class="from-mid">说明</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in items" :key="item.id">
-            <td><router-link class="link" :to="{ name: 'knowledge-base', params: { id: item.id } }">{{ item.name }}</router-link></td>
-            <td>{{ item.scope === "project" ? "项目" : "单位" }}</td>
-            <td>{{ item.state === "active" ? "启用" : "已归档" }}</td>
-            <td class="from-mid">{{ item.summary || "—" }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="phase === 'ready' && items.length" class="pager"><span class="total">共 {{ total }} 条</span></div>
     </div>
-    <p v-if="phase === 'ready'" class="pager">共 {{ total }} 条</p>
+
+    <dialog ref="createDialog" class="app-dialog" aria-labelledby="create-kb-title" @cancel.prevent="dismissCreate">
+      <form v-if="creating" class="create" novalidate @submit.prevent="submitCreate">
+        <div class="dialog-head"><h2 id="create-kb-title">新建知识库</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="submitting" @click="dismissCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
+        <div class="dialog-fields">
+          <div class="field span-2"><label for="kb-name" class="required">名称</label><input id="kb-name" ref="nameInput" v-model="name" class="control" type="text" :disabled="submitting" /></div>
+          <div class="field span-2"><label for="kb-summary">说明</label><input id="kb-summary" v-model="summary" class="control" type="text" :disabled="submitting" /></div>
+          <div class="field">
+            <label for="kb-scope" class="required">归属</label>
+            <select id="kb-scope" v-model="scope" class="control" :disabled="submitting">
+              <option value="project">项目</option>
+              <option value="organization">单位</option>
+            </select>
+          </div>
+          <div v-if="scope === 'project'" class="field">
+            <label for="kb-project" class="required">项目</label>
+            <select id="kb-project" v-model="projectId" class="control" :disabled="submitting">
+              <option value="">请选择</option>
+              <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+            </select>
+          </div>
+        </div>
+        <p v-if="formError" class="form-alert dialog-status" role="alert">{{ formError }}</p>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" :disabled="submitting" @click="dismissCreate">取消</button>
+          <button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在创建" : "创建" }}</button>
+        </div>
+      </form>
+    </dialog>
   </section>
 </template>
 
 <style scoped>
-.create { display: grid; gap: 8px; max-width: 420px; margin: 16px 0; }
-.create label { display: grid; gap: 4px; }
-.actions { display: flex; gap: 8px; }
-@media (max-width: 767px) {
-  .from-mid { display: none; }
-}
+.kb-card { overflow: hidden; }
+.kb-table { flex: 1; min-height: 0; overflow-y: auto; }
+.kb-table table { table-layout: fixed; }
+.col-name { width: 28%; }
+.col-scope { width: 12%; }
+.col-state { width: 12%; }
+.kb-table td { white-space: normal; overflow-wrap: anywhere; }
+.create { display: block; padding: 0; }
 </style>
