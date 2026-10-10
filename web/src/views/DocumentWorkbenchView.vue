@@ -2011,7 +2011,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         const who = (result.changedBy || []).map(person => person.name).join("、");
         const reason = `正在合并 ${who || "他人"} 的更新…`;
         const merged = { markdownContent: serverText, revision: record.revision, status: record.status };
-        // 终验 F-M1：先不锁编辑区；载入期间用户继续输入就不重绘（编辑区保留他的字），下次保存按原基准再合并
+        // 终验 F-M1：先不锁编辑区；载入期间用户继续输入就不重绘（编辑区保留他的字），把这些输入平移到新正文，平移不了以显式基准再合并
         const started = Date.now();
         let shown = await acceptContent(merged, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
         if (!shown && current()) {
