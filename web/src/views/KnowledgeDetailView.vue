@@ -6,6 +6,7 @@ import { ApiError } from "../api/client";
 import { uploadFile } from "../api/files";
 import { createSource, getKnowledgeBase, listSources, type KnowledgeBase, type SourceVersion } from "../api/knowledge";
 import FilePicker from "../components/FilePicker.vue";
+import { rememberCrumb } from "../crumbs";
 
 const route = useRoute();
 const baseId = computed(() => String(route.params.id));
@@ -18,15 +19,19 @@ const name = ref("");
 const file = ref<File | null>(null);
 const submitting = ref(false);
 const tab = ref<"materials" | "search">("materials");
+const notFound = ref(false);
 
 async function load() {
   phase.value = "loading";
   try {
+    notFound.value = false;
     base.value = await getKnowledgeBase(baseId.value);
+    rememberCrumb(`knowledge:${base.value.id}`, base.value.name);
     sources.value = await listSources(baseId.value);
     phase.value = "ready";
   } catch (error) {
     phase.value = "error";
+    notFound.value = error instanceof ApiError && error.status === 404;
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   }
 }
@@ -68,16 +73,16 @@ onMounted(() => void load());
       <div class="page-actions"><router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link></div>
     </header>
     <div v-if="phase === 'loading'" class="card"><StatePanel kind="loading" text="正在读取知识库…" /></div>
+    <div v-else-if="phase === 'error' && notFound" class="card"><StatePanel title="知识库不存在或已删除" text="请从知识库列表重新进入。"><router-link class="ghost" :to="{ name: 'knowledge' }">返回知识库列表</router-link></StatePanel></div>
     <div v-else-if="phase === 'error'" class="card"><StatePanel kind="error" title="知识库没有载入" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
-    <template v-else>
+    <div v-else class="card kb-card">
+      <!-- 页签放进卡片顶部，与项目详情一致（08 验收 S5） -->
       <nav class="tabs" aria-label="知识库内容">
         <button type="button" :class="{ on: tab === 'materials' }" :aria-current="tab === 'materials' ? 'page' : undefined" @click="tab = 'materials'">资料<span class="count">{{ sources.length }}</span></button>
         <button type="button" :class="{ on: tab === 'search' }" :aria-current="tab === 'search' ? 'page' : undefined" @click="tab = 'search'">检索</button>
       </nav>
-      <div v-if="tab === 'search'" class="card">
-        <StatePanel title="检索尚未接入" text="未发布和未解析的资料不会出现在检索结果里。" />
-      </div>
-      <div v-else class="card kb-card">
+      <StatePanel v-if="tab === 'search'" title="检索尚未接入" text="未发布和未解析的资料不会出现在检索结果里。" />
+      <template v-else>
         <form class="query upload" @submit.prevent="submitFile">
           <div class="query-fields">
             <label><span>资料名称</span><input v-model="name" class="control" type="text" :disabled="submitting" /></label>
@@ -107,15 +112,15 @@ onMounted(() => void load());
             </tbody>
           </table>
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .page-desc { display: flex; align-items: center; gap: var(--space-2); }
 .summary { color: var(--text-secondary); }
-.kb-card { overflow: hidden; }
+.kb-card { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
 .kb-table { flex: 1; min-height: 0; overflow-y: auto; }
 .kb-table table { table-layout: fixed; }
 .col-ver { width: 10%; }

@@ -1,6 +1,6 @@
 import { shallowRef } from "vue";
 import { getCurrentSession, logout } from "./api/identity";
-import { projectCrumb } from "./crumbs";
+import { objectCrumb, projectCrumb } from "./crumbs";
 
 const STAFF_MEMORY = "doc-workbench.session";
 
@@ -91,6 +91,7 @@ export function endSession(): Promise<void> {
         current.value = null;
         // 换账号后不应短暂显示上一位用户看过的项目名（09 审查 S7）。
         projectCrumb.value = null;
+        objectCrumb.value = null;
       })
       .finally(() => {
         logoutTask = null;

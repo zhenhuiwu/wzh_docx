@@ -10,6 +10,7 @@ import { documentHeadings, getDocument, listDocuments, type DocumentRecord } fro
 import { analyzeTestTask, createTestTask, downloadTestReport, getTestTask, insertTestResults, listTestTasks, runTestTask, setTestCaseEnabled, stopTestTask, testEvidenceUrl, updateTestTask, type TestCase, type TestDocumentInsertion, type TestRun, type TestTask, type TestTaskInput } from "../api/testTasks";
 import { useFieldErrors } from "../fieldErrors";
 import FilePicker from "../components/FilePicker.vue";
+import { rememberCrumb } from "../crumbs";
 
 // 写操作按权限显隐（09 审查 M1）：tests.edit 建任务/改配置/提取，tests.execute 运行/停止。
 const canEdit = computed(() => hasPermission(readSession(), "tests.edit"));
@@ -202,6 +203,7 @@ function schedulePoll() {
 
 function acceptTask(value: TestTask) {
   task.value = value;
+  rememberCrumb(`task:${value.id}`, value.name);
   if (!value.runs?.some(run => run.id === runId.value)) runId.value = value.runs?.[0]?.id ?? "";
   detailPhase.value = "ready";
   schedulePoll();
@@ -510,7 +512,9 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
     <header class="page-head">
       <div>
         <h1>{{ taskId ? task?.name || "测试任务" : "测试用例管理" }}</h1>
-        <p class="page-desc">{{ taskId ? "从测试计划提取测试项，勾选后运行并查看执行结果。" : "上传测试计划，自动提取测试项并执行；结果可写回项目文档。" }}</p>
+        <!-- 任务状态放在标题下的元信息行，不再挤在页签栏里（08 验收 S11） -->
+        <p v-if="taskId && task && detailPhase === 'ready'" class="page-desc task-meta"><span class="state-label" :data-state="task.status" role="status">{{ analyzing ? "正在提取测试项" : activeRun?.stopRequested ? "正在停止" : running && tab === 'results' && activeResults.length ? `正在测试 ${finishedCount} / ${activeResults.length}` : statusLabel(task.status) }}</span><span>所属项目：{{ task.projectName || projects.find(project => project.id === task?.projectId)?.name || "—" }}</span></p>
+        <p v-else class="page-desc">{{ taskId ? "从测试计划提取测试项，勾选后运行并查看执行结果。" : "上传测试计划，自动提取测试项并执行；结果可写回项目文档。" }}</p>
       </div>
       <div class="page-actions">
         <button v-if="taskId" type="button" class="ghost" @click="backToList">返回任务列表</button>
@@ -550,7 +554,6 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
       <template v-else-if="task">
         <div class="detail-toolbar">
           <nav class="detail-tabs" aria-label="测试任务视图"><button type="button" :class="{ active: tab === 'cases' }" :aria-current="tab === 'cases' ? 'page' : undefined" @click="tab = 'cases'">测试项</button><button type="button" :class="{ active: tab === 'results' }" :aria-current="tab === 'results' ? 'page' : undefined" @click="tab = 'results'">执行结果</button></nav>
-          <span class="state-label" :data-state="task.status" role="status">{{ analyzing ? "正在提取测试项" : activeRun?.stopRequested ? "正在停止" : running && tab === 'results' && activeResults.length ? `正在测试 ${finishedCount} / ${activeResults.length}` : statusLabel(task.status) }}</span>
           <div class="toolbar-actions"><button v-if="canEdit" type="button" class="ghost" :disabled="locked" @click="analyze">{{ analyzing ? "正在提取…" : task.cases.length ? "重新提取" : "从计划提取测试项" }}</button><button v-if="running && canExecute" type="button" class="ghost danger stop-button" :disabled="operation === 'stop' || task.runs[0]?.stopRequested" @click="stop">{{ operation === 'stop' || task.runs[0]?.stopRequested ? "正在停止…" : "停止测试" }}</button><button v-else-if="canExecute" type="button" class="primary" :disabled="locked || !enabledCount" @click="run()">{{ operation === 'run' ? "正在启动…" : "运行已勾选测试项" }}</button></div>
         </div>
         <p v-if="actionError || detailError || task.error" class="notice error-strip" role="alert">{{ actionError || detailError || task.error }}</p>
@@ -655,6 +658,7 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
 
 /* 状态胶囊：与全局 .status 一致，按英文状态值着色 */
 .state-label { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 var(--space-2); border-radius:var(--radius-control); background:var(--gray-100); color:var(--gray-700); font-size:var(--text-xs); line-height:22px; font-weight:var(--weight-medium); white-space:nowrap; }
+.task-meta { display:flex; align-items:center; gap:var(--space-3); }
 .state-label::before { content:""; width:6px; height:6px; border-radius:var(--radius-pill); background:currentColor; }
 .state-label[data-state="passed"],.state-label[data-state="completed"] { background:var(--success-50); color:var(--success-600); }
 .state-label[data-state="running"],.state-label[data-state="analyzing"],.state-label[data-state="queued"] { background:var(--info-50); color:var(--info-600); }

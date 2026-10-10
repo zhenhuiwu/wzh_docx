@@ -312,7 +312,7 @@ onBeforeUnmount(() => {
         <thead><tr><th>名称</th><th>说明</th><th>基准规范</th><th>状态</th><th class="th-right">操作</th></tr></thead>
         <tbody><tr v-for="item in items" :key="item.id">
           <td class="skill-name">{{ item.name }}<span v-if="item.builtin" class="tag plain builtin">内置</span></td><td class="muted">{{ item.description || '—' }}</td><td>{{ kinds[item.baseKind] }}</td><td><span class="status" :data-status="item.status === 'active' ? '启用' : '停用'">{{ item.status === 'active' ? '启用' : '停用' }}</span></td>
-          <td><div class="row-actions"><button type="button" class="text" :disabled="mutationBusy" @click="openDialog(item)">{{ canManage ? '编辑' : '查看' }}</button><button v-if="canManage" type="button" class="text" :class="{ danger: item.status === 'active' }" :disabled="mutationBusy" :aria-label="`${item.status === 'active' ? '停用' : '启用'} ${item.name}`" @click="toggleStatus(item)">{{ statusBusyId === item.id ? '正在更新…' : item.status === 'active' ? '停用' : '启用' }}</button></div></td>
+          <td><div class="row-actions"><button type="button" class="text" :disabled="mutationBusy" @click="openDialog(item)">{{ canManage ? '编辑' : '查看' }}</button><button v-if="canManage" type="button" class="text" :class="{ neutral: item.status === 'active' }" :disabled="mutationBusy" :aria-label="`${item.status === 'active' ? '停用' : '启用'} ${item.name}`" @click="toggleStatus(item)">{{ statusBusyId === item.id ? '正在更新…' : item.status === 'active' ? '停用' : '启用' }}</button></div></td>
         </tr></tbody>
       </table>
     </div>

@@ -9,6 +9,7 @@ import { getTemplate, listTemplateDocuments, createTemplateDocument, deleteTempl
   type TemplateRecord, type TemplateDocument, type TemplateImportStructure, templateStatusLabel } from "../api/templates";
 import TemplateImportEditor from "../components/TemplateImportEditor.vue";
 import FilePicker from "../components/FilePicker.vue";
+import { rememberCrumb } from "../crumbs";
 
 // 只读角色（templates.read）不显示导入、核对、移除（09 审查 M2）。
 const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
@@ -44,6 +45,7 @@ async function load() {
     const [record, result] = await Promise.all([getTemplate(target), listTemplateDocuments(target)]);
     if (request !== loadNumber) return;
     template.value = record;
+    rememberCrumb(`template:${record.id}`, record.name);
     documents.value = result.items;
     phase.value = "ready";
   } catch (error) {

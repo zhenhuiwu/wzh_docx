@@ -6,7 +6,8 @@ import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { ApiError } from "../api/client";
 import { getProject } from "../api/projects";
-import { projectCrumb, rememberProject } from "../crumbs";
+import { objectCrumb, projectCrumb, rememberCrumb, rememberProject } from "../crumbs";
+import { getDocument } from "../api/documents";
 import { flashMessage } from "../flash";
 import { NAV_ITEMS, navVisible } from "../access";
 
@@ -38,7 +39,8 @@ function writeFlag(key: string, value: boolean) {
 }
 
 const systemOpen = ref(readFlag(SYSTEM_KEY, true) || route.path.startsWith("/system"));
-const userCollapsed = ref(readFlag(COLLAPSE_KEY, false));
+// 没有本地偏好时，窄于 1440 的窗口默认收起为图标栏（02 评审 §5.4，08 验收 S10）；用户手动切换后以偏好为准。
+const userCollapsed = ref(readFlag(COLLAPSE_KEY, typeof window !== "undefined" && window.innerWidth < 1440));
 // 文档编辑工作台自动收起为图标栏，为正文腾出空间（02 评审 3.1 / 5.4）。
 const isWorkbench = computed(() => route.name === "document");
 const collapsed = computed(() => userCollapsed.value || isWorkbench.value);
@@ -113,6 +115,28 @@ watch(() => [route.name, route.params.id] as const, async ([, id]) => {
   }
 }, { immediate: true });
 
+// 详情页对象名：模板、知识库、测试任务由各自页面写入；文档页（工作台，本分支不改）由这里补读文档名。
+const objectKey = computed(() => {
+  const name = String(route.name ?? "");
+  if (name === "template") return `template:${String(route.params.id)}`;
+  if (name === "knowledge-base") return `knowledge:${String(route.params.id)}`;
+  if (name === "document") return `document:${String(route.params.documentId)}`;
+  if (name === "test-cases" && typeof route.query.task === "string" && route.query.task) return `task:${route.query.task}`;
+  return "";
+});
+const objectName = (fallback: string) => (objectKey.value && objectCrumb.value?.key === objectKey.value ? objectCrumb.value.label : fallback);
+let documentCrumbRequest = 0;
+watch(objectKey, async (key) => {
+  if (!key.startsWith("document:") || objectCrumb.value?.key === key) return;
+  const request = ++documentCrumbRequest;
+  try {
+    const record = await getDocument(key.slice("document:".length));
+    if (request === documentCrumbRequest) rememberCrumb(key, record.name);
+  } catch {
+    /* 读取失败时显示“文档”。 */
+  }
+}, { immediate: true });
+
 interface Crumb { label: string; to?: object }
 const crumbs = computed<Crumb[]>(() => {
   const name = String(route.name ?? "");
@@ -123,16 +147,17 @@ const crumbs = computed<Crumb[]>(() => {
     const list: Crumb[] = [{ label: "项目", to: { name: "projects" } }, { label: projectName, to: { name: "project", params: { id } } }];
     if (name === "project") list.push({ label: "项目概述" });
     else list.push({ label: "文档编写", to: name === "document" ? { name: "project-documents", params: { id } } : undefined });
-    if (name === "document") list.push({ label: "文档" });
+    if (name === "document") list.push({ label: objectName("文档") });
     return list;
   }
   if (route.path.startsWith("/system")) {
     const list: Crumb[] = [{ label: "系统管理" }];
-    if (name === "template") list.push({ label: "模板管理", to: { name: "templates" } }, { label: "模板详情" });
+    if (name === "template") list.push({ label: "模板管理", to: { name: "templates" } }, { label: objectName("模板详情") });
     else list.push({ label: title });
     return list;
   }
-  if (name === "knowledge-base") return [{ label: "知识库", to: { name: "knowledge" } }, { label: "知识库详情" }];
+  if (name === "knowledge-base") return [{ label: "知识库", to: { name: "knowledge" } }, { label: objectName("知识库详情") }];
+  if (name === "test-cases" && objectKey.value) return [{ label: title || "测试用例管理", to: { name: "test-cases" } }, { label: objectName("测试任务") }];
   return [{ label: title || "文档工作室" }];
 });
 

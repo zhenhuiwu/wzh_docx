@@ -301,7 +301,7 @@ onMounted(async () => {
               <td><span class="status" :data-status="statusLabel(user.status)">{{ statusLabel(user.status) }}</span></td>
               <td class="time num">{{ formatTime(user.updatedAt) }}</td>
               <td class="ops">
-                <button type="button" class="text" :class="{ danger: user.status === 'active' }" :disabled="submitting" @click="ask(user, user.status === 'active' ? 'disable' : 'enable')">
+                <button type="button" class="text" :class="{ neutral: user.status === 'active' }" :disabled="submitting" @click="ask(user, user.status === 'active' ? 'disable' : 'enable')">
                   {{ user.status === "active" ? "停用" : "启用" }}
                 </button>
                 <button type="button" class="text" :disabled="submitting" @click="ask(user, 'reset')">重置密码</button>

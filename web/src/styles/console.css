@@ -229,6 +229,11 @@
   color: var(--danger-600);
 }
 
+/* 行内“停用”等可撤销操作用中性色，避免整列红字；确认弹窗里再用红色实心按钮（08 验收 S7） */
+.text.neutral {
+  color: var(--text-secondary);
+}
+
 .text:hover:not(:disabled) {
   text-decoration: underline;
   text-underline-offset: 3px;

@@ -41,6 +41,11 @@ async function load() {
   }
 }
 
+function resetQuery() {
+  nameQuery.value = "";
+  void load();
+}
+
 async function submitCreate() {
   formError.value = "";
   if (await fields.report({
@@ -100,7 +105,7 @@ onMounted(async () => {
         <div class="query-fields">
           <label class="search-box"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5" /></svg><input v-model="nameQuery" class="control" type="search" placeholder="搜索知识库名称" aria-label="名称" /></label>
         </div>
-        <div class="query-actions"><button type="submit" class="primary">查询</button></div>
+        <div class="query-actions"><button type="submit" class="primary">查询</button><button type="button" class="ghost" @click="resetQuery">重置</button></div>
       </form>
       <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取知识库…" />
       <StatePanel v-else-if="phase === 'error'" kind="error" title="知识库加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
