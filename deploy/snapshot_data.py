@@ -23,10 +23,13 @@ README = """文档工作室 · 一键启动说明
 
 1. 将整个文件夹解压到可写目录，双击“文档工作室.exe”。
 2. 在浏览器打开 http://localhost:5173 ，用原有账号登录。
-   仍在使用旧版固定初始密码的 admin 账号，登录后会被要求先修改密码。
+   仍在使用旧版固定密码 admin123 的账号，登录后会被要求先修改密码。
    全新安装（没有任何账号）时，首次启动会生成随机初始密码，
-   显示在启动窗口并保存到“初始管理员密码.txt”；登录改密后请删除该文件。
+   保存到“初始管理员密码.txt”并显示在启动窗口；首次改密成功后该文件自动删除。
 3. 使用结束后，可在启动窗口按 Ctrl+C 停止；再次双击即可启动。
+4. 忘记管理员密码：先关闭程序，在本文件夹打开命令行执行
+     文档工作室.exe --reset-admin
+   （其他账号在后面加账号名），会生成新的临时密码并写入“初始管理员密码.txt”，登录后须修改。
 
 无需安装 Python、Node.js 或 Docker。请勿只复制 exe：_internal 与 data 必须一起保留。
 当前项目、Word 原稿、编辑内容、历史版本、AI 记忆、Skill、测试记录与截图均已迁移。
@@ -67,7 +70,8 @@ def env_quote(value: str) -> str:
 
     Plain values use single quotes, where only \ and ' are escapes. Values with
     line breaks or tabs use double quotes, where 
-, , 	, " and \ are decoded.
+, 
+, 	, " and \ are decoded.
     python-dotenv expands ``${NAME}`` in every quoting style and offers no escape
     for it, so such values are refused instead of being silently changed.
     """
