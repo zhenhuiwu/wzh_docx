@@ -16,6 +16,7 @@ const documents = ref<DocumentRecord[]>([]);
 const phase = ref<"loading" | "ready" | "error">("loading");
 const documentPhase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
+const notFound = ref(false);
 const documentError = ref("");
 const editing = ref(false);
 const saving = ref(false);
@@ -60,6 +61,7 @@ async function load() {
   ++documentRequest;
   phase.value = "loading";
   errorText.value = "";
+  notFound.value = false;
   project.value = null;
   documents.value = [];
   documentPhase.value = "loading";
@@ -75,6 +77,7 @@ async function load() {
     if (request !== projectRequest || target !== projectId.value) return;
     project.value = null;
     phase.value = "error";
+    notFound.value = error instanceof ApiError && error.status === 404;
     errorText.value = messageOf(error);
   }
 }
@@ -144,7 +147,10 @@ onBeforeUnmount(() => {
 <template>
   <section v-if="phase === 'loading'" class="view fill"><div class="card"><StatePanel kind="loading" text="正在读取项目…" /></div></section>
   <section v-else-if="phase === 'error' || !project" class="view fill">
-    <div class="card"><StatePanel kind="error" title="项目加载失败" :text="errorText || '没有找到这个项目。'"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
+    <div class="card">
+      <StatePanel v-if="notFound || !errorText" kind="error" title="项目不存在或你无权访问。"><router-link class="primary" :to="{ name: 'projects' }">返回项目列表</router-link></StatePanel>
+      <StatePanel v-else kind="error" title="项目加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
+    </div>
   </section>
   <ProjectFrame v-else :project="project">
     <div class="overview-body">

@@ -18,6 +18,7 @@ const projectId = computed(() => {
 const documents = ref<DocumentRecord[]>([]);
 const phase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
+const notFound = ref(false);
 const page = ref(1);
 const total = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / 20)));
@@ -57,8 +58,10 @@ async function load() {
   const request = ++listRequest;
   phase.value = "loading";
   errorText.value = "";
+  notFound.value = false;
   if (!target) {
     phase.value = "error";
+    notFound.value = true;
     errorText.value = "没有这个项目。";
     return;
   }
@@ -77,6 +80,7 @@ async function load() {
   } catch (error) {
     if (request !== listRequest || target !== projectId.value) return;
     phase.value = "error";
+    notFound.value = error instanceof ApiError && error.status === 404;
     errorText.value = messageOf(error);
   }
 }
@@ -346,6 +350,7 @@ onBeforeUnmount(() => {
 
       <div class="doc-box">
         <StatePanel v-if="phase === 'loading'" kind="loading" text="正在加载文档…" />
+        <StatePanel v-else-if="phase === 'error' && notFound" kind="error" title="项目不存在或你无权访问。"><router-link class="primary" :to="{ name: 'projects' }">返回项目列表</router-link></StatePanel>
         <StatePanel v-else-if="phase === 'error'" kind="error" title="文档加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
         <StatePanel v-else-if="documents.length === 0" title="还没有文档" text="从模板创建第一篇文档，或上传已有的 Word 文档。"><button type="button" class="primary" :disabled="submitting" @click="startCreate">新建文档</button></StatePanel>
         <div v-else class="table-wrap document-list">
