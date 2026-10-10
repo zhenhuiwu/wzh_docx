@@ -103,7 +103,13 @@ def _sync(connection, document_id: UUID, blocks: list[Block], doc_revision: int,
 
     规范键相同的块保留 ID 与 revision（只同步字节）；替换区间内 kind 相同的 1:1 保留 ID 并 revision+1；其余增删。
     """
-    live = live_objects(connection, document_id)
+    # 写锁内：只取对齐需要的列，不做时间/UUID 解析（大文档逐行转换开销明显）
+    cursor = connection._conn.cursor()
+    cursor.row_factory = None
+    live = [dict(zip(("id", "kind", "heading_level", "position", "body", "gap_after", "revision"), values))
+            for values in cursor.execute(
+                "SELECT id, kind, heading_level, position, body, gap_after, revision FROM document_objects "
+                "WHERE document_id=? AND deleted_at IS NULL ORDER BY position, created_at", (str(document_id),)).fetchall()]
     old = [(row["kind"], row["body"]) for row in live]
     new = [(block.kind, block.body) for block in blocks]
     order: list[UUID] = []
