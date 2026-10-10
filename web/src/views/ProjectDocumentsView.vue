@@ -71,7 +71,7 @@ async function load() {
   if (!target) {
     phase.value = "error";
     notFound.value = true;
-    errorText.value = "没有这个项目。";
+    errorText.value = "项目不存在或你无权访问。";
     return;
   }
   try {

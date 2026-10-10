@@ -164,6 +164,34 @@ def test_project_files_need_membership(document_context):  # noqa: F811
     assert client.get(f"/api/v1/files/{mine.id}/content").status_code == 200
 
 
+def test_project_files_global_files_read_not_cross_project(document_context):  # noqa: F811
+    """审查 S9（用户决定收紧）：全局 files.read 不跨项目；system_admin、auditor 可读；非项目文件仍按 files.read。"""
+    client, _, project, _other, _, source = document_context
+    migrate()
+    media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    project_file = store_bytes(name="项目原稿.docx", media_type=media, purpose="attachment", project_id=project, content=source)
+    loose = store_bytes(name="非项目模板.docx", media_type=media, purpose="template", project_id=None, content=source)
+    with connect() as connection:
+        for account, roles in (("s9-creator", ["project_creator"]), ("s9-tm", ["template_manager"]),
+                               ("s9-km", ["knowledge_manager"]), ("s9-audit", ["auditor"]), ("s9-admin", ["system_admin"])):
+            create_user(account=account, name=account, password=PASSWORD, roles=roles, connection=connection)
+        connection.commit()
+    for account in ("s9-creator", "s9-tm", "s9-km"):
+        client.cookies.clear()
+        _login(client, account)
+        assert client.get(f"/api/v1/files/{project_file.id}/content").status_code == 404, account
+        assert client.get(f"/api/v1/files/{project_file.id}/preview").status_code == 404, account
+        if account != "s9-km":  # 模板文件另需 templates.read（原规则不变）
+            assert client.get(f"/api/v1/files/{loose.id}/content").status_code == 200, account
+    for account in ("s9-audit", "s9-admin"):
+        client.cookies.clear()
+        _login(client, account)
+        assert client.get(f"/api/v1/files/{project_file.id}/content").status_code == 200, account
+    client.cookies.clear()
+    _login(client, "s9-audit")
+    assert client.get(f"/api/v1/files/{loose.id}/content").status_code == 403  # auditor 没有 files.read
+
+
 def test_member_without_global_role_uploads_to_own_project_only(members):
     # P0-4（决策1）：新建用户全局角色默认 []，上传项目 Word 只看项目角色。
     from io import BytesIO

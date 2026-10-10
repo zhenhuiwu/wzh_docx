@@ -1582,7 +1582,7 @@ onUnmounted(() => {
             <p v-else class="empty-outline">暂无编写记忆</p>
           </details>
         </aside>
-        <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
+        <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" :refresh="refreshFromServer" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
         <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="document.id" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
           @close="conflictOpen = false" @resolved="acceptResolution" @count="conflictSummary = { mineOpen: $event, allOpen: conflictSummary?.allOpen ?? null }" />

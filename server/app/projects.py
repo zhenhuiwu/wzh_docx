@@ -211,7 +211,7 @@ def _load(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict[str,
         params,
     ).fetchone()
     if row is None:
-        raise AppError(404, "NOT_FOUND", "没有这个项目。")
+        raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
     return _public(row)
 
 

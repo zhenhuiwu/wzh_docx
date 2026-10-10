@@ -129,7 +129,7 @@ class DocumentPlanTests(unittest.TestCase):
         self.assertEqual(self.connection.queries, [])
 
     def test_missing_project_remains_not_found(self):
-        with patch.object(plans, "_load", side_effect=AppError(404, "NOT_FOUND", "没有这个项目。")):
+        with patch.object(plans, "_load", side_effect=AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")):
             with self.assertRaises(AppError) as caught:
                 self.create()
         self.assertEqual(caught.exception.status_code, 404)

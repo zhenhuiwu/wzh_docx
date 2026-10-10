@@ -82,7 +82,7 @@ def guard_knowledge_file(request: Request, file_id: str) -> None:
                 _require_base(connection, base_id, actor.user_id, False)
             return
         if file_row["project_id"] is not None:
-            if project_role(connection, file_row["project_id"], actor.user_id) is None:
+            if not project_file_reader(actor.roles) and project_role(connection, file_row["project_id"], actor.user_id) is None:
                 raise AppError(404, "NOT_FOUND", "没有这个文件。")
             return
         if file_row["purpose"] == "template" and has_permission(actor.roles, "templates.read"):
@@ -375,7 +375,7 @@ async def upload_file(request: Request) -> dict[str, object]:
                 if project_id is not None:
                     project = connection.execute("SELECT archived_at FROM projects WHERE id = %s", (project_id,)).fetchone()
                     if project is None:
-                        raise AppError(404, "NOT_FOUND", "没有这个项目。")
+                        raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
                     require_project_editor(connection, principal, project_id)
                     if project["archived_at"] is not None:
                         raise AppError(409, "INVALID_TRANSITION", "项目已归档，无法上传文件。")
@@ -445,21 +445,32 @@ def _idempotent_file(
 
 
 def authorize_read(request: Request, file_id: str) -> None:
-    """项目文件对项目成员可读（S1：只有项目角色的账号也能下载原稿和导出稿）；其余仍要求 files.read。"""
+    """下载/预览权限（审查 S9，用户已决定收紧）。
+
+    - 项目文件（project_id 非空、不属于知识库）：项目成员、system_admin 或 auditor（只读审计）可读；
+      全局 files.read 不再跨项目放行。
+    - 其余文件：仍要求 files.read，再由 guard_knowledge_file 按知识库/模板范围检查。
+    """
 
     from app.identity import require_session
     from app.permissions import has_permission
     from app.projects import project_role
 
     actor = require_session(request)
-    if has_permission(actor.roles, "files.read"):
-        return
     with connect() as connection:
         row = connection.execute("select project_id, base_id from files where id = %s", (file_id,)).fetchone()
-        if (row is not None and row["project_id"] is not None and row["base_id"] is None
-                and project_role(connection, row["project_id"], actor.user_id) is not None):
-            return
+        if row is not None and row["project_id"] is not None and row["base_id"] is None:
+            if project_file_reader(actor.roles) or project_role(connection, row["project_id"], actor.user_id) is not None:
+                return
+            raise AppError(404, "NOT_FOUND", "没有这个文件。")
+    if has_permission(actor.roles, "files.read"):
+        return
     raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
+
+
+def project_file_reader(roles) -> bool:
+    """不是项目成员也能读项目文件的全局角色：系统管理员与审计查看者（只读）。"""
+    return "system_admin" in roles or "auditor" in roles
 
 
 @router.get("/files/{file_id}/content")

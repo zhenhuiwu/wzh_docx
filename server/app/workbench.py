@@ -230,7 +230,7 @@ def list_issues(
                 (projectId, actor.user_id) if not admin else (projectId,),
             ).fetchone()
             if visible is None:
-                raise AppError(404, "NOT_FOUND", "没有这个项目。")
+                raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
         items = [] if status == "resolved" else _collect(connection, actor.user_id, admin)
     if projectId:
         items = [item for item in items if item["projectId"] == projectId]

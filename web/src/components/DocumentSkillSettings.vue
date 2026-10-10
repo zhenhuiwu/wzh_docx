@@ -3,8 +3,10 @@ import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import { listWritingSkills, getWritingSkill, type WritingSkill } from "../api/writingSkills";
 import { setDocumentSkill, type DocumentSkill } from "../api/documentSkills";
 import type { DocumentContentResult } from "../api/documents";
+import { ApiError } from "../api/client";
+import { revisionConflictText, type RevisionDetails } from "../saveModel";
 
-const props = defineProps<{ documentId: string; revision: number; configuration?: DocumentSkill }>();
+const props = defineProps<{ documentId: string; revision: number; configuration?: DocumentSkill; refresh?: () => Promise<boolean> }>();
 const emit = defineEmits<{ close: []; saved: [result: DocumentContentResult]; busy: [value: boolean] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const previousFocus = window.document.activeElement as HTMLElement | null;
@@ -54,7 +56,14 @@ async function save() {
       documentInstructions: notes.value.trim(),
     });
     emit("saved", result);
-  } catch (e) { error.value = e instanceof Error ? e.message : "保存失败，请重试。"; }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409 && e.code === "REVISION_CONFLICT") {
+      // 审查 S12：与正文保存同一套文案（02 §3.4）；能刷新时刷新到最新版本，保留对话框里的选择。
+      const text = revisionConflictText(e.details as RevisionDetails | undefined);
+      const refreshed = await props.refresh?.().catch(() => false);
+      error.value = refreshed ? `${text.replace(/请刷新后重试。$/, "")}已刷新到最新版本，你的选择仍保留，请再次保存。` : text;
+    } else error.value = e instanceof Error ? e.message : "保存失败，请重试。";
+  }
   finally { saving.value = false; emit("busy", false); }
 }
 function beforeUnload(event: BeforeUnloadEvent) {
