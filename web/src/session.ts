@@ -57,9 +57,14 @@ export function refreshSession(): Promise<Session | null> {
   if (refreshTask) return refreshTask;
   if (Date.now() - lastRefresh < 2000 || !current.value) return Promise.resolve(current.value);
   lastRefresh = Date.now();
+  const startedFor = current.value.staffId;
   refreshTask = getCurrentSession()
     .then((me) => {
-      if (current.value) current.value = { ...current.value, permissions: me.permissions, mustChangePassword: Boolean(me.user.requiresFirstLoginChange) };
+      // 只写回发起刷新时的同一个账号：刷新途中退出并换号登录时丢弃旧结果（09 复审 R3）。
+      const session = current.value;
+      if (session && session.staffId === startedFor && me.user.account === startedFor) {
+        current.value = { ...session, permissions: me.permissions, mustChangePassword: Boolean(me.user.requiresFirstLoginChange) };
+      }
       return current.value;
     })
     // 刷新失败（含 401，已由 onSessionExpired 处理）时保留现有会话，不在这里登出。
