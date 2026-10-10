@@ -2,3 +2,8 @@
 *.bat -text
 *.cmd -text
 *.ps1 -text
+# 这几个前端文件在主干里一直是 CRLF（复审：恢复并固定），按原样存取、不做换行转换；
+# web/src/lineEndings.test.ts 会检查它们没有混入 LF 行。
+web/src/views/DocumentWorkbenchView.vue -text
+web/src/components/DocumentHistory.vue -text
+web/src/components/DocumentSkillSettings.vue -text
