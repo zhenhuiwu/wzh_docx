@@ -1,5 +1,8 @@
+"""手工诊断脚本：直接调用 /auth/csrf 的处理函数。用法：cd server && uv run python ../test_csrf.py"""
 import sys
-sys.path.insert(0, 'D:/项目/智能化/server')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "server"))
 
 from app.identity import get_csrf
 from fastapi import Request, Response
