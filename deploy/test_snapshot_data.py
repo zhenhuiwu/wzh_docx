@@ -110,6 +110,7 @@ def check() -> None:
             assert "testPassword" not in json.loads(snapshot_json)
             assert "******" in result_json
         assert metadata["scrubbed_credentials"] == {
+            "accepted_leftovers": {},
             "credentials_removed": 3,
             "keys_removed": {"test_task_runs.snapshot_json": 1, "test_tasks.config_json": 2},
             "masked_occurrences": {"test_task_runs.result_json": 1},
@@ -197,6 +198,13 @@ def check_weak_passwords() -> None:
                 raise AssertionError(f"{where} must stop the migration")
             assert database.read_bytes() == original
             assert not (root / "package" / "data").exists()
+            # After a person reviewed it, the column can be allowed and ships unchanged.
+            metadata = snapshot(database, files, env_file, root / "package", execute=True,
+                                allowed_leftovers=frozenset({where.split("（")[0]}) | {"users.account_key"})
+            with closing(sqlite3.connect(root / "package/data/app.db")) as copied:
+                assert copied.execute("SELECT markdown_content FROM documents").fetchone()[0] == document
+                assert copied.execute("SELECT account FROM users").fetchone()[0] == account
+            assert metadata["scrubbed_credentials"]["accepted_leftovers"].get(where, 0) >= 1
 
     # Not a whole token, or only inside a hash: business data is shipped unchanged.
     with TemporaryDirectory() as temporary:
@@ -209,11 +217,41 @@ def check_weak_passwords() -> None:
             assert "123456" not in copied.execute("SELECT result_json FROM test_task_runs").fetchone()[0]
         assert metadata["scrubbed_credentials"]["masked_occurrences"] == {"test_task_runs.result_json": 1}
 
+    # Quotes, backslashes and non-ASCII are stored JSON-escaped in the run log.
+    for password in ('Ab"c\\d12', "密码Abc123"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database, files, env_file = _weak_source(root, password, "普通正文", "writer")
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("UPDATE test_task_runs SET result_json=?",
+                                   (json.dumps({"log": f"fill {password}", "steps": [{"value": password}]}),))
+                connection.commit()
+            raw = sqlite3.connect(database).execute("SELECT result_json FROM test_task_runs").fetchone()[0]
+            assert password not in raw  # only the escaped form is stored
+            metadata = snapshot(database, files, env_file, root / "package", execute=True)
+            with closing(sqlite3.connect(root / "package/data/app.db")) as copied:
+                shipped = json.dumps(copied.execute("SELECT * FROM test_tasks").fetchall()
+                                     + copied.execute("SELECT * FROM test_task_runs").fetchall(), ensure_ascii=False)
+            # users.password_hash in this fixture embeds the password on purpose and is not scanned.
+            for form in {password, json.dumps(password)[1:-1], json.dumps(password, ensure_ascii=False)[1:-1]}:
+                assert form not in shipped and json.dumps(form)[1:-1] not in shipped, form
+            assert metadata["scrubbed_credentials"]["masked_occurrences"] == {"test_task_runs.result_json": 2}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            escaped = json.dumps(password)[1:-1]
+            database, files, env_file = _weak_source(root, password, f"附注 {escaped} 结束", "writer")
+            try:
+                snapshot(database, files, env_file, root / "package", execute=True)
+            except CredentialLeftError as error:
+                assert "documents.markdown_content" in str(error)
+            else:
+                raise AssertionError("an escaped leftover outside test tables must stop the migration")
+
     # A scrub that touched another table is caught by the integrity check.
     original_scrub = snapshot_data.scrub_credentials
 
-    def overreaching(connection):
-        result = original_scrub(connection)
+    def overreaching(connection, *args):
+        result = original_scrub(connection, *args)
         connection.execute("UPDATE documents SET markdown_content='changed'")
         return result
 
