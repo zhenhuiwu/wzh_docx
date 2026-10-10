@@ -3,7 +3,7 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import type { ConflictItem } from "../api/documents";
 import { locationText, shortTime } from "../saveModel";
-import { alignRows, isTable, mergeRows, tableCells } from "../textDiff";
+import { alignRows, isTable, mergeRows, structureRows, tableCells } from "../textDiff";
 
 const props = defineProps<{ item: ConflictItem; theirsName: string; mineLabel?: string; canResolve: boolean; busy: boolean }>();
 const emit = defineEmits<{ close: []; merge: [markdown: string]; edit: [markdown: string]; keepMine: []; useTheirs: [] }>();
@@ -12,9 +12,10 @@ const base = props.item.base?.markdown || "";
 const theirs = props.item.theirs?.markdown || "";
 const mine = props.item.mine?.deleted ? "" : props.item.mine?.markdown || "";
 const table = isTable(theirs) || isTable(mine);
-// 界面复验 N7：STRUCTURE（拆分/合并段落）按块对齐
+// 终验 S-6：STRUCTURE（拆分/合并段落）整块对比、整块采用，不逐段配对
 const byBlock = props.item.reason === "STRUCTURE";
-const rows = alignRows(base, theirs, mine, byBlock);
+const rows = byBlock ? structureRows(base, theirs, mine) : alignRows(base, theirs, mine);
+const pickLabel = (text: string) => !text ? "不保留这一句" : byBlock ? "采用这一版" : "采用这一句";
 const picks = ref<Array<"theirs" | "mine">>(rows.map(() => "mine"));
 const merged = computed(() => mergeRows(rows, picks.value, false, byBlock));
 const grids = table ? { base: tableCells(base), theirs: tableCells(theirs), mine: tableCells(mine) } : null;
@@ -30,6 +31,7 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
       <button type="button" class="subtle" aria-label="关闭并排对比" @click="emit('close')">×</button>
     </header>
     <div class="dialog-body">
+      <p v-if="byBlock" class="compare-note">对方拆分或合并了段落，两边段落对不上，只能整块采用其中一版；两边都要的内容，请选“在合并结果中继续编辑”。</p>
       <div class="compare-cols" role="table" aria-label="三方内容对比">
         <div class="compare-row head" role="row">
           <span role="columnheader">原内容（修改前）</span>
@@ -46,15 +48,15 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
           </div>
         </template>
         <template v-else>
-          <div v-for="(row, index) in rows" :key="index" class="compare-row" :class="{ differs: row.differs }" role="row">
+          <div v-for="(row, index) in rows" :key="index" class="compare-row" :class="{ differs: row.differs, whole: byBlock }" role="row">
             <span role="cell" class="compare-cell base">{{ row.base }}</span>
             <label role="cell" class="compare-cell" :class="{ picked: row.differs && picks[index] === 'theirs' }">
               <span>{{ row.theirs || "（无）" }}</span>
-              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="theirs" /> {{ byBlock ? "采用这一段" : "采用这一句" }}</span>
+              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="theirs" /> {{ pickLabel(row.theirs) }}</span>
             </label>
             <label role="cell" class="compare-cell" :class="{ picked: row.differs && picks[index] === 'mine' }">
               <span>{{ row.mine || "（无）" }}</span>
-              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="mine" /> {{ byBlock ? "采用这一段" : "采用这一句" }}</span>
+              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="mine" /> {{ pickLabel(row.mine) }}</span>
             </label>
           </div>
         </template>
@@ -96,4 +98,5 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
 .compare-preview { margin-top:var(--space-4); }
 .compare-preview h3 { margin:0 0 var(--space-1); font-size:var(--text-sm); color:var(--text-secondary); }
 .compare-preview p, .compare-note { margin:0; padding:var(--space-2); border-radius:var(--radius-control); background:var(--bg-subtle); white-space:pre-wrap; overflow-wrap:anywhere; }
+.compare-row.whole .compare-cell > span:first-child { white-space:pre-wrap; }
 </style>

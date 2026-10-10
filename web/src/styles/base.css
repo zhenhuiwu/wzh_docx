@@ -84,6 +84,8 @@
   --sidenav-w-collapsed: 56px;
   --panel-w: 400px;       /* 工作台右侧面板 */
   --outline-w: 264px;     /* 工作台目录 */
+  --outline-indent-2: 22px; --outline-indent-3: 36px; --outline-indent-4: 50px; /* 目录 l2–l4 缩进（样稿） */
+  --avatar-sm: 18px;      /* 冲突卡片版本行的小头像 */
   --docbar-h: 52px;       /* 工作台文档栏 */
   --etool-h: 44px;        /* 工作台格式工具栏、目录头、面板头 */
   --notice-h: 40px;       /* 工作台提示条 */

@@ -282,7 +282,7 @@ async function downloadCopy(item: ConflictItem) {
 .cdesc { margin:0; color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .cver { padding:10px 14px; border-bottom:1px solid var(--border-subtle); }
 .cver h4 { display:flex; align-items:center; gap:6px; margin:0 0 6px; color:var(--text-secondary); font-size:var(--text-xs); font-weight:var(--weight-medium); }
-.cver .avatar { width:18px; height:18px; font-size:10px; }
+.cver .avatar { width:var(--avatar-sm); height:var(--avatar-sm); font-size:var(--text-xs); } /* 终验 S-9：不写死字号 */
 .cver .avatar.alt { background:var(--gray-150); color:var(--gray-700); }
 .cver pre { margin:0; max-height:calc(var(--space-7) * 5); overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-doc); font-size:var(--text-sm); line-height:1.7; color:var(--text-primary); }
 .cver pre.gone { text-decoration:line-through; color:var(--text-tertiary); }

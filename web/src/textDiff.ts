@@ -85,6 +85,14 @@ export function alignRows(base: string, theirs: string, mine: string, byBlock = 
   return rows;
 }
 
+/** 终验 S-6：STRUCTURE（段落拆分/合并）不按段配对——两边段数不同时逐段对齐会把半段配给对方的另一段，
+ *  选完会重复。改为整块对比：一行，左右各是整块内容，只能整块采用其中一版。 */
+export function structureRows(base: string, theirs: string, mine: string): CompareRow[] {
+  const whole = (text: string) => blocksOf(text).join("\n\n");
+  const t = whole(theirs), m = whole(mine);
+  return [{ base: whole(base), theirs: t, mine: m, differs: t !== m }];
+}
+
 /** 按每行选择拼出合并结果（表格按行换行连接，正文直接相连）。 */
 export function mergeRows(rows: CompareRow[], picks: Array<"theirs" | "mine">, table: boolean, byBlock = false): string {
   const chosen = rows.map((row, index) => row.differs ? row[picks[index] ?? "theirs"] : row.theirs).filter(Boolean);
