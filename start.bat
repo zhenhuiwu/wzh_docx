@@ -1,29 +1,21 @@
 @echo off
 chcp 65001 > nul
 echo =====================================
-echo 项目文档管理系统 - 启动脚本
+echo 文档工作室 - 开发启动脚本
 echo =====================================
 
 echo.
 echo 1. 检查后端依赖...
 cd server
 
-if not exist ".venv" (
-    echo 创建 Python 虚拟环境...
-    python -m venv .venv
-)
-
-echo 检查后端依赖...
-.venv\Scripts\python.exe -c "import fastapi, uvicorn, docx, markdown, multipart, pydantic_settings" >nul 2>&1
+echo 安装后端依赖...
+where uv >nul 2>&1
 if errorlevel 1 (
-    where uv >nul 2>&1
-    if errorlevel 1 (
-        .venv\Scripts\python.exe -m pip install -e .
-    ) else (
-        uv sync --locked
-    )
-    if errorlevel 1 exit /b 1
+    echo 未找到 uv，请先安装：https://docs.astral.sh/uv/
+    exit /b 1
 )
+uv sync --frozen
+if errorlevel 1 exit /b 1
 
 echo √ 后端依赖已就绪
 
@@ -33,13 +25,8 @@ cd ..\web
 
 if not exist "node_modules" (
     echo 安装前端依赖...
-    npm install
-)
-
-npm list marked >nul 2>&1
-if errorlevel 1 (
-    echo 安装 marked...
-    npm install marked
+    call npm ci
+    if errorlevel 1 exit /b 1
 )
 
 echo √ 前端依赖已就绪
@@ -52,9 +39,13 @@ cd ..
 
 if not exist "logs" mkdir logs
 
+echo 首个管理员：数据库没有账号时，请另开窗口执行
+echo   cd server ^&^& uv run python -m app.bootstrap_admin
+echo 该命令生成随机初始密码并只显示一次，首次登录后必须修改。
+echo.
 echo 启动后端服务 (http://localhost:8001)...
 cd server
-start "后端服务" cmd /c "call .venv\Scripts\activate.bat && uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload"
+start "后端服务" cmd /c "uv run uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload"
 
 timeout /t 3 /nobreak > nul
 
@@ -64,4 +55,4 @@ echo 启动前端服务 (http://localhost:5173)...
 echo.
 echo 按 Ctrl+C 停止服务
 echo.
-npm run dev
+call npm run dev
