@@ -521,7 +521,10 @@ CASES = {"表格同一行": ("td", "单元格甲", ("| 甲 |", "| 甲（对方�
 def tablist_rows(ctx: Run, page) -> list[dict]:
     out = []
     gaps = [int(item) for item in os.environ.get("TGAPS", "0,600,1500").split(",")]
+    pick = [item for item in os.environ.get("TCASES", "").split(",") if item]
     for case, (tag, anchor, (old, new)) in CASES.items():
+        if pick and not any(item in case for item in pick):
+            continue
         for gap in gaps:
             for i in range(int(os.environ.get("TN", "3"))):
                 selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
@@ -551,7 +554,7 @@ def tablist_rows(ctx: Run, page) -> list[dict]:
                 body = page.locator("body").inner_text()
                 row = {"case": case, "gap": gap, "i": i, "server_full": TMARK in md, "conflict_full": TMARK in latest, "editor_full": TMARK in editor.replace("\t", ""),
                        "frozen": frozen, "other_kept": new in md, "dup": md.count(TMARK[:3]) + latest.count(TMARK[:3]) > 1 and TMARK not in md,
-                       "lost_notice": "没有写入" in body}
+                       "lost_notice": "没有写入" in body, "sink_note": page.locator("[data-testid=sink-note]").count()}
                 row["ok"] = (row["server_full"] or row["conflict_full"]) and row["other_kept"] and not row["lost_notice"]
                 out.append(row)
                 print("  " + json.dumps(row, ensure_ascii=False), flush=True)

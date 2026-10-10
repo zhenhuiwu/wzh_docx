@@ -93,6 +93,16 @@ let imeDuringLoad = false;
 /** F-L1 缺口：载入锁定期间点了正文，焦点先落到一个隐形输入框，直接上屏/组字/粘贴的字都先收在这里，解锁后写回点击处。 */
 let loadSink: HTMLTextAreaElement | null = null;
 let loadSinkComposing = false;
+/**
+ * F-M4（列表项等没能冻结的冲突）：冲突返回后正文重绘，光标所在的那一项换成了对方版本、光标离开正文。
+ * 这时焦点落到隐形输入框，接着打的字（含直接上屏/组字）并入这条冲突“我的版本”的快照，并给出常驻提示（处理该冲突或点“知道了”才消失）。
+ */
+let unfrozenConflict: { conflictId: string; itemIndex: number; mine: string; at: number } | null = null;
+let caretSink: HTMLTextAreaElement | null = null;
+let caretSinkTarget: { conflictId: string; itemIndex: number; mine: string } | null = null;
+let caretSinkTimer = 0;
+let caretSinkSeq = 0;
+const sinkNote = ref<{ conflictId: string; text: string } | null>(null);
 // 测试工程师 F-H4：最近一次保存进入冲突的时间（恢复草稿据此判断“冲突未处理”）
 let lastConflictAt = 0;
 let lockHadFocus = false;
@@ -1318,6 +1328,42 @@ function leaveEditorCaret(root: HTMLElement) {
     caretLostAt = Date.now();
     typedAfterCaretLost = "";
     imeAfterCaretLost = false;
+    if (unfrozenConflict && Date.now() - unfrozenConflict.at < 30000) openCaretSink(root, unfrozenConflict);
+  }
+}
+function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string }) {
+  dropCaretSink();
+  const rect = root.getBoundingClientRect();
+  const sink = window.document.createElement("textarea");
+  sink.setAttribute("aria-label", "冲突后接着输入的内容，会并入冲突副本“我的版本”");
+  sink.setAttribute("data-testid", "caret-sink");
+  Object.assign(sink.style, { position: "fixed", left: `${Math.max(0, rect.left)}px`, top: `${Math.max(0, rect.top)}px`, width: "2px", height: "1.2em", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", zIndex: "1" });
+  sink.addEventListener("input", () => { window.clearTimeout(caretSinkTimer); caretSinkTimer = window.setTimeout(() => void flushCaretSink(), 800); });
+  sink.addEventListener("blur", () => { void flushCaretSink().finally(() => dropCaretSink()); });
+  window.document.body.appendChild(sink);
+  caretSink = sink;
+  caretSinkTarget = { ...target };
+  sink.focus({ preventScroll: true });
+}
+function dropCaretSink() {
+  window.clearTimeout(caretSinkTimer);
+  caretSink?.remove();
+  caretSink = null;
+}
+async function flushCaretSink() {
+  window.clearTimeout(caretSinkTimer);
+  const record = document.value, target = caretSinkTarget, typed = caretSink?.value || "";
+  if (!record || !target || !typed) return;
+  const markdown = target.mine + typed;
+  caretSinkSeq = nextSeq(caretSinkSeq);
+  const text = `冲突后接着输入的“${typed.length > 30 ? `${typed.slice(0, 30)}…` : typed}”没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
+  sinkNote.value = { conflictId: target.conflictId, text };
+  try {
+    await saveConflictMine(record.id, target.conflictId, target.itemIndex, markdown, `sink-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
+    void conflictPanel.value?.load();
+  } catch {
+    // 存不上：内容仍在提示里原样列出，并写进本机草稿兜底
+    sinkNote.value = { conflictId: target.conflictId, text: `冲突后接着输入的“${typed}”没能写进正文，也没能存进冲突副本，请复制后在冲突处理时粘贴。` };
   }
 }
 function beginEditorLock(reason: string) {
@@ -1354,6 +1400,8 @@ function endEditorLock() {
   if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000, "caret");
   if (!typed) return;
   if (placed && window.document.execCommand("insertText", false, typed)) return;
+  // F-M4：光标所在项因冲突换成了对方版本、焦点已交给冲突续写输入框：锁定期间敲的字也并入冲突副本
+  if (caretSink) { caretSink.value += typed; void flushCaretSink(); return; }
   noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
 }
 async function acceptContent(result: DocumentContentResult, options: AcceptOptions = {}): Promise<boolean> {
@@ -2515,6 +2563,8 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       // 方案 C：编辑区里的冲突段冻结（不重绘、不动光标与组字），正文这一段用服务器版本代替后按原基准重新提交其余部分
       const frozenKeys = fromEditor ? freezeConflicts(conflicts) : [];
       const allFrozen = conflicts.length > 0 && frozenKeys.length === conflicts.length;
+      const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
+      unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now() } : null;
       void refreshConflicts().then(() => conflictPanel.value?.load());
       if (conflictOpensPanel(trigger)) {
         openConflicts("mine");
@@ -2728,6 +2778,7 @@ const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry =>
 async function acceptResolution(result: ResolveResult) {
   const record = document.value;
   if (!record) return;
+  if (sinkNote.value && (!result.conflictId || sinkNote.value.conflictId === result.conflictId) && result.conflictStatus !== "open") sinkNote.value = null;
   conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: result.mineOpen, mineHandled: (conflictSummary.value?.mineHandled || 0) + result.items.length };
   // 复审 M3：原位置附近已找不到时放到了章节末尾，提醒用户检查
   if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
@@ -3046,6 +3097,7 @@ onUnmounted(() => {
   window.removeEventListener("pointerdown", noteLoadPointer, true);
   window.removeEventListener("mousedown", openLoadSink, true);
   dropLoadSink();
+  dropCaretSink();
   window.removeEventListener("focusin", onEditorFocusIn);
   window.clearTimeout(caretLostTimer);
   window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
@@ -3148,6 +3200,7 @@ onUnmounted(() => {
             </span>
           </div>
           <p v-if="actionNote && actionNoteOthers" class="wb-float-note" role="status" data-testid="float-note">{{ actionNote }}</p>
+          <p v-if="sinkNote" class="wb-float-note sink" role="status" data-testid="sink-note">{{ sinkNote.text }} <button type="button" class="link" @click="sinkNote = null">知道了</button></p>
           <p v-if="floatingReason" class="wb-float-note" role="status" data-testid="float-reason"><span class="spin" aria-hidden="true"></span>{{ floatingReason }}</p>
         </div>
         <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
@@ -3423,6 +3476,8 @@ onUnmounted(() => {
 .wb-float-stack { position:relative; height:0; z-index:6; display:flex; flex-direction:column; align-items:center; gap:var(--space-2); }
 .wb-float-stack > * { position:relative; top:var(--space-2); max-width:min(760px, calc(100% - 2 * var(--space-4))); box-shadow:var(--shadow-md, 0 4px 16px rgba(0,0,0,.12)); }
 .wb-float-note { display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-1) var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-surface); color:var(--text-secondary); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.wb-float-note.sink { border-color:var(--warning-300, #f5c26b); background:var(--warning-50, #fff8e6); color:var(--text-primary); }
+.wb-float-note.sink .link { border:0; background:none; color:var(--brand-600); cursor:pointer; padding:0; font:inherit; }
 .wb-float-note .spin { width:12px; height:12px; flex:none; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:wb-spin .8s linear infinite; }
 .wb-notice.floating { border:1px solid var(--info-200, var(--border-default)); border-radius:var(--radius-control); }
 .draft-refusal { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-1) 0 0 calc(var(--icon) + var(--space-3)); color:var(--danger-700); font-size:var(--text-sm); line-height:var(--leading-sm); }
