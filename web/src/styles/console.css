@@ -823,11 +823,20 @@ table.data tbody tr:last-child td {
   text-underline-offset: 3px;
 }
 
-.ops {
+/* 行内操作：容器用 flex；表格单元格保持 table-cell，避免行高与边框错位。 */
+.ops:not(td) {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-4);
+}
+
+td.ops {
   text-align: right;
+  white-space: nowrap;
+}
+
+td.ops > * + * {
+  margin-left: var(--space-4);
 }
 
 th:last-child,
