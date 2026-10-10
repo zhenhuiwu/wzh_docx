@@ -217,13 +217,32 @@ def test_wrong_current_password_has_stable_code_and_is_limited(client: TestClien
     assert client.get("/api/v1/auth/me").status_code == 200
     limited = attempt(PASSWORD)
     assert limited.status_code == 429 and limited.json()["error"]["code"] == "LIMIT_EXCEEDED"
+    assert 1 <= int(limited.headers["Retry-After"]) <= 600
     # The change-password counter does not lock the account out of signing in.
     other = TestClient(client.app)
     assert _login(other, "dev03-guess", PASSWORD).status_code == 200
     with connect() as connection:
-        connection.execute("delete from login_guards where account_key like 'change-password:%'")
+        from app.identity import PASSWORD_CHANGE_GUARD_PREFIX
+
+        keys = [row["account_key"] for row in connection.execute("select account_key from login_guards")]
+        assert "dev03-guess" not in keys
+        assert any(key.startswith(PASSWORD_CHANGE_GUARD_PREFIX) for key in keys)
+        connection.execute("delete from login_guards where substr(account_key, 1, %s) = %s",
+                           (len(PASSWORD_CHANGE_GUARD_PREFIX), PASSWORD_CHANGE_GUARD_PREFIX))
         connection.commit()
     assert attempt(PASSWORD).status_code == 204
+
+
+def test_login_lockout_sends_retry_after(client: TestClient) -> None:
+    _reset("dev03-lock")
+    create_user(account="dev03-lock", name="锁定", password=PASSWORD, roles=["project_creator"])
+    for _ in range(8):
+        client.cookies.clear()
+        assert _login(client, "dev03-lock", "wrong-password-00").status_code == 401
+    client.cookies.clear()
+    locked = _login(client, "dev03-lock", PASSWORD)
+    assert locked.status_code == 429 and locked.json()["error"]["code"] == "LIMIT_EXCEEDED"
+    assert 1 <= int(locked.headers["Retry-After"]) <= 600
 
 
 def test_disabled_account_cannot_login(client: TestClient) -> None:

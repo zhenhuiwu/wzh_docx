@@ -86,22 +86,30 @@ def initialize_admin(home: Path) -> None:
 def reset_admin(home: Path, account: str) -> None:
     """Offline recovery for the portable package: new random password, must change."""
     from app.bootstrap_admin import (
-        INITIAL_PASSWORD_FILE_ENV, initial_password_text, reset_account_password, write_secret_file,
+        INITIAL_PASSWORD_FILE_ENV, ResetError, initial_password_text, reset_account_password, write_secret_file,
     )
     from app.db import migrate
 
     migrate()
     target = home / INITIAL_PASSWORD_FILE
     target.unlink(missing_ok=True)
-    password = reset_account_password(account)
     os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
-    try:
-        write_secret_file(target, initial_password_text(account, password))
-        saved = f"，已保存到 {target}"
-    except OSError:
-        logging.warning("不能写入密码文件 %s，只在窗口中显示一次", target)
-        saved = ""
-    print(f"已重置账号 {account}：临时密码 {password}{saved}。原有会话已失效，下次登录须修改密码。", flush=True)
+
+    def save(password: str) -> None:
+        # Same rule as the first start: the file is written owner-only before the
+        # new password is committed; any failure leaves the old password in place.
+        try:
+            write_secret_file(target, initial_password_text(account, password))
+        except OSError as error:
+            raise ResetError(f"不能写入密码文件 {target}：{error}，密码没有改变。") from None
+        try:
+            print(f"已重置账号 {account}：临时密码 {password}，已保存到 {target}。"
+                  "原有会话已失效，下次登录须修改密码。", flush=True)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+
+    reset_account_password(account, before_commit=save)
 
 
 def application(home: Path):

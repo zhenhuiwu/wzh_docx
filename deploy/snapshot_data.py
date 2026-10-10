@@ -106,22 +106,39 @@ def tables(connection: sqlite3.Connection) -> list[str]:
     )]
 
 
-def business_fingerprint(connection: sqlite3.Connection) -> str:
+def business_fingerprint(connection: sqlite3.Connection,
+                         exclude: frozenset[tuple[str, str]] = frozenset()) -> str:
+    """Digest of all non-transient rows; ``exclude`` drops (table, column) pairs."""
     result = hashlib.sha256()
     for table in tables(connection):
         if table in TRANSIENT_TABLES:
             continue
+        columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
+                   if (table, row[1]) not in exclude]
+        selected = ", ".join(f'"{column}"' for column in columns)
         result.update(table.encode())
-        for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid'):
+        for row in connection.execute(f'SELECT {selected} FROM "{table}" ORDER BY rowid'):
             result.update(json.dumps(row, ensure_ascii=False, default=str).encode())
             result.update(b"\n")
     return result.hexdigest()
 
 
-# JSON keys whose values are third-party credentials (e.g. test_tasks.config_json
-# and test_task_runs.snapshot_json carry "testPassword" in clear text).
+# Columns that hold test-execution configuration and traces. Only these are
+# changed: credential keys are removed from their JSON and leftover copies of the
+# removed values are masked. Every other column must stay byte-for-byte equal.
+SCRUB_COLUMNS: frozenset[tuple[str, str]] = frozenset({
+    ("test_tasks", "config_json"),
+    ("test_tasks", "cases_json"),
+    ("test_tasks", "error"),
+    ("test_task_runs", "snapshot_json"),
+    ("test_task_runs", "result_json"),
+})
+# Columns that cannot carry a plaintext credential and would only produce
+# accidental matches (hashes, digests, storage keys).
+_OPAQUE_COLUMN = re.compile(r"(?i)(^id$|_id$|_hash$|sha256$|^storage_key$)")
 _SECRET_KEY = re.compile(r"(?i)(password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)$")
 _MASK = "******"
+_MIN_SECRET_LENGTH = 4
 
 
 def _strip_secret_keys(value, found: list[str]):
@@ -139,55 +156,81 @@ def _strip_secret_keys(value, found: list[str]):
     return value
 
 
-def scrub_credentials(connection: sqlite3.Connection) -> dict[str, int]:
-    """Remove stored third-party credentials from the copied database.
+class CredentialLeftError(RuntimeError):
+    """A removed credential still appears outside the test-execution columns."""
 
-    1. Every TEXT cell holding a JSON object/array loses keys that name a
-       credential (testPassword, apiKey, token, ...).
-    2. Any remaining occurrence of a removed value anywhere in a TEXT cell (a log
-       that escaped redaction, for instance) is masked.
-    Account password hashes in ``users.password_hash`` are kept: accounts must
-    still be able to sign in after migration.
+
+def scrub_credentials(connection: sqlite3.Connection) -> dict[str, object]:
+    """Remove stored third-party credentials (test-system passwords) from the copy.
+
+    1. In ``SCRUB_COLUMNS`` only, JSON keys that name a credential (testPassword,
+       apiKey, token, ...) are removed.
+    2. In ``SCRUB_COLUMNS`` only, remaining copies of the removed values (a log
+       line that escaped redaction) are replaced by ``******``.
+    3. Every other text column is searched for the removed values as a whole
+       token. A hit is not replaced, because the value may be ordinary business
+       text (a weak password such as 123456 or an account name); the migration
+       stops and names the table and column so a person can decide.
+    4. The caller verifies that all columns outside ``SCRUB_COLUMNS`` are unchanged.
     """
+    names = set(tables(connection))
     removed: list[str] = []
-    counts = {"json_cells": 0, "masked_cells": 0}
-    names = [table for table in tables(connection) if table not in TRANSIENT_TABLES]
-    text_columns: dict[str, list[str]] = {}
-    for table in names:
-        columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
-                   if row[1] != "password_hash"]
-        text_columns[table] = columns
-        for column in columns:
-            rows = connection.execute(
-                f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\' '
-                f'AND (substr(ltrim("{column}"),1,1) IN (\'{{\',\'[\'))'
-            ).fetchall()
-            for rowid, raw in rows:
-                try:
-                    parsed = json.loads(raw)
-                except ValueError:
-                    continue
-                found: list[str] = []
-                cleaned = _strip_secret_keys(parsed, found)
-                if found:
-                    removed.extend(found)
-                    connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?',
-                                       (json.dumps(cleaned, ensure_ascii=False), rowid))
-                    counts["json_cells"] += 1
-    secrets = sorted({value for value in removed if len(value) >= 4}, key=len, reverse=True)
+    keys_removed: dict[str, int] = {}
+    masked: dict[str, int] = {}
+    targets = sorted((table, column) for table, column in SCRUB_COLUMNS if table in names and column in
+                     {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')})
+    for table, column in targets:
+        rows = connection.execute(
+            f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\' '
+            f'AND substr(ltrim("{column}"),1,1) IN (\'{{\',\'[\')'
+        ).fetchall()
+        for rowid, raw in rows:
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                continue
+            found: list[str] = []
+            cleaned = _strip_secret_keys(parsed, found)
+            if found:
+                removed.extend(found)
+                connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?',
+                                   (json.dumps(cleaned, ensure_ascii=False), rowid))
+                keys_removed[f"{table}.{column}"] = keys_removed.get(f"{table}.{column}", 0) + len(found)
+    secrets = sorted({value for value in removed if len(value) >= _MIN_SECRET_LENGTH}, key=len, reverse=True)
     if secrets:
-        for table, columns in text_columns.items():
-            for column in columns:
-                for rowid, raw in connection.execute(
-                        f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\'').fetchall():
-                    masked = raw
-                    for secret in secrets:
-                        masked = masked.replace(secret, _MASK)
-                    if masked != raw:
-                        connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (masked, rowid))
-                        counts["masked_cells"] += 1
-    counts["credentials_removed"] = len(removed)
-    return counts
+        for table, column in targets:
+            for rowid, raw in connection.execute(
+                    f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\'').fetchall():
+                text, hits = raw, 0
+                for secret in secrets:
+                    hits += text.count(secret)
+                    text = text.replace(secret, _MASK)
+                if hits:
+                    connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (text, rowid))
+                    masked[f"{table}.{column}"] = masked.get(f"{table}.{column}", 0) + hits
+        pattern = re.compile("|".join(rf"(?<![A-Za-z0-9]){re.escape(secret)}(?![A-Za-z0-9])" for secret in secrets))
+        leftovers: dict[str, int] = {}
+        for table in sorted(names - TRANSIENT_TABLES):
+            for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall():
+                column = row[1]
+                if (table, column) in SCRUB_COLUMNS or _OPAQUE_COLUMN.search(column):
+                    continue
+                for (value,) in connection.execute(
+                        f'SELECT "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\'').fetchall():
+                    hits = len(pattern.findall(value))
+                    if hits:
+                        leftovers[f"{table}.{column}"] = leftovers.get(f"{table}.{column}", 0) + hits
+        if leftovers:
+            where = "、".join(f"{name}（{count} 处）" for name, count in leftovers.items())
+            raise CredentialLeftError(
+                f"测试任务保存的被测系统密码还出现在 {where}。为避免误改业务数据，迁移已停止。"
+                "请在原系统中把相关测试任务的被测系统密码改为不会与正文、账号重复的值（或先清空，部署后再填写），然后重新迁移。"
+            )
+    return {
+        "credentials_removed": len(removed),
+        "keys_removed": keys_removed,
+        "masked_occurrences": masked,
+    }
 
 
 def ensure_idle(connection: sqlite3.Connection) -> None:
@@ -269,7 +312,10 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
                     copied.execute(f'DELETE FROM "{table}"')
                 if business_fingerprint(copied) != before:
                     raise RuntimeError("备份业务数据校验失败。")
+                untouched = business_fingerprint(copied, SCRUB_COLUMNS)
                 scrubbed = scrub_credentials(copied)
+                if business_fingerprint(copied, SCRUB_COLUMNS) != untouched:
+                    raise RuntimeError("清除测试凭据时改动了测试执行记录以外的数据，迁移已停止。")
                 orphan_roles = 0
                 if {"user_roles", "users"}.issubset(tables(copied)):
                     orphan_roles = copied.execute(

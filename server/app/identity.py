@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 from contextlib import nullcontext
 import secrets
@@ -349,6 +350,16 @@ def require_permission(request: Request, permission: str) -> Principal:
     return principal
 
 
+# Change-password failures are counted under their own key space in login_guards.
+# Account keys can never contain control characters (see _clean_account), so this
+# prefix cannot collide with a sign-in counter and needs no schema change.
+PASSWORD_CHANGE_GUARD_PREFIX = "\x1fchange-password:"
+
+
+def password_change_guard(user_id) -> str:
+    return f"{PASSWORD_CHANGE_GUARD_PREFIX}{user_id}"
+
+
 def _locked(connection, key: str) -> bool:
     row = connection.execute(
         "select failed_count, window_started_at from login_guards where account_key = %s",
@@ -359,6 +370,18 @@ def _locked(connection, key: str) -> bool:
     if _now() - row["window_started_at"] > _FAILURE_WINDOW:
         return False
     return int(row["failed_count"]) >= _FAILURE_LIMIT
+
+
+def _retry_after(connection, key: str) -> int:
+    """Whole seconds until the failure window of ``key`` ends (at least 1)."""
+    row = connection.execute(
+        "select window_started_at from login_guards where account_key = %s",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return 1
+    remaining = row["window_started_at"] + _FAILURE_WINDOW - _now()
+    return max(1, math.ceil(remaining.total_seconds()))
 
 
 def _record_failure(key: str) -> None:
@@ -500,7 +523,8 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
     key = account_key(cleaned)
     with connect() as connection:
         if _locked(connection, key):
-            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。")
+            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。",
+                           retry_after=_retry_after(connection, key))
         row = connection.execute(
             """
             select id, password_hash, status
@@ -560,10 +584,11 @@ def change_password(request: Request, body: PasswordBody) -> Response:
     new_password = _require_new_password(body.newPassword)
     # Separate counter from sign-in so a stolen session cannot guess the
     # current password without limit, yet cannot lock the owner out of login.
-    guard = f"change-password:{principal.user_id}"
+    guard = password_change_guard(principal.user_id)
     with connect() as connection:
         if _locked(connection, guard):
-            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请 10 分钟后再试。")
+            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请稍后再试。",
+                           retry_after=_retry_after(connection, guard))
         row = connection.execute(
             "select password_hash from users where id = %s",
             (principal.user_id,),

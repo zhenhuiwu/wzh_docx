@@ -18,6 +18,8 @@ class AppError(Exception):
     message: str
     field_errors: list[dict[str, str]] = field(default_factory=list)
     current_revision: int | None = None
+    # Seconds until the client may retry; sent as the Retry-After header (429/503).
+    retry_after: int | None = None
 
 
 def request_id_of(request: Request) -> str:
@@ -43,9 +45,11 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: AppError,
     ) -> JSONResponse:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None
         return JSONResponse(
             status_code=exc.status_code,
             content=error_content(request, exc),
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)
