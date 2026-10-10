@@ -144,6 +144,9 @@ class DocumentContentPatchBody(BaseModel):
     # 阶段2（01 §4.3）：opt-in 三方合并；clientSaveKey 用于幂等重放
     allowMerge: bool = False
     clientSaveKey: str | None = Field(default=None, min_length=8, max_length=80)
+    # 增量审查 M1：显式基准正文（仅 allowMerge）。编辑区停在旧正文、又接着改了已保存过的段落时，客户端用
+    # “与上次保存对应的编辑区文字”作基准，已保存过的内容就不会被当成对方的修改；expectedRevision 仍是客户端已知的最新修订。
+    baseMarkdown: str | None = None
 
 
 class DocumentExportBody(BaseModel):
@@ -741,6 +744,8 @@ def update_document_content(
 
     if body.allowMerge and body.retractMemoryRevision is not None:
         raise AppError(422, "VALIDATION_FAILED", "撤回 AI 修改需要基于当前版本，不能合并保存。")
+    if body.baseMarkdown is not None and not body.allowMerge:
+        raise AppError(422, "VALIDATION_FAILED", "显式基准只能用于合并保存。")
 
     with connect() as conn:
         # 检查文档和版本
@@ -789,6 +794,7 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
 
     data = commit_whole(
         conn, document_id=did, actor=session.user_id, base_revision=body.expectedRevision, mine_md=body.markdownContent,
+        base_markdown=body.baseMarkdown,
         kind="ai_selection" if memory else "edit", client_save_key=body.clientSaveKey,
         check_word=lambda markdown: _check_word(conn, _document_row(conn, did, session.user_id, admin, "edit"), markdown),
         extra={"memory": memory.model_dump() if memory else None}, after_write=after_write)

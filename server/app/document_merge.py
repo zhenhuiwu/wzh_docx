@@ -83,7 +83,7 @@ def _boundaries(ops, n: int, m: int) -> tuple[dict[int, int], dict[int, int]]:
     start: dict[int, int] = {}
     end: dict[int, int] = {}
     for tag, i1, i2, j1, j2 in ops:
-        if tag == "equal":
+        if tag == "equal" or tag == "replace" and i2 - i1 == j2 - j1:
             for offset in range(i2 - i1):
                 end.setdefault(i1 + offset, j1 + offset)
                 start[i1 + offset] = j1 + offset
@@ -99,7 +99,15 @@ def _boundaries(ops, n: int, m: int) -> tuple[dict[int, int], dict[int, int]]:
 
 
 def _hunks(ops) -> list[tuple[int, int]]:
-    return [(i1, i2) for tag, i1, i2, _j1, _j2 in ops if tag != "equal"]
+    """增量审查 M1：块数相同的连续替换逐块拆开——相邻两段一段只有我改、一段双方都改时，只有后者进冲突，
+    前者（如自己已保存后续打的段）照常合并，不随相邻的冲突段进冲突副本。"""
+    out: list[tuple[int, int]] = []
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "replace" and i2 - i1 == j2 - j1:
+            out.extend((index, index + 1) for index in range(i1, i2))
+        elif tag != "equal":
+            out.append((i1, i2))
+    return out
 
 
 def _overlaps(lo: int, hi: int, b1: int, b2: int) -> bool:

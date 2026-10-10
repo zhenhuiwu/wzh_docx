@@ -116,8 +116,10 @@ def _deleted_object(connection, document_id: UUID, body: str, since: int):
     ).fetchone()
 
 
-def _theirs_info(connection, document_id: UUID, rows: list, names: dict) -> dict:
-    first = rows[0]
+def _theirs_info(connection, document_id: UUID, rows: list, names: dict, base_bodies: set[str] | None = None) -> dict:
+    # 增量审查 M1：冲突区间可能连带自己刚改过、与基准相同的相邻段；“对方”取区间里相对基准真正变了的那段的修改人
+    changed = [row for row in rows if base_bodies is None or row["body"] not in base_bodies]
+    first = max(changed, key=lambda row: int(row["updated_doc_revision"] or 0)) if changed else rows[0]
     return {"markdown": "\n\n".join(row["body"] for row in rows), "revision": int(first["revision"]), "deleted": False,
             "updatedBy": _person(first["updated_by"], names.get(str(first["updated_by"]))),
             "updatedAt": format_timestamp(first["updated_at"])}
@@ -143,7 +145,7 @@ def build_items(connection, document_id: UUID, base_md: str, theirs_md: str, res
                       "theirsRevisions": {str(row["id"]): int(row["revision"]) for row in rows},
                       "afterObjectId": str(live[t1 - 1]["id"]) if live is not None and t1 > 0 else None}
         if rows:
-            item["theirs"] = _theirs_info(connection, document_id, rows, names)
+            item["theirs"] = _theirs_info(connection, document_id, rows, names, {block.body for block in conflict.base})
         elif conflict.theirs:
             item["theirs"] = {"markdown": _joined(conflict.theirs), "revision": None, "deleted": False,
                               "updatedBy": None, "updatedAt": None}
@@ -264,15 +266,19 @@ def store_conflict(connection, *, document_id: UUID, actor: UUID, base_revision:
 def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: int, mine_md: str, kind: str,
                  client_save_key: str | None, check_word: Callable[[str], None], source: str = "content",
                  extra: dict | None = None, after_write: Callable | None = None,
-                 template_update: Callable[[dict], dict] | None = None) -> dict:
-    """allowMerge 的整篇提交；返回 {revision, merged, changeId, changedBy, markdownContent?, noop?}。"""
+                 template_update: Callable[[dict], dict] | None = None, base_markdown: str | None = None) -> dict:
+    """allowMerge 的整篇提交；返回 {revision, merged, changeId, changedBy, markdownContent?, noop?}。
+
+    base_markdown：客户端给出的显式基准正文（增量审查 M1），代替 versions[base_revision] 作三方合并的基线。
+    """
     from app.documents import _save_markdown
 
-    rhash = request_hash({"base": base_revision, "markdown": mine_md, "kind": kind, **(extra or {})})
+    explicit = {"baseMarkdown": base_markdown} if base_markdown is not None else {}
+    rhash = request_hash({"base": base_revision, "markdown": mine_md, "kind": kind, **(extra or {}), **explicit})
     replayed = replay(connection, document_id, actor, client_save_key, rhash)
     if replayed is not None:
         return replayed
-    base_md = _version_markdown(connection, document_id, base_revision)
+    base_md = base_markdown if base_markdown is not None else _version_markdown(connection, document_id, base_revision)
     for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
         guard = document_lock(document_id) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
         with guard:
@@ -287,7 +293,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                     raise AppError(409, "BASE_REVISION_UNAVAILABLE", "找不到保存所依据的版本，请刷新并合并。",
                                    current_revision=revision)
                 base_md = theirs
-            merged_flag = revision != base_revision
+            merged_flag = revision != base_revision or (base_markdown is not None and base_markdown != theirs)
             if merged_flag:
                 ensure_committed(connection, document_id)
                 others = connection.execute(
@@ -712,7 +718,8 @@ def _refresh_attempt(connection, conflict, payload: dict, indexes: list[int]) ->
         # 审查 S1：保留原 objectIds 用于定位（已删的另记 goneObjectIds），不能过滤成空数组
         object_ids = list(refreshed.get("objectIds", item["objectIds"]))
         rows = [live[value] for value in object_ids if value in live]
-        theirs = _theirs_info(connection, conflict["document_id"], rows, names) if rows else {
+        base_bodies = {block.body for block in split(item.get("base", {}).get("markdown") or "")[1]}
+        theirs = _theirs_info(connection, conflict["document_id"], rows, names, base_bodies) if rows else {
             "markdown": item["theirs"].get("markdown"), "deleted": True, "revision": None}
         snapshot[str(index)] = {"theirs": theirs, "objectIds": object_ids,
                                 "goneObjectIds": [value for value in object_ids if value not in live],

@@ -365,3 +365,96 @@ def test_bookmark_paragraph_fully_replaced_is_protected(tmp_path):
 
     _bookmark_doc(toc, build_toc)
     edit_original_docx(parse_docx(str(toc)).markdown.replace("## 范围", "## 概述"), toc, tmp_path / "toc-out.docx")
+
+
+# ---------------------------------------------------------------- 增量审查 M1：显式基准正文（baseMarkdown）
+
+def _save_with_base(client, did, base, text, base_md, headers, key=None):
+    body = {"expectedRevision": base, "markdownContent": text, "allowMerge": True, "baseMarkdown": base_md}
+    if key:
+        body["clientSaveKey"] = key
+    return client.patch(f"/api/v1/documents/{did}/content", json=body, headers=headers)
+
+
+def test_explicit_base_keeps_own_saved_text_out_of_conflict(team):
+    """已保存“第二段。【P1】”后编辑区停在旧正文又接着打【P2】，同时对方改了第三段：
+    按旧修订提交会和自己冲突；以“上次保存对应的编辑区文字”为显式基准则干净合并。"""
+    client, did, _users = team
+    def a():
+        return _as(client, "editor")
+
+    def b():
+        return _as(client, "editor2")
+
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, a()).status_code == 200                                   # rev 2（我）
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), b()).status_code == 200  # rev 3（对方）
+    mine = saved.replace("【P1】", "【P1】【P2】")                                             # 编辑区：不含对方修改
+    old_way = save(client, did, 1, mine, a())
+    assert old_way.status_code == 409                       # 旧基准：自己已保存的【P1】被当成对方的修改
+    with connect() as connection:
+        connection.execute("DELETE FROM document_conflict_items"); connection.execute("DELETE FROM document_conflicts"); connection.commit()
+    r = _save_with_base(client, did, 3, mine, saved, a(), key="explicit-base-1")
+    assert r.status_code == 200, r.text
+    text = r.json()["data"]["markdownContent"]
+    assert "第二段。【P1】【P2】" in text and "第三段（B 改）。" in text
+    again = _save_with_base(client, did, 3, mine, saved, a(), key="explicit-base-1")   # 同键重放
+    assert again.status_code == 200 and again.json()["data"]["revision"] == r.json()["data"]["revision"]
+
+
+def test_explicit_base_genuine_conflict_names_the_other_person(team):
+    client, did, _users = team
+    def a():
+        return _as(client, "editor")
+
+    def b():
+        return _as(client, "editor2")
+
+    saved = TEXT.replace("第一段。", "第一段。【P1】")
+    assert save(client, did, 1, saved, a()).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), b()).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, a())
+    assert r.status_code == 409, r.text
+    conflicts = r.json()["error"]["details"]["conflicts"]
+    assert len(conflicts) == 1                               # 只有第三段；第一段（自己已存的）不进冲突
+    assert "第三段（B 改）" in conflicts[0]["theirs"]["markdown"]
+    assert conflicts[0]["theirs"]["updatedBy"]["name"] == "成员editor2"
+    appliable = r.json()["error"]["details"]["appliableMarkdown"]
+    assert "【P1】【P2】" in appliable
+
+
+def test_adjacent_edit_stays_out_of_neighbouring_conflict(team):
+    """相邻两段：第二段只有我改（自己已存后续打），第三段双方都改——只有第三段进冲突，第二段的续打照常合并。"""
+    client, did, _users = team
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, _as(client, "editor")).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), _as(client, "editor2")).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    details = r.json()["error"]["details"]
+    assert len(details["conflicts"]) == 1 and details["conflicts"][0]["mine"]["markdown"] == "第三段【我改】。"
+    assert details["conflicts"][0]["theirs"]["updatedBy"]["name"] == "成员editor2"
+    assert "第二段。【P1】【P2】" in details["appliableMarkdown"]
+
+
+def test_conflict_theirs_names_the_block_that_changed(team):
+    """结构性修改（块数变化）把自己刚存过的第二段和对方改的第三段并成一处冲突时，“对方”仍是改了第三段的人。"""
+    client, did, _users = team
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, _as(client, "editor")).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), _as(client, "editor2")).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】\n\n我新加的段。").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    conflicts = r.json()["error"]["details"]["conflicts"]
+    assert len(conflicts) == 1 and "第二段" in conflicts[0]["theirs"]["markdown"], conflicts
+    assert conflicts[0]["theirs"]["updatedBy"]["name"] == "成员editor2", conflicts
+
+
+def test_explicit_base_requires_merge(team):
+    client, did, _users = team
+    r = client.patch(f"/api/v1/documents/{did}/content", headers=_as(client, "editor"),
+                     json={"expectedRevision": 1, "markdownContent": TEXT, "baseMarkdown": TEXT})
+    assert r.status_code == 422
