@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
-import { ApiError } from "../api/client";
+import { ApiError, isMissingResource } from "../api/client";
 import { getProject, updateProject, type ProjectRecord } from "../api/projects";
 import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
@@ -77,7 +77,7 @@ async function load() {
     if (request !== projectRequest || target !== projectId.value) return;
     project.value = null;
     phase.value = "error";
-    notFound.value = error instanceof ApiError && error.status === 404;
+    notFound.value = isMissingResource(error);
     errorText.value = messageOf(error);
   }
 }

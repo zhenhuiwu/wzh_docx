@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { ApiError } from "../api/client";
+import { ApiError, isMissingResource } from "../api/client";
 import { getProject, type ProjectRecord } from "../api/projects";
 import { rememberProject } from "../crumbs";
 import { statusLabel } from "../projects";
@@ -46,7 +46,7 @@ async function load() {
   } catch (error) {
     if (request !== loadRequest || target !== projectId.value) return;
     phase.value = "error";
-    notFound.value = error instanceof ApiError && error.status === 404;
+    notFound.value = isMissingResource(error);
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   }
 }
