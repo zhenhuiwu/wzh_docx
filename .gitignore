@@ -1,4 +1,5 @@
 # Local configuration and business data
+初始管理员密码.txt
 .env
 .env.*
 !.env.example
@@ -41,5 +42,6 @@ build/
 .idea/
 .vscode/
 .claude/
+**/.claude/settings.local.json
 Thumbs.db
 Desktop.ini
