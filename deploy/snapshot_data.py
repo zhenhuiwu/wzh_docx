@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -37,6 +37,9 @@ README = """文档工作室 · 一键启动说明
 
 测试任务中保存的被测系统登录密码（testPassword 等凭据）不随包迁移，已在副本数据库中清除。
 部署后请在“测试用例管理”中逐个任务重新填写被测系统密码，再执行测试。
+打包时如果某个被测系统密码作为独立的词还出现在正文、账号名等其他地方，打包会停止并报出“表.列”；
+确认是普通业务内容后用 build.ps1 -AllowCredentialText 表.列 放行，放行的表列和次数记在“部署校验.json”的 accepted_leftovers 中；
+若确是泄露的密码，应先在原系统中删除该内容再打包。
 
 部署包不包含 AI 密钥。需要 AI 编写时：
   把 .env.example 复制为 .env，在 AI_API_KEY= 后填写本机使用的密钥，然后重启程序。
@@ -68,12 +71,11 @@ SECRET_KEYS = frozenset({"AI_API_KEY", "BOOTSTRAP_ADMIN_PASSWORD"})
 def env_quote(value: str) -> str:
     r"""Quote ``value`` so python-dotenv (used by pydantic-settings) reads it back unchanged.
 
-    Plain values use single quotes, where only \ and ' are escapes. Values with
-    line breaks or tabs use double quotes, where 
-, 
-, 	, " and \ are decoded.
-    python-dotenv expands ``${NAME}`` in every quoting style and offers no escape
-    for it, so such values are refused instead of being silently changed.
+    Plain values use single quotes, where only \\ and \' are escapes. Values
+    with line breaks or tabs use double quotes, where \n, \r, \t, \" and \\
+    are decoded. python-dotenv expands ``${NAME}`` in every quoting style and
+    offers no escape for it, so such values are refused instead of being
+    silently changed.
     """
     if "${" in value:
         raise ValueError("配置值含有 ${，python-dotenv 会把它当作变量展开，无法原样写入 .env。")
@@ -156,11 +158,17 @@ def _strip_secret_keys(value, found: list[str]):
     return value
 
 
+def _stored_forms(secret: str) -> set[str]:
+    """The secret as written, plus its JSON-escaped forms (ASCII and non-ASCII)."""
+    return {secret, json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
+
+
 class CredentialLeftError(RuntimeError):
     """A removed credential still appears outside the test-execution columns."""
 
 
-def scrub_credentials(connection: sqlite3.Connection) -> dict[str, object]:
+def scrub_credentials(connection: sqlite3.Connection,
+                      allowed_leftovers: frozenset[str] = frozenset()) -> dict[str, object]:
     """Remove stored third-party credentials (test-system passwords) from the copy.
 
     1. In ``SCRUB_COLUMNS`` only, JSON keys that name a credential (testPassword,
@@ -170,13 +178,16 @@ def scrub_credentials(connection: sqlite3.Connection) -> dict[str, object]:
     3. Every other text column is searched for the removed values as a whole
        token. A hit is not replaced, because the value may be ordinary business
        text (a weak password such as 123456 or an account name); the migration
-       stops and names the table and column so a person can decide.
+       stops and names the table and column so a person can decide. Columns the
+       operator reviewed and listed in ``allowed_leftovers`` ("table.column")
+       are shipped unchanged and their hit counts are recorded instead.
     4. The caller verifies that all columns outside ``SCRUB_COLUMNS`` are unchanged.
     """
     names = set(tables(connection))
     removed: list[str] = []
     keys_removed: dict[str, int] = {}
     masked: dict[str, int] = {}
+    accepted: dict[str, int] = {}
     targets = sorted((table, column) for table, column in SCRUB_COLUMNS if table in names and column in
                      {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')})
     for table, column in targets:
@@ -196,7 +207,10 @@ def scrub_credentials(connection: sqlite3.Connection) -> dict[str, object]:
                 connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?',
                                    (json.dumps(cleaned, ensure_ascii=False), rowid))
                 keys_removed[f"{table}.{column}"] = keys_removed.get(f"{table}.{column}", 0) + len(found)
-    secrets = sorted({value for value in removed if len(value) >= _MIN_SECRET_LENGTH}, key=len, reverse=True)
+    # A secret with quotes, backslashes or non-ASCII characters is stored escaped
+    # inside JSON columns (for example Ab\"c or \u5bc6), so match those forms too.
+    secrets = sorted({form for value in removed if len(value) >= _MIN_SECRET_LENGTH
+                      for form in _stored_forms(value)}, key=len, reverse=True)
     if secrets:
         for table, column in targets:
             for rowid, raw in connection.execute(
@@ -220,13 +234,18 @@ def scrub_credentials(connection: sqlite3.Connection) -> dict[str, object]:
                     hits = len(pattern.findall(value))
                     if hits:
                         leftovers[f"{table}.{column}"] = leftovers.get(f"{table}.{column}", 0) + hits
+        accepted = {name: count for name, count in leftovers.items() if name in allowed_leftovers}
+        leftovers = {name: count for name, count in leftovers.items() if name not in allowed_leftovers}
         if leftovers:
             where = "、".join(f"{name}（{count} 处）" for name, count in leftovers.items())
             raise CredentialLeftError(
                 f"测试任务保存的被测系统密码还出现在 {where}。为避免误改业务数据，迁移已停止。"
-                "请在原系统中把相关测试任务的被测系统密码改为不会与正文、账号重复的值（或先清空，部署后再填写），然后重新迁移。"
+                "请人工确认这些内容只是普通业务文本（例如编号或账号名恰好与弱密码相同），"
+                "然后用 --allow-credential-text 表.列（build.ps1 用 -AllowCredentialText）重新打包；"
+                "如果确实是泄露的密码，请先在原系统中删除或改写对应内容。"
             )
     return {
+        "accepted_leftovers": accepted,
         "credentials_removed": len(removed),
         "keys_removed": keys_removed,
         "masked_occurrences": masked,
@@ -259,7 +278,8 @@ def file_manifest(root: Path) -> dict[str, tuple[int, int]]:
 
 
 def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execute: bool,
-             env_updates: dict[str, str] | None = None) -> dict:
+             env_updates: dict[str, str] | None = None,
+             allowed_leftovers: frozenset[str] = frozenset()) -> dict:
     database, files, env_file, target = (path.resolve() for path in (database, files, env_file, target))
     if not database.is_file() or not files.is_dir() or not env_file.is_file():
         raise RuntimeError("数据库、文件数据目录或 .env 不存在。")
@@ -281,8 +301,9 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
         if any((target / name).exists() for name in ("data", ".env", ".env.example", "部署校验.json", "使用说明.txt")):
             raise RuntimeError("目标已含部署数据或配置，拒绝覆盖；请使用新的部署目录。")
         before, env_digest = business_fingerprint(source), digest(env_file)
+        created = [path for path in (target, *target.parents) if not path.exists()]
         target.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=".snapshot-", dir=target) as temporary:
+        with remove_created_on_failure(created), TemporaryDirectory(prefix=".snapshot-", dir=target) as temporary:
             stage = Path(temporary)
             destination = stage / "data" / "app.db"
             destination.parent.mkdir()
@@ -313,7 +334,7 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
                 if business_fingerprint(copied) != before:
                     raise RuntimeError("备份业务数据校验失败。")
                 untouched = business_fingerprint(copied, SCRUB_COLUMNS)
-                scrubbed = scrub_credentials(copied)
+                scrubbed = scrub_credentials(copied, allowed_leftovers)
                 if business_fingerprint(copied, SCRUB_COLUMNS) != untouched:
                     raise RuntimeError("清除测试凭据时改动了测试执行记录以外的数据，迁移已停止。")
                 orphan_roles = 0
@@ -349,11 +370,27 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
         return metadata
 
 
+
+@contextmanager
+def remove_created_on_failure(created: list[Path]):
+    """On failure remove the directories this run created (deepest first), only while empty."""
+    try:
+        yield
+    except BaseException:
+        for path in created:
+            try:
+                path.rmdir()
+            except OSError:
+                break
+        raise
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-server", type=Path, default=Path(__file__).resolve().parents[1] / "server")
     parser.add_argument("--target", type=Path, default=Path(__file__).resolve().parents[1] / "release" / "文档工作室")
     parser.add_argument("--execute", action="store_true", help="copy; without this flag inspect only")
+    parser.add_argument("--allow-credential-text", action="append", default=[], metavar="TABLE.COLUMN",
+                        help="经人工确认后，允许该表列中出现与测试密码相同的独立词（原样迁移并记录次数）")
     args = parser.parse_args()
     server = args.source_server.resolve()
     sys.path.insert(0, str(server))
@@ -364,7 +401,8 @@ def main() -> int:
             raise RuntimeError("一键部署包只支持 SQLite。")
         result = snapshot(server / settings.database_url.removeprefix("sqlite:///"),
                           server / settings.file_data_dir, server / ".env", args.target,
-                          execute=args.execute, env_updates={
+                          execute=args.execute, allowed_leftovers=frozenset(args.allow_credential_text),
+                          env_updates={
                               "AI_BASE_URL": settings.ai_base_url, "AI_MODEL": settings.ai_model,
                               "AI_CONTEXT_TOKENS": str(settings.ai_context_tokens),
                               "AI_REASONING_EFFORT": settings.ai_reasoning_effort,
