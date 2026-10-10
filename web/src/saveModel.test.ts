@@ -54,7 +54,7 @@ describe("texts", () => {
   it("describes locations without internal ids", () => {
     expect(locationText({ headingPath: ["3 需求", "3.2 能力"], kind: "paragraph", ordinal: 2 })).toBe("3 需求 › 3.2 能力 · 第 2 段");
     expect(locationText({ headingPath: [], kind: "table", ordinal: 1 })).toBe("文档开头（第一个标题之前） · 第 1 个表格");
-    expect(locationText({ headingPath: ["1 范围"], kind: "heading" })).toBe("1 范围 · 标题本身");
+    expect(locationText({ headingPath: ["1 范围"], kind: "heading" })).toBe("1 范围 · 标题行");
     expect(locationText({ headingPath: ["1 范围"], kind: "table", ordinal: 1, label: "表 3-2 接口" })).toBe("1 范围 · 表 3-2 接口");
   });
   it("names the last actor of a revision conflict", () => {

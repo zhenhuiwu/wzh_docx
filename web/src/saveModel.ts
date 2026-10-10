@@ -71,7 +71,7 @@ const KIND_WORD: Record<string, string> = { paragraph: "段", list_item: "项", 
 export function locationText(location: LocationInfo | null | undefined): string {
   if (!location) return "";
   const path = location.headingPath?.length ? location.headingPath.join(" › ") : "文档开头（第一个标题之前）";
-  if (location.kind === "heading") return `${path} · 标题本身`;
+  if (location.kind === "heading") return `${path} · 标题行`;
   if (location.label) return `${path} · ${location.label}`;
   return `${path} · 第 ${location.ordinal ?? 1} ${KIND_WORD[location.kind || "other"] || "块"}`;
 }

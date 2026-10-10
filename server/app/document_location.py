@@ -50,7 +50,7 @@ def location_text(location: dict[str, object]) -> str:
     """面向用户的位置文字（不含任何内部标识）。"""
     path = " › ".join(location.get("headingPath") or []) or "文档开头（第一个标题之前）"
     if location.get("kind") == "heading":
-        return f"{path} · 标题本身"
+        return f"{path} · 标题行"
     if location.get("label"):
         return f"{path} · {location['label']}"
     word = _KIND_WORD.get(str(location.get("kind")), "块")

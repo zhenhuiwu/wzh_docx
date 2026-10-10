@@ -62,9 +62,31 @@ class _RemoveRefused(ValueError):
         self.removed_text = removed_text
 
 
-def _remove_element(element) -> None:
+_REMOVE_KINDS = (
+    (".//w:drawing|.//w:pict|.//w:object", "图片或嵌入对象"),
+    (".//w:fldChar|.//w:fldSimple|.//w:sdt", "Word 域（目录、页码或交叉引用等）"),
+    (".//w:bookmarkStart|.//w:bookmarkEnd", "书签（可能被目录或交叉引用使用）"),
+    (".//w:hyperlink", "超链接"),
+    (".//w:footnoteReference|.//w:endnoteReference", "脚注或尾注"),
+    (".//m:oMath", "公式"),
+    (".//w:br[@w:type='page' or @w:type='column']", "分页符或分栏符"),
+    (".//w:sectPr", "分节信息"),
+    (".//w:gridSpan|.//w:vMerge", "合并单元格"),
+)
+
+
+def _removal_reason(element, heading: bool = False) -> str:
+    """界面复验 N8：拒绝删除时写明实际原因；删掉/并掉的是标题行时单独说明。"""
+    found = [label for path, label in _REMOVE_KINDS if element.xpath(path)]
+    what = "、".join(found) or "受保护的 Word 内容"
+    if heading:
+        return f"删除或合并了一个标题行，这个标题含{what}，无法安全删除；请保留标题行，或在原稿中修改。"
+    return f"此内容含{what}，无法安全删除；请在原稿中修改。"
+
+
+def _remove_element(element, heading: bool = False) -> None:
     if element.xpath(_PROTECTED_INLINE + "|.//w:sectPr|.//w:gridSpan|.//w:vMerge"):
-        raise ValueError("此内容包含图片、域、书签、合并单元格或分节信息，无法安全删除；请在原稿中修改。")
+        raise ValueError(_removal_reason(element, heading))
     element.getparent().remove(element)
 
 
@@ -797,7 +819,8 @@ def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start,
                     continue
                 text = " ".join("".join(source[old_start + position].itertext()).split())
                 if text and "".join(text.split()) not in kept:
-                    raise _RemoveRefused("此内容包含图片、域、书签、合并单元格或分节信息，无法安全删除；请在原稿中修改。", text)
+                    reason = _removal_reason(block.elements[0], block.tag.startswith("h"))
+                    raise _RemoveRefused(reason, text)
         resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
         for offset, (block, old, new) in enumerate(zip(resized, previous, new_blocks)):
             _located(new_start + offset, _edit_block, doc, block, new, old)
@@ -826,7 +849,7 @@ def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start,
         for element in block.elements:
             if element.getparent() is not None:
                 try:
-                    _remove_element(element)
+                    _remove_element(element, block.tag.startswith("h"))
                 except ValueError as exc:
                     removed = " ".join("".join(source[old_start + prefix + position].itertext()).split())
                     raise _RemoveRefused(str(exc), removed) from None

@@ -25,3 +25,40 @@ def test_comment_and_empty_heading_save_and_preview(document_context, addition):
     preview = client.get(f"/api/v1/documents/{document['id']}/preview")
     assert preview.status_code == 200, preview.text
     assert "注释" not in preview.json()["data"]["html"]
+
+
+def _bookmarked(paragraph, name="OLE_LINK1"):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), "1")
+    start.set(qn("w:name"), name)
+    paragraph._p.insert(0, start)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), "1")
+    paragraph._p.append(end)
+
+
+def test_refusal_reason_names_the_actual_cause(tmp_path):
+    """界面复验 N8：拒绝删除时写明实际原因（书签），删掉的是标题行时单独说明。"""
+    from docx import Document
+
+    from app.docx_export import WordEditError, edit_original_docx
+    from app.docx_parser import parse_docx
+
+    word = Document()
+    word.add_heading("1 范围", level=1)
+    _bookmarked(word.add_heading("1.1 标识", level=2), "OLE_LINK2")
+    word.add_paragraph("本文档适用于系统。")
+    _bookmarked(word.add_paragraph("文档标识号：TN/x"))
+    source = tmp_path / "src.docx"
+    word.save(source)
+    markdown = parse_docx(str(source)).markdown
+    reasons = []
+    for edited in (markdown.replace("\n\n文档标识号：TN/x", ""), markdown.replace("## 1.1 标识\n\n", "")):
+        assert edited != markdown
+        with pytest.raises(WordEditError) as error:
+            edit_original_docx(edited, source, tmp_path / "out.docx")
+        reasons.append(str(error.value))
+    assert "书签" in reasons[0] and "图片" not in reasons[0] and "标题行" not in reasons[0]
+    assert "标题行" in reasons[1] and "书签" in reasons[1]
