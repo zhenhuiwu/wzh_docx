@@ -481,10 +481,20 @@ def main() -> int:
             panel.get_by_role("button", name=re.compile("保留我的")).click()
             expect(panel.get_by_role("button", name="正在处理…")).to_have_count(1, timeout=5000)
             shot(b, "11-冲突处理中")
+            # 终验回归 I-4：处理结果返回后大文档重绘较慢，期间接着在别的段落打字，字不丢
+            other = paragraph(b, p_offline)
+            other.scroll_into_view_if_needed()
+            other.click()
+            b.keyboard.press("End")
             for route in held:
                 route.continue_()
             b.unroute("**/conflicts/*/resolve")
+            b.keyboard.type("（处理冲突后马上打字）", delay=80)
             expect(panel.locator(".ccard")).to_have_count(0, timeout=20000)
+            b.wait_for_timeout(3500)
+            wait_saved(b, 40000)
+            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+            assert "（处理冲突后马上打字）" in server, "处理冲突后重绘期间打的字丢了"
             # 全部处理后仍能进入“已处理”（验收 M2）
             toggle = b.get_by_test_id("conflict-toggle")
             expect(toggle).to_have_text("冲突", timeout=20000)
@@ -554,6 +564,48 @@ def main() -> int:
             assert "（断网关页）" in server
             shot(page, "09-草稿恢复后")
         offline_recovery()
+
+        @step("会话过期→重新登录→回到文档：继续编辑前出现恢复条（终验回归 H1）")
+        def session_expired_recovery():
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            login(page, f"e2e-li-{RUN}")
+            open_doc(page, data)
+            type_after(page, p_offline, "（会话过期前未保存）")
+            page.wait_for_timeout(800)
+            ctx.clear_cookies()  # 会话失效
+            save_now(page)
+            page.wait_for_url(re.compile(r"/login"), timeout=30000)
+            assert page.evaluate("Object.values(localStorage).some(v => v.includes('会话过期前未保存'))"), "草稿不在本机"
+            page.fill("#staff-id", f"e2e-li-{RUN}")
+            page.fill("#password", PASSWORD)
+            page.locator("form button[type=submit]").click()
+            page.wait_for_url(re.compile(r"/documents/"), timeout=30000)  # SPA 回到文档，不整页刷新
+            expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+            # 恢复条出现前编辑区不可输入；立刻打字也不会覆盖本标签的旧草稿
+            page.locator(".paper-content").click()
+            page.keyboard.type("（回来立刻打字）")
+            bar = page.get_by_test_id("draft-recovery")
+            expect(bar).to_be_visible(timeout=20000)
+            expect(page.locator(".paper-content")).to_have_attribute("contenteditable", "false")
+            shot(page, "09b-会话过期重新登录-草稿恢复条")
+            bar.get_by_role("button", name="恢复并保存").click()
+            expect(bar).to_have_count(0, timeout=30000)
+            wait_saved(page)
+            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+            assert "（会话过期前未保存）" in server, "恢复后服务器没有过期前的内容"
+            # 之后继续编辑：两段内容都在，刷新后不再有恢复条
+            type_after(page, p_offline, "（回来后新输入）")
+            save_now(page)
+            wait_saved(page)
+            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+            assert "（会话过期前未保存）" in server and "（回来后新输入）" in server
+            page.reload()
+            expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+            page.wait_for_timeout(2000)
+            expect(bar).to_have_count(0)
+            ctx.close()
+        session_expired_recovery()
 
         @step("同一账号多标签提示（非阻断，可关闭）")
         def multi_tab():

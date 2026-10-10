@@ -329,7 +329,9 @@ const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdo
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
 const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
 // 8.2 第 7 条：aiLocked 仍是“编辑区锁”（版本记录打开、AI 预览、本机草稿未处理、重绘中都不能编辑正文），只锁编辑区与格式工具栏。
-const aiLocked = computed(() => skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value));
+// 终验回归 H1：打开文档后、查完本机草稿之前编辑区不可输入（否则新输入会覆盖本标签的旧草稿）
+const checkingDrafts = ref(false);
+const aiLocked = computed(() => checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value));
 // 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
 const opBusy = computed(() => skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
 const canUndoAi = computed(() => Boolean(aiUndo.value) && aiUndo.value?.id === document.value?.id && aiUndo.value?.revision === document.value?.revision && !isDirty.value && !aiLocked.value && !saving.value && !addingHeading.value);
@@ -367,6 +369,7 @@ async function load() {
   memoryHasMore.value = false;
   localDraft.value = null;
   localDrafts.value = [];
+  checkingDrafts.value = true;
   resetSaveState();
   originalController?.abort();
   void pdfTask?.destroy();
@@ -425,6 +428,7 @@ async function load() {
     findLocalDrafts(record);
   } catch (error) {
     if (id !== documentId.value || version !== loadVersion) return;
+    checkingDrafts.value = false;
     phase.value = "error";
     loadErrorStatus.value = error instanceof ApiError ? error.status : 0;
     errorText.value = error instanceof ApiError && error.status === 404 ? accessText(error) : messageOf(error);
@@ -449,9 +453,10 @@ function resetSaveState() {
 function account() { return draftAccount || readSession()?.staffId || "user"; }
 const PRESENCE_WAIT_MS = 250;
 function findLocalDrafts(record: DocumentRecord) {
+  // 终验回归 H1：本页面自己写的草稿也要列出——load() 总是把编辑区换成服务器正文，
+  // 同一页面内重新打开文档（如会话过期重新登录后回到文档）时，这份草稿已不在编辑区里。
   const drafts = listDrafts(window.localStorage, account(), record.id)
     .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent))
-    .filter(draft => draft.tabId !== browserTab || draft.writer !== pageInstance)
     .filter(draft => !liveTabs.has(draft.tabId));
   for (const draft of listDrafts(window.localStorage, account(), record.id)) {
     // 与服务器正文相同的草稿没有恢复价值；按读到的版本删除（期间被别的标签改写就不删）。
@@ -459,6 +464,7 @@ function findLocalDrafts(record: DocumentRecord) {
   }
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
+  checkingDrafts.value = false;
   void settlePendingSaves(record);
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
@@ -1027,7 +1033,8 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
     let target = -1;
     if (lastInputAt >= started) {
       if (!before || composing || !editor.value) return false;
-      carry = typedInsertion(before, blockTexts(editor.value));
+      const now = captureCaret(editor.value);
+      carry = typedInsertion(before, blockTexts(editor.value), now.length === 2 && now[0].index === now[1].index && now[0].offset === now[1].offset ? now[0] : undefined);
       if (!carry) return false;
       const probe = window.document.createElement("div");
       probe.innerHTML = preview.html;
@@ -1570,7 +1577,8 @@ function persistLocalDraft(): boolean {
   draftTimer = undefined;
   if (!isDirty.value) {
     // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
-    removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
+    // 终验回归 H1：恢复条正列着本标签的旧草稿时不删（由“恢复/舍弃”处理）
+    if (!localDrafts.value.some(draft => draft.tabId === browserTab)) removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
     storageFailed.value = false;
     return true;
   }
@@ -1615,6 +1623,8 @@ async function restoreLocalDraft() {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
       localDrafts.value = localDrafts.value.filter(item => item !== draft);
       localDraft.value = localDrafts.value[0] ?? null;
+      // 恢复的是本标签自己的草稿时，保存期间写下的同键草稿已经落库，按本页面写入者清掉
+      if (document.value === record) persistLocalDraft();
     }
   } finally {
     draftBusy.value = false;
@@ -1964,8 +1974,29 @@ async function acceptResolution(result: ResolveResult) {
   // 复审 M3：原位置附近已找不到时放到了章节末尾，提醒用户检查
   if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
   if (result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
-  mergeBase = null;
-  await acceptContent({ ...record, revision: result.documentRevision, markdownContent: result.markdownContent } as unknown as DocumentContentResult);
+  // 终验回归 I-4：大文档处理冲突后重绘较慢，期间不锁编辑区；用户继续打的字原位写回或保留在编辑区，下次保存按原基准再合并
+  const previous = record.revision;
+  const typedNewer = markdownContent.value !== record.markdownContent;
+  record.revision = result.documentRevision;
+  record.markdownContent = result.markdownContent;
+  savedContent.value = result.markdownContent;
+  const content = { markdownContent: result.markdownContent, revision: result.documentRevision, status: record.status } as DocumentContentResult;
+  if (typedNewer) {
+    mergeBase = previous;
+    persistLocalDraft();
+    scheduleAutoSave();
+  } else {
+    mergeBase = null;
+    markdownContent.value = result.markdownContent;
+    persistLocalDraft();
+    const reason = "正在载入冲突处理结果…";
+    const started = Date.now();
+    const shown = await acceptContent(content, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
+    if (!shown && document.value === record) {
+      if (lastInputAt >= started) { mergeBase = previous; scheduleAutoSave(); }
+      else await acceptContent(content, { reason });
+    }
+  }
   void refreshConflicts();
 }
 async function acceptVersion(result: DocumentContentResult) {

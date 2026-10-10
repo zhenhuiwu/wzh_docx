@@ -38,9 +38,10 @@ describe("工作台重塑：差异", () => {
     expect(rows.some(row => row.theirs === "" && row.mine === "" )).toBe(false);
     expect(mergeRows(rows, rows.map(() => "mine"), false, true)).toBe("甲。\n\n乙。\n\n丙。");
   });
-  it("N7：表格冲突写“两张表都保留”", () => {
+  it("N7 / I-3：表格冲突写“两份表格都保留”并提示会生成两张表", () => {
     const table = "| a |\n| --- |\n| 1 |";
-    expect(actionsFor({ reason: "MODIFIED", mine: { markdown: table }, theirs: { markdown: table } } as never).map(c => c.label)).toContain("两张表都保留");
+    expect(actionsFor({ reason: "MODIFIED", mine: { markdown: table }, theirs: { markdown: table } } as never).map(c => c.label)).toContain("两份表格都保留");
+    expect(actionsFor({ reason: "MODIFIED", mine: { markdown: table }, theirs: { markdown: table } } as never).find(c => c.action === "keep_both")?.hint).toContain("两张表");
     expect(actionsFor({ reason: "MODIFIED", mine: { markdown: "甲" }, theirs: { markdown: "乙" } } as never).map(c => c.label)).toContain("两段都保留");
   });
 });
@@ -76,5 +77,9 @@ describe("终验 F-M1：载入期间打的字写回", () => {
     expect(typedInsertion(["甲", "乙"], ["甲改", "乙改"])).toBeNull();
     expect(typedInsertion(["甲", "乙段"], ["甲", "乙"])).toBeNull();
     expect(typedInsertion(["甲"], ["甲", ""])).toBeNull();
+    // 有多种对齐时按光标：在“（锁前）（紧”之间打了“（锁定中输入”，光标在“入”后
+    const old = "（锁前）（紧", now = "（锁前）（锁定中输入（紧";
+    expect(typedInsertion([old], [now], { index: 0, offset: 10 })).toEqual({ index: 0, text: old, offset: 4, insert: "（锁定中输入" });
+    expect(typedInsertion([old], [now])?.insert).toBe("锁定中输入（");
   });
 });

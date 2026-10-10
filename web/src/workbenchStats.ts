@@ -53,12 +53,19 @@ export function mergedInBlocks(sent: string, server: string): string[] {
 }
 
 /** 载入期间只在一个段落里插入了一串字（最常见的连续打字）：返回段落序号、插入位置和插入的字；其他改法返回 null。 */
-export function typedInsertion(before: string[], after: string[]): { index: number; text: string; offset: number; insert: string } | null {
+export function typedInsertion(before: string[], after: string[], caret?: { index: number; offset: number }): { index: number; text: string; offset: number; insert: string } | null {
   if (before.length !== after.length) return null;
   const changed = before.map((text, index) => text === after[index] ? -1 : index).filter(index => index >= 0);
   if (changed.length !== 1) return null;
   const index = changed[0], old = before[index], now = after[index];
   if (now.length <= old.length) return null;
+  // 优先按光标定位：插入的字止于光标处（同样的字可有多种对齐，如“（锁前）（”后再打“（…）”），
+  // 这样写回后光标仍在用户原来的位置，之后接着打的字不会落错
+  const added = now.length - old.length;
+  if (caret && caret.index === index && caret.offset >= added && caret.offset <= now.length) {
+    const start = caret.offset - added;
+    if (now.slice(0, start) + now.slice(caret.offset) === old) return { index, text: old, offset: start, insert: now.slice(start, caret.offset) };
+  }
   let prefix = 0;
   while (prefix < old.length && old[prefix] === now[prefix]) prefix += 1;
   let suffix = 0;
