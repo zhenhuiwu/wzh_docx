@@ -234,13 +234,19 @@
   text-underline-offset: 3px;
 }
 
+/* 按钮与链接：实线主色焦点框（对比度 ≥3:1）；输入框见下方“表单”（主色描边＋外发光）。 */
 .primary:focus-visible,
 .ghost:focus-visible,
 .subtle:focus-visible,
-.control:focus-visible,
 .text:focus-visible,
 .page:focus-visible,
 .link:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.control:focus-visible {
   outline: none;
   box-shadow: var(--focus-shadow);
 }
@@ -267,7 +273,7 @@
 }
 
 .control::placeholder {
-  color: var(--text-disabled);
+  color: var(--text-tertiary);   /* 4.9:1（08 验收 S2；必要信息不只放在占位符里） */
 }
 
 .control:hover:not(:disabled):not(:focus) {
@@ -332,13 +338,15 @@ textarea.control {
 
 .control.is-invalid:focus,
 .control[aria-invalid="true"]:focus {
-  box-shadow: 0 0 0 3px var(--danger-50);
+  border-color: var(--danger-700);
+  box-shadow: 0 0 0 3px var(--focus-ring-danger);
 }
 
 .field {
   display: grid;
   gap: 6px;
   min-width: 0;
+  align-content: start;
 }
 
 .field > label,
@@ -366,6 +374,15 @@ textarea.control {
   color: var(--danger-600);
   font-size: var(--text-xs);
   line-height: var(--leading-xs);
+}
+
+/* 弹窗字段下方的校验提示（字段为 grid，已有 6px 间距） */
+.dialog-fields .field-error,
+.stacked-label .field-error,
+.field > .field-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: var(--weight-regular);
 }
 
 .form-error {
@@ -413,6 +430,7 @@ textarea.control {
   display: grid;
   gap: 6px;
   min-width: 0;
+  align-content: start;   /* 同行字段出现校验提示时，邻列不被拉开 */
   color: var(--text-primary);
   font-size: var(--text-sm);
   line-height: var(--leading-sm);
@@ -451,13 +469,13 @@ textarea.control {
 }
 
 /* ---------- 筛选栏 ---------- */
+/* 查询条：放不下时换行（1366 下不把控件压成 0 宽，08 验收 M1）；“查询/重置”紧跟筛选项（08 验收 S9）。 */
 .query {
   display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-3) var(--space-4);
-  overflow-x: auto;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -478,6 +496,7 @@ textarea.control {
 
 .query .control,
 .query input {
+  flex: none;
   width: calc(var(--space-7) * 4);
   min-width: calc(var(--space-7) * 2);
 }
@@ -496,11 +515,11 @@ textarea.control {
 
 .query-fields {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   min-width: 0;
-  overflow-x: auto;
 }
 
 .query-actions {
@@ -1136,8 +1155,11 @@ dialog::backdrop {
   font-size: var(--text-xs);
 }
 
-.app-dialog .form-alert,
-.app-dialog .dialog-status {
+/* 只给直接挂在弹窗/表单下的提示条加左右边距；在已有内边距的弹窗体内的不再重复缩进（08 验收 M4）。 */
+.app-dialog > .form-alert,
+.app-dialog > form > .form-alert,
+.app-dialog > .dialog-status,
+.app-dialog > form > .dialog-status {
   margin: 0 var(--space-5) var(--space-4);
 }
 

@@ -51,6 +51,8 @@
   --border-strong:  var(--gray-300);
   --focus-ring:     rgba(36, 87, 197, 0.28);          /* 旧代码按颜色使用，保持为颜色 */
   --focus-shadow:   0 0 0 3px var(--focus-ring);
+  --focus-ring-danger: rgba(201, 58, 50, 0.32);   /* 标红字段聚焦（08 验收 M3） */
+  --focus-outline:  2px solid var(--brand-600);  /* 按钮/链接焦点：对白底 6.5:1，满足非文本 3:1（08 验收 S1） */
   --diff-ins-bg:    #e3f4e9;
   --diff-del-bg:    #fbe4e2;
 
