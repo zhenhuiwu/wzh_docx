@@ -138,3 +138,32 @@ def test_desktop_reset_writes_a_fresh_password_file(empty_database, capsys):
     with connect() as connection:
         row = connection.execute("SELECT * FROM users WHERE account = 'admin'").fetchone()
     assert verify_password(password, row["password_hash"]) and row["must_change_password"]
+
+
+def test_initial_password_file_is_removed_after_first_change(empty_database, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app as api
+
+    desktop.initialize_admin(empty_database)
+    target = empty_database / desktop.INITIAL_PASSWORD_FILE
+    password = next(line.split("：", 1)[1] for line in target.read_text(encoding="utf-8-sig").splitlines()
+                    if line.startswith("初始密码"))
+    other = empty_database / "其他文件.txt"
+    other.write_text("账号：admin\n", encoding="utf-8")
+    with TestClient(api) as client:
+        csrf = client.get("/api/v1/auth/csrf").json()["data"]["csrfToken"]
+        signed = client.post("/api/v1/auth/login", json={"account": "admin", "password": password},
+                             headers={"X-CSRF-Token": csrf})
+        assert signed.status_code == 200, signed.text
+        csrf = signed.json()["data"]["csrfToken"]
+        wrong = client.post("/api/v1/auth/change-password",
+                            json={"currentPassword": "wrong-password-0", "newPassword": "admin-chosen-pass-1"},
+                            headers={"X-CSRF-Token": csrf})
+        assert wrong.status_code == 422 and target.exists()
+        changed = client.post("/api/v1/auth/change-password",
+                              json={"currentPassword": password, "newPassword": "admin-chosen-pass-1"},
+                              headers={"X-CSRF-Token": csrf})
+        assert changed.status_code == 204, changed.text
+    assert not target.exists()
+    assert other.exists()

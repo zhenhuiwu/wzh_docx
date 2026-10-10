@@ -606,4 +606,7 @@ def change_password(request: Request, body: PasswordBody) -> Response:
                 (_token(), principal.session_id),
             )
             _clear_failures(connection, guard)
+    from app.bootstrap_admin import remove_initial_password_file
+
+    remove_initial_password_file(principal.account)
     return Response(status_code=204)
