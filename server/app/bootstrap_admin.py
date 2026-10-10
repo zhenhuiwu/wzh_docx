@@ -16,17 +16,22 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-import subprocess
 import sys
 from pathlib import Path
 
 from app.db import connect, migrate
-from app.identity import MIN_PASSWORD_LENGTH, account_key, create_user, hash_password, verify_password
+from app.identity import (
+    MIN_PASSWORD_LENGTH,
+    account_key,
+    create_user,
+    hash_password,
+    password_change_guard,
+    verify_password,
+)
 
 _ACCOUNT = "BOOTSTRAP_ADMIN_ACCOUNT"
 _NAME = "BOOTSTRAP_ADMIN_NAME"
 _PASSWORD = "BOOTSTRAP_ADMIN_PASSWORD"  # noqa: S105 - environment variable name, not a secret
-
 
 logger = logging.getLogger(__name__)
 
@@ -41,37 +46,107 @@ def initial_password_text(account: str, password: str) -> str:
         f"账号：{account}\n"
         f"初始密码：{password}\n"
         "首次登录后系统会要求修改密码，修改成功后本文件会被自动删除。\n"
-        "本文件对能访问此目录的本机用户可见，请勿复制或外传。\n"
+        "本文件仅限当前系统用户读取，请勿复制或外传。\n"
     )
 
 
 def write_secret_file(target: Path, text: str) -> None:
-    """Create ``target`` exclusively, readable by the owner only, then write ``text``.
+    """Create ``target`` exclusively, readable by the current user only, then write ``text``.
 
-    The file never exists with wider permissions: it is created with mode 0600
-    (POSIX). On Windows mode bits do not restrict access, so inheritance is
-    removed with icacls and only the current user is granted access; if that
-    fails the file is still written and a warning is logged.
+    The file never exists with wider permissions:
+    - POSIX: created with mode 0600;
+    - Windows: created with a protected DACL holding one ACE for the current
+      process user's SID (nothing inherited from the folder), then read back.
+    Any failure raises ``OSError`` (``FileExistsError`` if the file exists) and
+    leaves no file behind, so the caller can roll back.
     """
+    data = text.encode("utf-8-sig")
+    if sys.platform == "win32":
+        _write_owner_only_windows(target, data)
+        return
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8-sig") as stream:
-            stream.write(text)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
     except BaseException:
         target.unlink(missing_ok=True)
         raise
-    if sys.platform == "win32":
-        user = os.environ.get("USERNAME", "")
+
+
+def _current_user_sid():
+    import win32api
+    import win32security
+
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+    try:
+        return win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    finally:
+        win32api.CloseHandle(token)
+
+
+def owner_only_acl_problem(target: Path) -> str | None:
+    """Windows: describe why ``target`` is not owner-only, or None if it is."""
+    import win32security
+
+    sid = _current_user_sid()
+    descriptor = win32security.GetFileSecurity(str(target), win32security.DACL_SECURITY_INFORMATION)
+    control, _revision = descriptor.GetSecurityDescriptorControl()
+    if not control & win32security.SE_DACL_PROTECTED:
+        return "DACL 未受保护，仍会继承目录权限"
+    dacl = descriptor.GetSecurityDescriptorDacl()
+    if dacl is None:
+        return "没有 DACL（所有人可访问）"
+    if dacl.GetAceCount() != 1:
+        return f"DACL 有 {dacl.GetAceCount()} 条 ACE，应只有当前用户 1 条"
+    (ace_type, ace_flags), _mask, ace_sid = dacl.GetAce(0)
+    if ace_type != win32security.ACCESS_ALLOWED_ACE_TYPE or ace_flags & 0x10 or ace_sid != sid:
+        return "唯一的 ACE 不是授予当前用户的非继承允许项"
+    return None
+
+
+def _write_owner_only_windows(target: Path, data: bytes) -> None:
+    try:
+        import ntsecuritycon
+        import pywintypes
+        import win32file
+        import win32security
+    except ImportError as error:
+        raise OSError(f"缺少 pywin32，不能创建仅当前用户可读的文件：{error}") from None
+
+    try:
+        sid = _current_user_sid()
+        dacl = win32security.ACL()
+        dacl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
+        descriptor = win32security.SECURITY_DESCRIPTOR()
+        descriptor.SetSecurityDescriptorOwner(sid, False)
+        descriptor.SetSecurityDescriptorDacl(True, dacl, False)
+        descriptor.SetSecurityDescriptorControl(win32security.SE_DACL_PROTECTED, win32security.SE_DACL_PROTECTED)
+        attributes = pywintypes.SECURITY_ATTRIBUTES()
+        attributes.SECURITY_DESCRIPTOR = descriptor
+        handle = win32file.CreateFile(
+            str(target), win32file.GENERIC_WRITE, 0, attributes,
+            win32file.CREATE_NEW, win32file.FILE_ATTRIBUTE_NORMAL, None,
+        )
+    except pywintypes.error as error:
+        if error.winerror in (80, 183):  # ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+            raise FileExistsError(17, "文件已存在", str(target)) from None
+        raise OSError(f"不能创建仅当前用户可读的文件：{error.strerror}") from None
+    try:
         try:
-            subprocess.run(
-                ["icacls", str(target), "/inheritance:r", "/grant:r", f"{user}:F"],
-                capture_output=True, timeout=15, check=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except (OSError, subprocess.SubprocessError):
-            logger.warning("不能把初始密码文件限制为仅当前用户可读：%s", target)
+            win32file.WriteFile(handle, data)
+            win32file.FlushFileBuffers(handle)
+        finally:
+            handle.Close()
+        problem = owner_only_acl_problem(target)
+        if problem:
+            raise OSError(f"初始密码文件权限校验失败：{problem}")
+    except BaseException as error:
+        target.unlink(missing_ok=True)
+        if isinstance(error, pywintypes.error):
+            raise OSError(f"不能写入仅当前用户可读的文件：{error.strerror}") from None
+        raise
 
 
 def remove_initial_password_file(account: str) -> bool:
@@ -134,23 +209,36 @@ def bootstrap_first_admin() -> bool:
     return True
 
 
-# Earlier portable packages shipped this fixed password for "admin".
-# Passwords published in old docs / scripts. Any account still using one must change it.
+# Passwords published by earlier portable packages and docs. Any account still
+# using one must change it.
 KNOWN_DEFAULT_PASSWORDS = ("admin123",)
 
 
 def flag_known_default_passwords() -> int:
-    """Force a password change for every account still using a published default."""
-    flagged = 0
+    """Force a password change for every account still using a published default.
+
+    Hash checks are slow, so they run on a plain read without holding the
+    write lock; only the accounts that matched are flagged in a short
+    transaction, and only if their hash did not change in between.
+    """
     with connect() as connection:
-        with connection.transaction(immediate=True):
-            rows = connection.execute(
-                "select id, password_hash from users where must_change_password = 0"
-            ).fetchall()
-            for row in rows:
-                if any(verify_password(password, row["password_hash"]) for password in KNOWN_DEFAULT_PASSWORDS):
-                    connection.execute("update users set must_change_password = 1 where id = %s", (row["id"],))
-                    flagged += 1
+        rows = connection.execute(
+            "select id, password_hash from users where must_change_password = 0"
+        ).fetchall()
+    matched = [
+        (row["id"], row["password_hash"]) for row in rows
+        if any(verify_password(password, row["password_hash"]) for password in KNOWN_DEFAULT_PASSWORDS)
+    ]
+    flagged = 0
+    if matched:
+        with connect() as connection:
+            with connection.transaction(immediate=True):
+                for user_id, stored in matched:
+                    flagged += connection.execute(
+                        "update users set must_change_password = 1 "
+                        "where id = %s and password_hash = %s and must_change_password = 0",
+                        (user_id, stored),
+                    ).rowcount
     if flagged:
         logger.warning("%d 个账号仍在使用公开的默认密码，已要求其下次登录时修改。", flagged)
     return flagged
@@ -160,10 +248,12 @@ class ResetError(RuntimeError):
     """The offline reset could not be applied."""
 
 
-def reset_account_password(account: str) -> str:
+def reset_account_password(account: str, before_commit=None) -> str:
     """Offline recovery: give ``account`` a new random password that must be changed.
 
-    Revokes every session of the account and clears its login lock-out.
+    Revokes every session of the account and clears its sign-in and
+    change-password lock-outs. ``before_commit(password)`` runs inside the
+    transaction (e.g. to write the password file); if it raises, nothing changes.
     Returns the new password; the caller shows it to the operator once.
     """
     key = account_key(account)
@@ -186,7 +276,12 @@ def reset_account_password(account: str) -> str:
                 "update sessions set revoked_at = now() where user_id = %s and revoked_at is null",
                 (row["id"],),
             )
-            connection.execute("delete from login_guards where account_key = %s", (key,))
+            connection.execute(
+                "delete from login_guards where account_key in (%s, %s)",
+                (key, password_change_guard(row["id"])),
+            )
+            if before_commit is not None:
+                before_commit(password)
     return password
 
 
