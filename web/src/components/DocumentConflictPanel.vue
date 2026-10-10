@@ -9,6 +9,7 @@ import { ACTION_DONE_TEXT, REASON_TEXT, SELF_THEIRS_NAME, normalizeListMarkers, 
 import { locationText, shortTime } from "../saveModel";
 import { continuedChars, type LiveMine } from "../frozenConflict";
 import { readSession } from "../session";
+import { browserTabIdentity } from "../tabIdentity";
 
 const props = defineProps<{
   documentId: string; documentName: string; revision: number; canViewMembers: boolean; canResolve: boolean;
@@ -109,7 +110,10 @@ function mineStatus(item: ConflictItem): string {
   if (state && !state.saved) return `${n ? `含冲突后续写的 ${n} 字 · ` : ""}仅在本机 · 联网后自动保存`;
   if (!n) return "";
   const at = state?.savedAt || item.mineLatest?.savedAt;
-  return `含冲突后续写的 ${n} 字${at ? ` · 已存为冲突副本 ${hm(at)}` : ""}`;
+  // 设计师建议 6（边界 5）：最新一份来自另一个标签页时注明来源
+  const tabNow = browserTabIdentity().current;
+  const elsewhere = !state && item.mineLatest?.tabId && tabNow && item.mineLatest.tabId !== tabNow;
+  return `含冲突后续写的 ${n} 字${at ? ` · 已存为冲突副本 ${hm(at)}` : ""}${elsewhere ? " · 来自另一个标签页" : ""}`;
 }
 const withLatest = (item: ConflictItem): ConflictItem => tab.value === "mine" && !item.mine?.deleted ? { ...item, mine: { ...item.mine, markdown: mineText(item) } } : item;
 const theirsConfirm = (item: ConflictItem) => frozenHere(item)
