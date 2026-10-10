@@ -65,6 +65,8 @@ interface RequestOptions<T> {
   timeoutMs?: number;
   csrf?: string | null;
   idempotencyKey?: string;
+  /** 页面关闭时的保存（01 §6.5）：浏览器在页面卸载后继续发送，正文需 <64KB。 */
+  keepalive?: boolean;
   onEvent?: (event: T) => void;
 }
 
@@ -91,6 +93,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
       headers,
       body: options.form ?? (options.json !== undefined ? JSON.stringify(options.json) : undefined),
       signal,
+      keepalive: options.keepalive,
     });
     if (response.status === 204) return undefined;
     if (response.ok && options.onEvent) {

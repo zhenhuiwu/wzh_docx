@@ -7,6 +7,8 @@ import DocumentHistory from "../components/DocumentHistory.vue";
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
+import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
+import { changedByText, conflictCount, conflictOpensPanel } from "../conflictModel";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { listDrafts, recoverySummary, removeDraft, tabId as makeTabId, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import DOMPurify from "dompurify";
@@ -14,7 +16,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { getCapabilities, type Capabilities } from "../api/documents";
+import { getCapabilities, getConflictSummary, findChangeBySaveKey, type Capabilities, type ConflictSummary, type ResolveResult } from "../api/documents";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -77,6 +79,12 @@ let retryTimer: number | undefined;
 let savingTimer: number | undefined;
 let clockTimer: number | undefined;
 let pendingKey: { content: string; key: string } | null = null;
+// S5：编辑区正文所基于的修订号。合并保存后编辑区若有更新的输入，编辑区仍基于旧修订，下次保存以它为基准做三方合并。
+let mergeBase: number | null = null;
+const conflictOpen = ref(false);
+const conflictSummary = ref<ConflictSummary | null>(null);
+const conflictPanel = ref<InstanceType<typeof DocumentConflictPanel> | null>(null);
+const mineConflicts = computed(() => conflictCount(conflictSummary.value));
 const capabilities = ref<Capabilities | null>(null);
 // 打开文档时的账号：会话失效后 readSession() 为空，草稿仍要写到原账号名下（G1）。
 let draftAccount = "";
@@ -158,6 +166,9 @@ async function load() {
   window.clearTimeout(autoSaveTimer);
   document.value = null;
   historyOpen.value = false;
+  conflictOpen.value = false;
+  conflictSummary.value = null;
+  mergeBase = null;
   skillOpen.value = false;
   aiUndo.value = null;
   memoryOffset.value = 0;
@@ -204,6 +215,7 @@ async function load() {
     savedAt.value = Date.parse(record.updatedAt) || null;
     findLocalDrafts(record);
     void refreshMemory();
+    void refreshConflicts();
   } catch (error) {
     if (id !== documentId.value || version !== loadVersion) return;
     phase.value = "error";
@@ -236,6 +248,31 @@ function findLocalDrafts(record: DocumentRecord) {
   }
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
+  void settlePendingSaves(record);
+}
+/** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
+async function settlePendingSaves(record: DocumentRecord) {
+  for (const draft of [...localDrafts.value]) {
+    const key = draft.pendingSave?.clientSaveKey;
+    if (!key) continue;
+    let landed = false;
+    try { landed = await findChangeBySaveKey(record.id, key); } catch { continue; }
+    if (!landed || document.value !== record) continue;
+    removeDraft(window.localStorage, account(), record.id, draft.tabId);
+    localDrafts.value = localDrafts.value.filter(item => item !== draft);
+    localDraft.value = localDrafts.value[0] ?? null;
+    noteAction("上次关闭页面前的修改已保存到服务器。");
+  }
+}
+async function refreshConflicts() {
+  const record = document.value;
+  if (!record) return;
+  try {
+    const summary = await getConflictSummary(record.id);
+    if (document.value === record) conflictSummary.value = summary;
+  } catch {
+    // 数量取不到时保留原值，不影响编辑。
+  }
 }
 function headingPathsOf(markdown: string): string[][] {
   // 变化块所在的章节（只用于恢复条提示，不参与保存）。
@@ -762,7 +799,7 @@ function currentDraft(): DraftV2 | null {
   const record = document.value;
   if (!record) return null;
   return {
-    v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: record.revision, savedAt: Date.now(),
+    v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: mergeBase ?? record.revision, savedAt: Date.now(),
     wholeDocument: true, markdown: markdownContent.value, blocks: [], changed: pendingCount.value,
     headingPaths: headingPathsOf(markdownContent.value), conflictsEdits: [], pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
   };
@@ -806,13 +843,9 @@ async function restoreLocalDraft() {
   if (!draft || !record || draftBusy.value || readonly.value || !draft.markdown) return;
   draftBusy.value = true;
   try {
-    if (draft.docRevision !== record.revision) {
-      // 服务器版本已变化：不覆盖别人的修改，只提供下载（S5 起改为按块合并）。
-      noteAction("服务器上的文档在这之后被修改过，不能直接恢复。请先下载这份修改再手动合并。", 8000);
-      return;
-    }
+    // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
-    await saveContent(draft.markdown, "manual");
+    await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
     if (!blocked.value) await refreshEditorFormatting(false);
     if (!blocked.value) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId);
@@ -848,7 +881,11 @@ function save(trigger: "auto" | "manual" = "auto"): Promise<void> {
 }
 function blockedFor(content: string) { return Boolean(blocked.value) && blocked.value!.content === content; }
 /** 单飞保存；同一内容的重试复用同一个 clientSaveKey（01 §6.3）。 */
-function saveContent(content: string, trigger: "auto" | "manual", baseRevision?: number): Promise<void> {
+/**
+ * baseRevision：本次提交所基于的修订（缺省为编辑区基准）。
+ * editor：冲突后自动重交可合并部分时，编辑区当时的正文和基准——用户之后没再输入才用服务器正文替换编辑区。
+ */
+function saveContent(content: string, trigger: "auto" | "manual", baseRevision?: number, editor?: { content: string; base: number }): Promise<void> {
   const record = document.value!;
   const memory = pendingMemory;
   const current = () => document.value === record && documentId.value === record.id;
@@ -861,15 +898,31 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   const key = pendingKey.key;
   savePromise = (async () => {
     try {
-      void key; // 阶段2 S5 起随请求发送 clientSaveKey（幂等重放）。
-      const result = await updateDocumentContent(record.id, baseRevision ?? record.revision, content, memory);
+      const base = baseRevision ?? mergeBase ?? record.revision;
+      const result = await updateDocumentContent(record.id, base, content, memory, undefined, { clientSaveKey: key, allowMerge: true });
       if (!current()) return;
-      const typedNewer = markdownContent.value !== content;
-      savedContent.value = result.markdownContent ?? content;
+      const typedNewer = markdownContent.value !== (editor?.content ?? content);
+      const serverText = result.markdownContent ?? content;
+      const changedText = serverText !== (editor?.content ?? content);
+      savedContent.value = serverText;
       record.revision = result.revision;
       record.status = result.status;
-      record.markdownContent = savedContent.value;
-      if (!typedNewer) markdownContent.value = savedContent.value;
+      record.markdownContent = serverText;
+      if (!typedNewer) {
+        mergeBase = null;
+        markdownContent.value = serverText;
+        // 合并带进了别人的修改：编辑区按服务器正文重绘。
+        if (changedText) layoutNeedsRefresh = true;
+      } else if (changedText) {
+        // 编辑区有更新的输入，不能替换；下次保存仍以编辑区原基准合并（同段落会再次冲突，新冲突取代旧的）。
+        mergeBase = editor?.base ?? base;
+      } else {
+        mergeBase = null;
+      }
+      if (result.merged) {
+        const text = changedByText(result.changedBy);
+        if (text) noteAction(text, 6000);
+      }
       pendingKey = null;
       blocked.value = null;
       retrying.value = false;
@@ -880,7 +933,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
       if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
-      if (current()) handleSaveError(error, content, trigger);
+      if (current()) handleSaveError(error, content, trigger, baseRevision ?? mergeBase ?? record.revision);
     } finally {
       saving.value = false;
       showSaving.value = false;
@@ -891,9 +944,25 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   })();
   return savePromise;
 }
-function handleSaveError(error: unknown, content: string, _trigger: "auto" | "manual") {
+function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", base?: number) {
   const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", messageOf(error));
   switch (classifySaveError(apiError)) {
+    case "conflict": {
+      // 01 §5.4/§6.4：冲突部分已存为冲突副本；其余可合并的部分用新键重新提交。
+      retrying.value = false;
+      pendingKey = null;
+      const details = apiError.details || {};
+      const appliable = typeof details.appliableMarkdown === "string" ? details.appliableMarkdown : null;
+      const appliableBase = typeof details.appliableBaseRevision === "number" ? details.appliableBaseRevision : null;
+      void refreshConflicts().then(() => conflictPanel.value?.load());
+      if (conflictOpensPanel(trigger)) openConflicts();
+      else noteAction(apiError.message, 8000);
+      if (appliable !== null && appliableBase !== null && document.value) {
+        const editorBase = base ?? mergeBase ?? document.value.revision;
+        queueMicrotask(() => void saveContent(appliable, "auto", appliableBase, { content, base: editorBase }));
+      }
+      return;
+    }
     case "retry": {
       failures.value += 1;
       failingSince ??= Date.now();
@@ -959,6 +1028,16 @@ function onOnline() {
   if (isDirty.value && !readonly.value) { failures.value = 0; failingSince = null; void save("auto"); }
 }
 function onOffline() { online.value = false; }
+/** 01 §6.5：关闭页面时用 keepalive 发出最后一次保存；键先写入草稿，下次打开按键核对是否落库。 */
+function onPageHide() {
+  const record = document.value;
+  if (!record || !isDirty.value || readonly.value || aiPreviewHost.value || blockedFor(markdownContent.value)) return;
+  const content = markdownContent.value;
+  if (new Blob([content]).size > 60000) return; // keepalive 正文上限 64KB；超出时只留本机草稿。
+  if (!pendingKey || pendingKey.content !== content) pendingKey = { content, key: crypto.randomUUID() };
+  persistLocalDraft();
+  void updateDocumentContent(record.id, mergeBase ?? record.revision, content, undefined, undefined, { clientSaveKey: pendingKey.key, allowMerge: true, keepalive: true }).catch(() => undefined);
+}
 function blockUnsupportedImages(event: ClipboardEvent | DragEvent) {
   const transfer = event instanceof ClipboardEvent ? event.clipboardData : event.dataTransfer;
   if (!transfer) return;
@@ -1001,7 +1080,29 @@ async function openHistory() {
   // 有未保存修改也能查看历史，只是不能恢复（02 P1）。
   if (aiLocked.value || addingHeading.value) return;
   aiOpen.value = false;
+  conflictOpen.value = false;
   historyOpen.value = true;
+}
+function openConflicts() {
+  aiOpen.value = false;
+  historyOpen.value = false;
+  conflictOpen.value = true;
+}
+/** 处理冲突前先保存正文；仍有未保存修改则不处理（避免处理结果覆盖编辑区）。 */
+async function beforeResolve(): Promise<boolean> {
+  window.clearTimeout(autoSaveTimer);
+  if (isDirty.value) await save("auto");
+  if (savePromise) await savePromise;
+  return !isDirty.value;
+}
+async function acceptResolution(result: ResolveResult) {
+  const record = document.value;
+  if (!record) return;
+  conflictSummary.value = { mineOpen: result.mineOpen, allOpen: conflictSummary.value?.allOpen ?? null };
+  if (result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
+  mergeBase = null;
+  await acceptContent({ ...record, revision: result.documentRevision, markdownContent: result.markdownContent } as unknown as DocumentContentResult);
+  void refreshConflicts();
 }
 async function acceptVersion(result: DocumentContentResult) {
   historyOpen.value = false;
@@ -1199,6 +1300,7 @@ onBeforeRouteLeave(leaveDocument);
 onBeforeRouteUpdate(leaveDocument);
 onMounted(() => {
   window.addEventListener("beforeunload", beforeUnload);
+  window.addEventListener("pagehide", onPageHide);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
@@ -1207,6 +1309,7 @@ onMounted(() => {
 onUnmounted(() => {
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
+  window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("online", onOnline);
   window.removeEventListener("offline", onOffline);
   window.clearInterval(clockTimer);
@@ -1234,6 +1337,7 @@ onUnmounted(() => {
           <div class="document-heading"><h1>{{ document.name }}</h1></div>
         </div>
         <div class="toolbar-right">
+          <button v-if="mode === 'edit' && mineConflicts > 0" type="button" class="ghost danger conflict-toggle" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts()">冲突 {{ mineConflicts }}</button>
           <button v-if="mode === 'edit'" type="button" class="ghost" :disabled="aiLocked || addingHeading" @click="openHistory">版本记录</button>
           <button v-if="mode === 'edit' && aiUndo" type="button" class="ghost" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
           <div class="mode-switch" role="group" aria-label="文档视图">
@@ -1272,13 +1376,13 @@ onUnmounted(() => {
       <p v-if="exportError" class="notice info" role="status">{{ exportError }} <button type="button" class="ghost" @click="exportError = ''">知道了</button></p>
       <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>
       <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
-        <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过。' }}<template v-if="localDrafts.length > 1">（另有 {{ localDrafts.length - 1 }} 份）</template></span>
-        <button type="button" class="primary" :disabled="draftBusy || readonly || localDraft.docRevision !== document.revision" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
+        <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}<template v-if="localDrafts.length > 1">（另有 {{ localDrafts.length - 1 }} 份）</template></span>
+        <button type="button" class="primary" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
         <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
         <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
       </div>
       <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" />
-      <div class="workspace" :class="{ 'original-mode': mode !== 'edit', 'ai-open': mode === 'edit' && aiOpen, 'history-open': historyOpen }">
+      <div class="workspace" :class="{ 'original-mode': mode !== 'edit', 'ai-open': mode === 'edit' && aiOpen, 'history-open': historyOpen || (mode === 'edit' && conflictOpen) }">
         <div v-if="mode !== 'edit'" class="original-viewer">
           <div v-if="originalPhase === 'loading'" class="preview-state">正在使用 Word 生成{{ mode === 'layout' ? '编辑稿' : '原稿' }}预览...</div>
           <div v-else-if="originalPhase === 'error'" class="preview-state" role="alert">
@@ -1373,6 +1477,9 @@ onUnmounted(() => {
           </details>
         </aside>
         <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
+        <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="document.id" :document-id="document.id" :document-name="document.name" :revision="document.revision"
+          :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
+          @close="conflictOpen = false" @resolved="acceptResolution" @count="conflictSummary = { mineOpen: $event, allOpen: conflictSummary?.allOpen ?? null }" />
         <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>

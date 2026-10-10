@@ -110,11 +110,13 @@ export async function updateDocumentContent(
   markdownContent: string,
   memory?: WritingMemory,
   retractMemoryRevision?: number,
-  options: { clientSaveKey?: string; allowMerge?: boolean } = {}
-): Promise<{ id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string }> {
+  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean } = {}
+): Promise<ContentSaveResult> {
+  const { keepalive, ...extra } = options;
   const body = await apiRequest<{ data: any }>(`/documents/${id}/content`, {
     method: "PATCH",
-    json: { expectedRevision, markdownContent, memory, retractMemoryRevision, ...options },
+    json: { expectedRevision, markdownContent, memory, retractMemoryRevision, ...extra },
+    keepalive,
   });
   if (!body?.data) throw new Error("更新响应不完整。");
   return body.data;
@@ -230,4 +232,46 @@ export async function insertDocumentSection(id: string, expectedRevision: number
   });
   if (!body?.data) throw new Error("插入正文响应不完整。");
   return body.data;
+}
+
+// ---- 阶段2 S5：合并保存与冲突（01 §4.3、§4.4） ----
+export interface Person { id: string; name: string }
+export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean }
+export interface ConflictLocation { headingPath?: string[]; ordinal?: number | null; kind?: string; label?: string | null }
+export interface ConflictSide { markdown?: string | null; revision?: number | null; deleted?: boolean; updatedBy?: Person | null; updatedAt?: string | null; deletedBy?: Person | null; deletedAt?: string | null }
+export interface ConflictItem {
+  conflictId: string; itemIndex: number; reason: "MODIFIED" | "DELETED" | "ANCHOR_LOST" | "STRUCTURE" | "FORMAT"; attempt: number;
+  location: ConflictLocation; base: ConflictSide; theirs: ConflictSide; mine: ConflictSide; status?: "open" | "resolved" | "discarded";
+  action?: string | null; actor?: Person | null; createdAt?: string; resolvedAt?: string | null; objectIds?: string[];
+}
+export interface ConflictSummary { mineOpen: number; allOpen: number | null }
+export type ConflictAction = "keep_mine" | "use_theirs" | "manual" | "keep_both" | "restore_as_new" | "discard";
+export interface ResolveRequestItem { itemIndex: number; action: ConflictAction; theirsRevision?: number | null; markdown?: string; placement?: { mode: "after_nearest_live" | "section_end" | "after"; afterObjectId?: string } }
+export interface ResolveResult { documentRevision: number; changeId: string | null; items: Array<{ itemIndex: number; status: string; placementFallback?: boolean }>; conflictStatus: string; mineOpen: number; markdownContent: string }
+
+export async function getConflictSummary(id: string): Promise<ConflictSummary> {
+  const body = await apiRequest<{ data: ConflictSummary }>(`/documents/${id}/conflicts/summary`);
+  if (!body?.data) throw new Error("冲突数量响应不完整。");
+  return body.data;
+}
+export async function listConflicts(id: string, status: "open" | "resolved" | "all" = "open", actor: "me" | "all" = "me"): Promise<ConflictItem[]> {
+  const body = await apiRequest<{ data: { items: ConflictItem[] } }>(`/documents/${id}/conflicts?status=${status}&actor=${actor}`);
+  if (!body?.data) throw new Error("冲突列表响应不完整。");
+  return body.data.items;
+}
+export async function getConflictCopy(id: string, conflictId: string): Promise<{ mineMarkdown: string; createdAt: string }> {
+  const body = await apiRequest<{ data: { mineMarkdown: string; createdAt: string } }>(`/documents/${id}/conflicts/${conflictId}`);
+  if (!body?.data) throw new Error("冲突副本响应不完整。");
+  return body.data;
+}
+export async function resolveConflict(id: string, conflictId: string, clientSaveKey: string, baseDocumentRevision: number, items: ResolveRequestItem[]): Promise<ResolveResult> {
+  const body = await apiRequest<{ data: ResolveResult }>(`/documents/${id}/conflicts/${conflictId}/resolve`, {
+    method: "POST", json: { clientSaveKey, baseDocumentRevision, items }, timeoutMs: 30000,
+  });
+  if (!body?.data) throw new Error("处理冲突响应不完整。");
+  return body.data;
+}
+export async function findChangeBySaveKey(id: string, clientSaveKey: string): Promise<boolean> {
+  const body = await apiRequest<{ data: unknown[] }>(`/documents/${id}/changes?clientSaveKey=${encodeURIComponent(clientSaveKey)}`);
+  return Boolean(body?.data?.length);
 }
