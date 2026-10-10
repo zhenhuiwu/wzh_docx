@@ -5,6 +5,7 @@ const STAFF_MEMORY = "doc-workbench.session";
 export interface Session {
   staffId: string;
   name: string;
+  mustChangePassword: boolean;
 }
 
 let cache: Session | null = null;
@@ -58,7 +59,11 @@ export async function ensureSession(): Promise<Session | null> {
   if (signedOut) return null;
   try {
     const current = await getCurrentSession();
-    cache = { staffId: current.user.account, name: current.user.name };
+    cache = {
+      staffId: current.user.account,
+      name: current.user.name,
+      mustChangePassword: Boolean(current.user.requiresFirstLoginChange),
+    };
     return cache;
   } catch {
     cache = null;

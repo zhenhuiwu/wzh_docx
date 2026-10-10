@@ -9,6 +9,7 @@ import ProjectsView from "./views/ProjectsView.vue";
 import TemplateDetailView from "./views/TemplateDetailView.vue";
 import TemplatesView from "./views/TemplatesView.vue";
 import SignIn from "./views/SignIn.vue";
+import ChangePasswordView from "./views/ChangePasswordView.vue";
 import UsersView from "./views/UsersView.vue";
 import WritingSkillsView from "./views/WritingSkillsView.vue";
 
@@ -35,6 +36,12 @@ export const router = createRouter({
       name: "login",
       component: SignIn,
       meta: { public: true, title: "登录" },
+    },
+    {
+      path: "/change-password",
+      name: "change-password",
+      component: ChangePasswordView,
+      meta: { title: "修改密码" },
     },
     {
       path: "/",
@@ -126,7 +133,11 @@ router.beforeEach(async (to) => {
     return session ? loginDestination(to.query.redirect) : true;
   }
   const session = await ensureSession();
-  return session ? true : { name: "login", query: { redirect: to.fullPath } };
+  if (!session) return { name: "login", query: { redirect: to.fullPath } };
+  if (session.mustChangePassword && to.name !== "change-password") {
+    return { name: "change-password", query: { redirect: to.fullPath } };
+  }
+  return true;
 });
 
 router.afterEach((to, _from, failure) => {

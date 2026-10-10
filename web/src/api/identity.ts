@@ -11,6 +11,8 @@ export interface CurrentUser {
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+  /** 首个管理员等使用初始密码的账号，改密前其他接口都会被拒绝。 */
+  requiresFirstLoginChange: boolean;
 }
 
 export interface CurrentSession {
