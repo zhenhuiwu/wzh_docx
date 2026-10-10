@@ -71,8 +71,8 @@ export function actionsFor(item: Pick<ConflictItem, "reason" | "mine" | "theirs"
       return [{ action: "use_theirs", label: "使用对方的版本" }];
     case "DELETED":
       if (item.mine?.deleted) return [{ action: "keep_mine", label: "仍然删除" }, { action: "use_theirs", label: "保留对方的修改" }];
-      return [{ action: "restore_as_new", label: "恢复为新段落", placement: "after_nearest_live" },
-        { action: "restore_as_new", label: "放到本章节末尾", placement: "section_end" }, { action: "discard", label: "放弃我的修改" }];
+      // 设计师建议 7：DELETED 卡只给“恢复为新段落 / 放弃我的修改”（原位置找不到时服务器自动放到章节末尾并提示）
+      return [{ action: "restore_as_new", label: "恢复为新段落", placement: "after_nearest_live" }, { action: "discard", label: "放弃我的修改" }];
     case "ANCHOR_LOST":
       return [{ action: "restore_as_new", label: "放到本章节末尾", placement: "section_end" }, { action: "discard", label: "放弃" }];
   }
@@ -84,6 +84,11 @@ export const ACTION_DONE_TEXT: Record<string, string> = {
   keep_mine: "保留了我的", use_theirs: "使用了对方的", manual: "手动合并", keep_both: "两段都保留",
   restore_as_new: "恢复为新段落", discard: "放弃了我的修改", superseded: "已被后来的修改取代",
 };
+
+/** 设计师建议 7：列表标记统一（编辑区序列化是“-   项”，服务器是“- 项”），对比前先统一，免得把空格标成插入。 */
+export function normalizeListMarkers(markdown: string): string {
+  return markdown.replace(/^(\s*)([-*+]|\d+[.)])[ \t]+/gm, "$1$2 ");
+}
 
 /** “李工 等 2 人更新了 3 处内容”（02 第4节第11条）。 */
 export function changedByText(changedBy: Array<Person & { objects: number }> | undefined): string {

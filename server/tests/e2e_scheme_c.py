@@ -657,7 +657,8 @@ def s_self_theirs(ctx: Run, page):
     open_panel(page)
     text = page.locator(".conflict-panel").inner_text() + "\n" + page.locator(".paper-content").evaluate("e => e.parentElement.innerText")
     assert "李工 的版本" not in text and "与 李工 的修改冲突" not in text, text[:600]
-    assert "你自己（另一份草稿或标签页）" in text, text[:600]
+    assert "你在另一处保存的版本 · 已在正文中" in text and "你在另一个标签页（或恢复的草稿）里保存了这一段" in text, text[:600]
+    assert "与你在另一处的修改冲突" in text, text[-300:]
     assert_no_self_named(page)
     return {"conflict": True}
 

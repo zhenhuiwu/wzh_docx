@@ -5,7 +5,7 @@ import ConflictCompareDialog from "./ConflictCompareDialog.vue";
 import { diffWords, isTable, tableCellDiffs } from "../textDiff";
 import { ApiError } from "../api/client";
 import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type ResolveRequestItem, type ResolveResult } from "../api/documents";
-import { ACTION_DONE_TEXT, REASON_TEXT, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
+import { ACTION_DONE_TEXT, REASON_TEXT, SELF_THEIRS_NAME, normalizeListMarkers, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
 import { locationText, shortTime } from "../saveModel";
 import { continuedChars, type LiveMine } from "../frozenConflict";
 import { readSession } from "../session";
@@ -66,7 +66,25 @@ function whenOf(item: ConflictItem) {
   return at ? shortTime(at) : "";
 }
 function whoOf(item: ConflictItem) {
-  return theirsName(item, readSession()?.userId);
+  const me = readSession()?.userId;
+  // 设计师建议 4：负责人看成员冲突时，对方就是当前用户 → “你”
+  if (tab.value === "members") {
+    const who = item.theirs?.deleted ? item.theirs?.deletedBy : item.theirs?.updatedBy;
+    if (who?.id && me && who.id === me) return "你";
+  }
+  return theirsName(item, me);
+}
+/** 设计师建议 5：对方就是本人（另一个标签页 / 恢复的草稿）时用专门句式 */
+const selfTheirs = (item: ConflictItem) => whoOf(item) === SELF_THEIRS_NAME;
+function savedDesc(item: ConflictItem, frozen: boolean): string {
+  const tail = frozen ? "你的版本还在编辑区（红框内），可以继续写；处理前不会写入正文。" : "两处修改无法自动合并。";
+  if (tab.value === "members") return `${whoOf(item)} 在 ${item.actor?.name || "提交人"} 编辑期间保存了这一段，两处修改无法自动合并。`;
+  if (selfTheirs(item)) return `你在另一个标签页（或恢复的草稿）里保存了这一段。${tail}`;
+  return frozen ? `${whoOf(item)} 在你编辑期间保存了这一段。${tail}` : `${whoOf(item)} 在你编辑期间保存了这一段，${tail}`;
+}
+function theirsTitle(item: ConflictItem): string {
+  if (item.theirs?.deleted) return `删除前的内容 · ${whoOf(item)} 已删除`;
+  return selfTheirs(item) ? "你在另一处保存的版本 · 已在正文中（其他人看到的是这一版）" : `${whoOf(item)} 的版本 · 已在正文中（其他人看到的是这一版）`;
 }
 
 // —— 方案 C：我的版本以最新快照为准（编辑区里正在写的优先）——
@@ -159,7 +177,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
   }
 }
 
-const diffOf = (base: string | null | undefined, changed: string | null | undefined) => diffWords(base || "", changed || "");
+const diffOf = (base: string | null | undefined, changed: string | null | undefined) => diffWords(normalizeListMarkers(base || ""), normalizeListMarkers(changed || ""));
 /** 界面复验 N7：表格冲突不显示管道符原文，写“表格 · N 处单元格不同”，引导去并排对比。 */
 const tableOf = (item: ConflictItem) => isTable(item.theirs?.markdown || "") || isTable(item.mine?.markdown || "");
 const cellDiffs = (item: ConflictItem, side: "theirs" | "mine") => tableCellDiffs(item.base?.markdown || "", (side === "theirs" ? item.theirs?.markdown : item.mine?.markdown) || "");
@@ -232,13 +250,13 @@ async function downloadCopy(item: ConflictItem) {
           <p v-if="item.reason === 'DELETED' && item.theirs?.deleted" class="cdesc">{{ whoOf(item) }} 于 {{ whenOf(item) }} 删除了这一段，但你修改过它。</p>
           <p v-else-if="item.reason === 'DELETED'" class="cdesc">你删除了这一段，但 {{ whoOf(item) }} 修改过它。</p>
           <p v-else-if="item.reason === 'FORMAT'" class="cdesc">合并后的内容无法写回原 Word，正文保持对方的版本。你可以下载自己的副本后手动处理。</p>
-          <p v-else-if="item.reason === 'MODIFIED' && frozenHere(item)" class="cdesc" data-testid="conflict-frozen-desc">{{ whoOf(item) }} 在你编辑期间保存了这一段。你的版本还在编辑区（红框内），可以继续写；处理前不会写入正文。</p>
-          <p v-else-if="item.reason === 'MODIFIED'" class="cdesc">{{ whoOf(item) }} 在你编辑期间保存了这一段，两处修改无法自动合并。</p>
-          <p v-else-if="item.reason === 'STRUCTURE'" class="cdesc">{{ whoOf(item) }} 拆分或合并了这里的段落，与你的修改重叠。</p>
+          <p v-else-if="item.reason === 'MODIFIED' && frozenHere(item)" class="cdesc" data-testid="conflict-frozen-desc">{{ savedDesc(item, true) }}</p>
+          <p v-else-if="item.reason === 'MODIFIED'" class="cdesc">{{ savedDesc(item, false) }}</p>
+          <p v-else-if="item.reason === 'STRUCTURE'" class="cdesc">{{ selfTheirs(item) ? "你在另一个标签页（或恢复的草稿）里拆分或合并了这里的段落，与这份修改重叠。" : `${whoOf(item)} 拆分或合并了这里的段落，与${tab === 'members' ? ` ${item.actor?.name || "提交人"} ` : "你"}的修改重叠。` }}</p>
           <p v-if="tab === 'mine' && !frozenHere(item) && item.mineLatest?.savedAt" class="cdesc" data-testid="conflict-reopen-note">重新打开后，编辑区显示的是正文里的版本；你的版本在这张卡片里。</p>
         </div>
         <section class="cver ccard-side theirs">
-          <h4><span class="avatar alt" aria-hidden="true">{{ initial(whoOf(item)) }}</span>{{ item.theirs?.deleted ? `删除前的内容 · ${whoOf(item)} 已删除` : `${whoOf(item)} 的版本 · 已在正文中（其他人看到的是这一版）` }}</h4>
+          <h4><span class="avatar alt" aria-hidden="true">{{ initial(whoOf(item)) }}</span>{{ theirsTitle(item) }}</h4>
           <p v-if="tableOf(item) && !item.theirs?.deleted" class="ctable">表格 · {{ cellDiffs(item, 'theirs') }} 处单元格不同（相对修改前）<span class="hint">表格差异请用“并排对比”查看。</span></p>
           <pre v-else-if="item.theirs?.deleted || !item.base?.markdown" :class="{ gone: item.theirs?.deleted }">{{ item.theirs?.markdown || "（无）" }}</pre>
           <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.theirs?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>

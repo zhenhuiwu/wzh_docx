@@ -8,7 +8,7 @@ import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
-import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText, theirsName } from "../conflictModel";
+import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText, SELF_THEIRS_NAME, theirsName } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
@@ -876,7 +876,7 @@ function applyConflictMarks() {
       const blocks = frozenEls(root, entry.key);
       blocks.forEach(block => block.classList.add("blk-conflict"));
       if (!blocks.length) continue;
-      marks.push({ key: entry.key, top: blocks[0].offsetTop, label: entry.deleted ? `该段已被 ${entry.name} 删除 · 未保存` : `未保存 · 与 ${entry.name} 的修改冲突`, frozen: true,
+      marks.push({ key: entry.key, top: blocks[0].offsetTop, label: entry.deleted ? `该段已被 ${entry.name} 删除 · 未保存` : entry.name === SELF_THEIRS_NAME ? "未保存 · 与你在另一处的修改冲突" : `未保存 · 与 ${entry.name} 的修改冲突`, frozen: true,
         tip: `这一段和 ${entry.name} 的修改冲突。你在这里写的内容先存为冲突副本，不会丢失，也暂不写入正文；在冲突面板处理后才写入。` });
     }
     for (const item of openConflictItems.value) {
@@ -886,7 +886,7 @@ function applyConflictMarks() {
       const key = `${item.conflictId}:${item.itemIndex}`;
       if (exact && block) {
         block.classList.add("blk-conflict");
-        marks.push({ key, top: block.offsetTop, label: deleted ? `该段已被 ${conflictName(item)} 删除` : `与 ${conflictName(item)} 的修改冲突`, item });
+        marks.push({ key, top: block.offsetTop, label: deleted ? `该段已被 ${conflictName(item)} 删除` : conflictName(item) === SELF_THEIRS_NAME ? "与你在另一处的修改冲突" : `与 ${conflictName(item)} 的修改冲突`, item });
         continue;
       }
       approx.push(key);
@@ -2819,6 +2819,11 @@ async function acceptResolution(result: ResolveResult) {
   if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
   else if (result.action === "keep_mine") noteAction("已用你的版本（含续写）更新这一段。", 4000);
   else if (result.action === "keep_both") noteAction(`已在你的版本前插入 ${result.theirsName || "对方"} 的版本，两段都在正文中。`, 4000);
+  // 设计师建议 7：其余处理方式也给成功短提示
+  else if (result.action === "use_theirs") noteAction(`已使用 ${result.theirsName || "对方"} 的版本。你的版本可在「已处理」里查看和下载。`, 4000);
+  else if (result.action === "manual") noteAction("已用合并结果更新这一段。", 4000);
+  else if (result.action === "restore_as_new") noteAction("已把你的版本恢复为新段落。", 4000);
+  else if (result.action === "discard") noteAction("已放弃你的修改。你的版本可在「已处理」里查看和下载。", 4000);
   // 方案 C：处理的是冻结区——保留我的：编辑区不变，撤掉红框；其他动作：冻结区换成处理结果（重绘）
   const key = result.conflictId ? `${result.conflictId}:${result.items[0]?.itemIndex}` : "";
   const entry = key ? frozen.value[key] : undefined;

@@ -32,7 +32,7 @@ describe("合一接口（⑫）", () => {
   });
   it("每种原因的处理方式", () => {
     expect(actionsFor({ reason: "MODIFIED", mine: {}, theirs: {} }).map(a => a.action)).toEqual(["manual", "keep_mine", "use_theirs", "keep_both"]);
-    expect(actionsFor({ reason: "DELETED", mine: { markdown: "x" }, theirs: { deleted: true } }).map(a => a.placement ?? a.action)).toEqual(["after_nearest_live", "section_end", "discard"]);
+    expect(actionsFor({ reason: "DELETED", mine: { markdown: "x" }, theirs: { deleted: true } }).map(a => a.placement ?? a.action)).toEqual(["after_nearest_live", "discard"]);
     expect(actionsFor({ reason: "FORMAT", mine: {}, theirs: {} }).map(a => a.action)).toEqual(["use_theirs"]);
   });
   it("他人更新提示", () => {
@@ -51,6 +51,14 @@ describe("冲突入口与他人更新文案（界面验收 M2/M3/M6）", () => {
     expect(conflictToggle(null, 1)).toMatchObject({ label: "冲突 1" });
     expect(othersUpdatedText(["李工"], 1, true)).toBe("已显示 李工 的最新修改。");
     expect(othersUpdatedText(["李工", "王工", "李工"], 3, false)).toBe("李工 等 2 人更新了 3 处内容。你的修改保存后会自动显示他们的更新。");
+  });
+});
+
+describe("normalizeListMarkers（设计师建议 7）", () => {
+  it("“-   项”与“- 项”、“1.  项”与“1. 项”统一", async () => {
+    const { normalizeListMarkers } = await import("./conflictModel");
+    expect(normalizeListMarkers("-   处理模块\n    -   子项\n1.  第一")).toBe("- 处理模块\n    - 子项\n1. 第一");
+    expect(normalizeListMarkers("普通段 - 不是列表")).toBe("普通段 - 不是列表");
   });
 });
 
