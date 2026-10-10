@@ -366,6 +366,16 @@ def _bookmark_marks(paragraph: Paragraph, old_text: str, new_text: str) -> list[
         return []
     operations = list(_anchored_operations(old_text, new_text))
     names_by_id = {node.get(qn("w:id")): node.get(qn("w:name")) or "" for node in p.getroottree().getroot().iter(qn("w:bookmarkStart"))}
+    # 测试复测 N3：整段文字全被换掉（例如行首退格并入上一段后又回车新写一段）时，书签会落到无关的新内容上。
+    # 标题目录书签（_Toc/_GoBack）随标题改名是正常的；其他书签按受保护处理。
+    # 判定“整段换掉”：首尾都没有保留原文字，且保留下来的零散字符不到原文一半。
+    kept = sum(end - start for operation, start, end, _, _ in operations if operation == "equal")
+    anchored = operations and (operations[0][0] == "equal" or operations[-1][0] == "equal")
+    if old_text.strip() and not anchored and kept * 2 < len(old_text):
+        names = [node.get(qn("w:name")) if node.tag == qn("w:bookmarkStart") else names_by_id.get(node.get(qn("w:id")), "")
+                 for _, node in found]
+        if any(not (name or "").startswith(("_Toc", "_GoBack")) for name in names):
+            raise ValueError("此段带书签，整段文字都被替换后书签会落到新内容上；请只修改其中的文字，或在原稿中修改该段。")
     referenced = None
     marks = []
     for order, (old_offset, node) in enumerate(found):
@@ -768,6 +778,16 @@ def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start,
             and all(block.tag == "p" and len(block.elements) == 1 for block in old_blocks)
             and all(element.tag == "p" and not _key(element)[2]
                     for element in source[old_start:old_end] + new_blocks)):
+        if len(old_blocks) > len(new_blocks):
+            # 界面复验 N1：相邻段刚被改过时，删掉的受保护段会和它落在同一个片段里走“跨段替换”。
+            # 受保护段的文字在新内容里已经找不到 → 按“删除”拒绝并带上原文字，界面才能把它插回去。
+            kept = "".join("".join("".join(element.itertext()).split()) for element in new_blocks)
+            for position, block in enumerate(old_blocks):
+                if not any(element.xpath(_PROTECTED_INLINE + "|.//w:sectPr") for element in block.elements):
+                    continue
+                text = " ".join("".join(source[old_start + position].itertext()).split())
+                if text and "".join(text.split()) not in kept:
+                    raise _RemoveRefused("此内容包含图片、域、书签、合并单元格或分节信息，无法安全删除；请在原稿中修改。", text)
         resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
         for offset, (block, old, new) in enumerate(zip(resized, previous, new_blocks)):
             _located(new_start + offset, _edit_block, doc, block, new, old)

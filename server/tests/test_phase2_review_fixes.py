@@ -329,3 +329,39 @@ def test_bookmark_nested_in_other_element_stays_protected(tmp_path):
     markdown = parse_docx(str(source)).markdown
     with _pytest.raises(ValueError):
         edit_original_docx(markdown.replace("正文其余", "正文**其余**"), source, tmp_path / "out.docx")
+
+
+def test_bookmark_paragraph_fully_replaced_is_protected(tmp_path):
+    """测试复测 N3：标识号行行首退格并入上一段、再回车写新段——书签不能跑到新段上，按受保护拒绝。"""
+    import pytest as _pytest
+
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "ident.docx"
+
+    def build(doc, mark):
+        doc.add_paragraph("本文档适用于系统。")
+        p = doc.add_paragraph()
+        mark(p, "Start", 4, "OLE_LINK4")
+        p.add_run("文档标识号：TN/x")
+        mark(p, "End", 4)
+        doc.add_paragraph("其后一段。")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    merged = markdown.replace("本文档适用于系统。\n\n文档标识号：TN/x", "本文档适用于系统。文档标识号：TN/x\n\n【新增段N】")
+    assert merged != markdown
+    with _pytest.raises(ValueError, match="书签"):
+        edit_original_docx(merged, source, tmp_path / "out.docx")
+    # _Toc 书签的标题整段改名照常可以
+    toc = tmp_path / "toc.docx"
+
+    def build_toc(doc, mark):
+        heading = doc.add_heading("", 2)
+        mark(heading, "Start", 6, "_Toc6")
+        heading.add_run("范围")
+        mark(heading, "End", 6)
+
+    _bookmark_doc(toc, build_toc)
+    edit_original_docx(parse_docx(str(toc)).markdown.replace("## 范围", "## 概述"), toc, tmp_path / "toc-out.docx")

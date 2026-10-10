@@ -38,21 +38,43 @@ const sameText = (block: string, target: string) => {
   return Boolean(text) && Boolean(target) && (text === target || text.includes(target) || target.includes(text));
 };
 
+const similarity = (a: string, b: string) => {
+  const x = normalize(a), y = normalize(b);
+  let prefix = 0;
+  while (prefix < Math.min(x.length, y.length) && x[prefix] === y[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < Math.min(x.length, y.length) - prefix && x[x.length - 1 - suffix] === y[y.length - 1 - suffix]) suffix++;
+  return prefix + suffix;
+};
+
 /**
  * 界面复验 N1：被拒的是“删除整段”时（服务器给出 deletedText），被删的段落只在上次保存的正文里。
- * 在有变化的片段里按“旧内容”找这一段；它在新内容里已不存在时把整个片段换回保存时的原文（插回原位置）。
+ * 在有变化的片段里按“旧内容”找这一段；新内容里已没有它时，只把这一段插回它原来的位置，片段里的其他修改（含新增段）不动。
  */
 export function restoreDeletedBlock(saved: string, current: string, deletedText: string): string | null {
   const before = blocks(saved), after = blocks(current);
   const target = normalize(deletedText);
-  const match = hunks(before, after).filter(hunk =>
-    before.slice(hunk.oldStart, hunk.oldEnd).some(block => sameText(block, target))
-    && !after.slice(hunk.newStart, hunk.newEnd).some(block => normalize(block) === normalize(before.slice(hunk.oldStart, hunk.oldEnd).find(item => sameText(item, target))!)));
-  if (match.length !== 1) return null;
-  const [hunk] = match;
-  return [...after.slice(0, hunk.newStart), ...before.slice(hunk.oldStart, hunk.oldEnd), ...after.slice(hunk.newEnd)].join("\n\n");
+  const found: Array<{ hunk: Hunk; index: number }> = [];
+  for (const hunk of hunks(before, after)) {
+    const oldBlocks = before.slice(hunk.oldStart, hunk.oldEnd);
+    const index = oldBlocks.findIndex(block => normalize(block) === target);
+    if (index < 0) continue;
+    // 新内容里还有含这段文字的块（例如并进了上一段）：不是单纯删除，交给按失败块撤销
+    if (after.slice(hunk.newStart, hunk.newEnd).some(block => sameText(block, target))) continue;
+    found.push({ hunk, index });
+  }
+  if (found.length !== 1) return null;
+  const [{ hunk, index }] = found;
+  const at = hunk.newStart + Math.min(index, hunk.newEnd - hunk.newStart);
+  return [...after.slice(0, at), before[hunk.oldStart + index], ...after.slice(at)].join("\n\n");
 }
 
+/**
+ * 测试复测 N2：只撤销被拒的那一块。片段里块数不同时（例如在被拒段后新增了一段）不再整片段还原：
+ * - 被拒块由两段合并而来（文字正好是相邻两段之和）→ 换回这两段；
+ * - 否则换回片段里与它最相近的旧块；片段里没有旧块（被拒块是新增的）→ 只去掉这一块。
+ * 其余新增、删除、修改都保留。
+ */
 export function revertBlock(saved: string, current: string, blockText: string, deletedText?: string): string | null {
   if (deletedText) {
     const restored = restoreDeletedBlock(saved, current, deletedText);
@@ -61,23 +83,29 @@ export function revertBlock(saved: string, current: string, blockText: string, d
   const before = blocks(saved), after = blocks(current);
   const target = normalize(blockText);
   const changed = hunks(before, after);
-  const match = changed.filter(hunk => after.slice(hunk.newStart, hunk.newEnd).some(block => {
-    const text = normalize(block);
-    return Boolean(text) && Boolean(target) && (text === target || text.includes(target) || target.includes(text));
-  }));
+  const match = changed.filter(hunk => after.slice(hunk.newStart, hunk.newEnd).some(block => sameText(block, target)));
   if (match.length !== 1) return null;
   const [hunk] = match;
-  // 片段内只换回与失败块对应的那一块；新增/删除块数不同时整片段还原（片段只含这一处修改）
   const newBlocks = after.slice(hunk.newStart, hunk.newEnd);
   const oldBlocks = before.slice(hunk.oldStart, hunk.oldEnd);
-  let replacement: string[];
-  if (newBlocks.length === oldBlocks.length) {
-    replacement = newBlocks.map((block, index) => {
-      const text = normalize(block);
-      return text === target || text.includes(target) || target.includes(text) ? oldBlocks[index] : block;
-    });
-  } else {
-    replacement = oldBlocks;
+  const hits = newBlocks.map((block, index) => (sameText(block, target) ? index : -1)).filter(index => index >= 0);
+  const pairOf = (failed: string) => oldBlocks.findIndex((block, index) => index + 1 < oldBlocks.length && normalize(block + oldBlocks[index + 1]) === normalize(failed));
+  if (newBlocks.length === oldBlocks.length && !(hits.length === 1 && pairOf(newBlocks[hits[0]]) >= 0)) {
+    const replacement = newBlocks.map((block, index) => (hits.includes(index) ? oldBlocks[index] : block));
+    return [...after.slice(0, hunk.newStart), ...replacement, ...after.slice(hunk.newEnd)].join("\n\n");
   }
-  return [...after.slice(0, hunk.newStart), ...replacement, ...after.slice(hunk.newEnd)].join("\n\n");
+  if (hits.length !== 1) return null;
+  const [hit] = hits;
+  const failed = newBlocks[hit];
+  let replacement: string[] = [];
+  const pair = pairOf(failed);
+  if (pair >= 0) {
+    replacement = [oldBlocks[pair], oldBlocks[pair + 1]];
+  } else if (oldBlocks.length) {
+    let best = 0;
+    oldBlocks.forEach((block, index) => { if (similarity(block, failed) > similarity(oldBlocks[best], failed)) best = index; });
+    replacement = [oldBlocks[best]];
+  }
+  const start = hunk.newStart + hit;
+  return [...after.slice(0, start), ...replacement, ...after.slice(start + 1)].join("\n\n");
 }
