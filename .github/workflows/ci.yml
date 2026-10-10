@@ -27,6 +27,9 @@ jobs:
         working-directory: server
     env:
       DOCWB_TEST_DATABASE_URL: sqlite:////tmp/docwb-ci-test.db
+      # 前端导航/路由权限一致性测试（tests/test_frontend_access.py）要用 Node 22（上面 setup-node 按 .nvmrc 安装）；
+      # 设为 1 后缺 Node 时测试失败而不是跳过。
+      DOCWB_REQUIRE_NODE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
