@@ -561,7 +561,9 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
             else:
                 paragraph = Paragraph(block.elements[0], doc)
                 _decorate_paragraph(node, [paragraph], theme)
-                if block.elements[0].xpath(_FIELD_LIKE):
+                style_name = (paragraph.style.name if paragraph.style is not None else "") or ""
+                # 测试复测 N4：[02][03] 的目录行是静态文字（不含域），但仍是目录（样式 toc N），同样只读
+                if block.elements[0].xpath(_FIELD_LIKE) or re.match(r"(?i)^toc\s*\d", style_name):
                     # 测试 L3：目录行、域、超链接等写回 Word 会被拒绝，编辑区里直接设为只读并说明。
                     node.set("contenteditable", "false")
                     node.set("data-word-protected", "1")

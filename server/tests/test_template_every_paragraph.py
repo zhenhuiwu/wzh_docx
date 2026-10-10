@@ -93,3 +93,18 @@ def test_preview_keeps_inline_tabs(name):
     markdown = parse_docx(str(template)).markdown
     inline_tabs = sum(line.lstrip(" \t").count("\t") for line in markdown.splitlines())
     assert inline_tabs and render_document_html(template, markdown).count("\t") == inline_tabs
+
+
+@pytest.mark.skipif(not TEMPLATES, reason="仓库中没有 438C 模板")
+@pytest.mark.parametrize("tag", ["[02]", "[03]"])
+def test_static_toc_lines_are_readonly(tag):
+    """测试复测 N4：不含域的静态目录行（样式 toc N）在编辑区同样只读。"""
+    from lxml import html as lxml_html
+
+    from app.docx_preview import render_document_html
+
+    template = next(path for path in TEMPLATES if path.name.startswith(tag))
+    markdown = parse_docx(str(template)).markdown
+    root = lxml_html.fromstring(f"<div>{render_document_html(template, markdown)}</div>")
+    line = next(node for node in root if "".join(node.itertext()).startswith("1") and "范围" in "".join(node.itertext()) and "\t" in "".join(node.itertext()))
+    assert line.get("contenteditable") == "false" and line.get("data-word-protected") == "1"
