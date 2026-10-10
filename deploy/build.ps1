@@ -1,4 +1,5 @@
-﻿param([switch]$NoZip)
+﻿# -AllowCredentialText 表.列：人工确认后，允许该表列中出现与测试密码相同的独立词（见 README）。
+param([switch]$NoZip, [string[]]$AllowCredentialText = @())
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -92,7 +93,9 @@ New-Item -ItemType Directory -Path $zipPackage -Force | Out-Null
 foreach ($entry in $programEntries) {
     Copy-Item -LiteralPath (Join-Path $stagingRoot $entry) -Destination $zipPackage -Recurse -Force
 }
-Invoke-Checked $python @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $zipPackage, '--execute')
+$snapshotArguments = @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $zipPackage, '--execute')
+foreach ($column in $AllowCredentialText) { $snapshotArguments += @('--allow-credential-text', $column) }
+Invoke-Checked $python $snapshotArguments
 Assert-Allowlisted $zipPackage ($programEntries + $snapshotEntries)
 foreach ($private in @('.env', '初始管理员密码.txt', 'logs')) {
     if (Test-Path -LiteralPath (Join-Path $zipPackage $private)) { throw "发布目录含有本机私密文件 $private，拒绝打包。" }

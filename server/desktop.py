@@ -92,12 +92,13 @@ def reset_admin(home: Path, account: str) -> None:
 
     migrate()
     target = home / INITIAL_PASSWORD_FILE
-    target.unlink(missing_ok=True)
     os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
 
     def save(password: str) -> None:
-        # Same rule as the first start: the file is written owner-only before the
-        # new password is committed; any failure leaves the old password in place.
+        # Runs only after the account was found. Same rule as the first start: the
+        # file is written owner-only before the new password is committed; any
+        # failure leaves the old password in place.
+        target.unlink(missing_ok=True)
         try:
             write_secret_file(target, initial_password_text(account, password))
         except OSError as error:
