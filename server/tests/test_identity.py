@@ -221,7 +221,13 @@ def test_wrong_current_password_has_stable_code_and_is_limited(client: TestClien
     other = TestClient(client.app)
     assert _login(other, "dev03-guess", PASSWORD).status_code == 200
     with connect() as connection:
-        connection.execute("delete from login_guards where account_key like 'change-password:%'")
+        from app.identity import PASSWORD_CHANGE_GUARD_PREFIX
+
+        keys = [row["account_key"] for row in connection.execute("select account_key from login_guards")]
+        assert "dev03-guess" not in keys
+        assert any(key.startswith(PASSWORD_CHANGE_GUARD_PREFIX) for key in keys)
+        connection.execute("delete from login_guards where substr(account_key, 1, %s) = %s",
+                           (len(PASSWORD_CHANGE_GUARD_PREFIX), PASSWORD_CHANGE_GUARD_PREFIX))
         connection.commit()
     assert attempt(PASSWORD).status_code == 204
 
