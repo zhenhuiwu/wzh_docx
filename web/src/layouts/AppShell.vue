@@ -6,8 +6,7 @@ import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { ApiError } from "../api/client";
 import { getProject } from "../api/projects";
-import { objectCrumb, projectCrumb, rememberCrumb, rememberProject } from "../crumbs";
-import { getDocument } from "../api/documents";
+import { objectCrumb, projectCrumb, rememberProject } from "../crumbs";
 import { flashMessage } from "../flash";
 import { NAV_ITEMS, navVisible } from "../access";
 
@@ -115,7 +114,7 @@ watch(() => [route.name, route.params.id] as const, async ([, id]) => {
   }
 }, { immediate: true });
 
-// 详情页对象名：模板、知识库、测试任务由各自页面写入；文档页（工作台，本分支不改）由这里补读文档名。
+// 详情页对象名：模板、知识库、测试任务由各自页面写入；文档名由 api/documents 的 getDocument 在工作台读取文档时写入。
 const objectKey = computed(() => {
   const name = String(route.name ?? "");
   if (name === "template") return `template:${String(route.params.id)}`;
@@ -125,17 +124,6 @@ const objectKey = computed(() => {
   return "";
 });
 const objectName = (fallback: string) => (objectKey.value && objectCrumb.value?.key === objectKey.value ? objectCrumb.value.label : fallback);
-let documentCrumbRequest = 0;
-watch(objectKey, async (key) => {
-  if (!key.startsWith("document:") || objectCrumb.value?.key === key) return;
-  const request = ++documentCrumbRequest;
-  try {
-    const record = await getDocument(key.slice("document:".length));
-    if (request === documentCrumbRequest) rememberCrumb(key, record.name);
-  } catch {
-    /* 读取失败时显示“文档”。 */
-  }
-}, { immediate: true });
 
 interface Crumb { label: string; to?: object }
 const crumbs = computed<Crumb[]>(() => {
