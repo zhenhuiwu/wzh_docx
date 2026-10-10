@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { changePassword } from "../api/identity";
 import { ensureSession, loginDestination, readSession } from "../session";
+import { flash } from "../flash";
 
 const MIN_LENGTH = 12;
 
@@ -57,6 +58,7 @@ async function onSubmit() {
     // 改密会轮换请求校验令牌，重新读取会话后再进入业务页面。
     await ensureSession();
     await router.replace(loginDestination(route.query.redirect));
+    flash("密码已修改。");
   } catch (error) {
     phase.value = "idle";
     if (error instanceof ApiError && error.code === "CURRENT_PASSWORD_INCORRECT") {
@@ -70,7 +72,8 @@ async function onSubmit() {
         if (item.field === "currentPassword") currentError.value = item.message;
         else if (item.field === "newPassword") nextError.value = item.message;
       }
-      formError.value = error.message;
+      // 字段下已显示具体原因，不再在底部重复（02 评审 2.4 S-2）。
+      if (!currentError.value && !nextError.value) formError.value = error.message;
     } else {
       formError.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
     }
@@ -85,6 +88,10 @@ function clearError(field: "current" | "next" | "confirm") {
   formError.value = "";
 }
 
+function cancel() {
+  void router.replace(loginDestination(route.query.redirect));
+}
+
 function signOut() {
   void router.push({ name: "login", query: { logout: "1" } });
 }
@@ -93,11 +100,12 @@ function signOut() {
 <template>
   <main class="desk">
     <form class="card" novalidate @submit.prevent="onSubmit">
-      <p class="brand">文档工作室</p>
+      <p class="brand"><span class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7zM14 3.5V8h4M10 12h5M10 15.5h5" /></svg></span>文档工作室</p>
       <h1>修改密码</h1>
       <p v-if="required" class="notice" role="status">
         账号 {{ account }} 正在使用初始或管理员设定的临时密码，修改后才能继续使用。
       </p>
+      <p v-else class="subtitle">账号 {{ account }}。修改后其他已登录的窗口需要重新登录。</p>
 
       <div class="field">
         <label for="current-password">当前密码</label>
@@ -159,11 +167,13 @@ function signOut() {
         <span>显示密码</span>
       </label>
 
+      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
       <button class="primary" type="submit" :disabled="busy" :aria-busy="busy">
         {{ busy ? "正在保存" : "保存新密码" }}
       </button>
-      <button class="ghost sign-out" type="button" :disabled="busy" @click="signOut">退出登录</button>
-      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+      <!-- 次要操作用文字按钮，避免与主按钮同权重（02 评审 2.4 S-3 / S-5）。 -->
+      <button v-if="required" class="link-button" type="button" :disabled="busy" @click="signOut">不修改，退出登录</button>
+      <button v-else class="link-button" type="button" :disabled="busy" @click="cancel">取消</button>
     </form>
   </main>
 </template>
@@ -171,26 +181,48 @@ function signOut() {
 <style scoped src="./auth-card.css"></style>
 <style scoped>
 .notice {
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--space-5);
   padding: var(--space-3);
+  border: 1px solid var(--warning-200);
   border-radius: var(--radius-control);
-  background: var(--warn-wash);
-  color: var(--ink);
+  background: var(--warning-50);
+  color: var(--text-primary);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: var(--leading-sm);
 }
 
 .hint {
   margin: 0;
   font-size: var(--text-xs);
-  line-height: 1.4;
-  color: var(--ink-secondary);
+  line-height: var(--leading-xs);
+  color: var(--text-tertiary);
 }
 
-.sign-out {
-  width: 100%;
-  height: calc(var(--space-6) + var(--space-3));
-  margin-top: var(--space-2);
-  font-size: var(--text-md);
+.link-button {
+  display: block;
+  margin: var(--space-3) auto 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.link-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-shadow);
+}
+
+.link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 </style>

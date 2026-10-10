@@ -7,7 +7,7 @@ import { loginDestination, writeSession } from "../session";
 
 const STAFF_KEY = "doc-workbench.staff-id";
 
-const staffId = ref("admin");
+const staffId = ref("");
 const password = ref("");
 const rememberStaffId = ref(false);
 const showPassword = ref(false);
@@ -76,6 +76,8 @@ async function onSubmit() {
       staffId: session.user.account,
       name: session.user.name,
       mustChangePassword: Boolean(session.user.requiresFirstLoginChange),
+      department: session.user.department,
+      permissions: session.permissions,
     });
     password.value = "";
     showPassword.value = false;
@@ -106,8 +108,9 @@ function onPasswordInput() {
 <template>
   <main class="desk">
     <form class="card" novalidate @submit.prevent="onSubmit">
-      <p class="brand">文档工作室</p>
+      <p class="brand"><span class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7zM14 3.5V8h4M10 12h5M10 15.5h5" /></svg></span>文档工作室</p>
       <h1>登录</h1>
+      <p class="subtitle">使用公司分配的账号登录。</p>
 
       <div class="field">
         <label for="staff-id">账号</label>
@@ -163,12 +166,12 @@ function onPasswordInput() {
         <span>记住账号</span>
       </label>
 
+      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
       <button class="primary" type="submit" :disabled="busy" :aria-busy="busy">
         {{ busy ? "正在登录" : "登录" }}
       </button>
-      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-
     </form>
+    <p class="footnote">忘记密码请联系系统管理员重置。</p>
   </main>
 </template>
 

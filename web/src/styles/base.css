@@ -1,43 +1,133 @@
+/* 文档工作室 设计 token（视觉重塑 v1，来源：02-界面体验评审 5.3 / mockups/tokens.css）
+ * 末尾保留旧变量别名（--stamp → --brand-600 等），迁移期间旧组件不受影响。
+ * 只在这里写十六进制颜色；组件里一律引用变量。 */
 :root {
   color-scheme: light;
-  --desk: #f5f4f1;
-  --sheet: #ffffff;
-  --ink: #253036;
-  --ink-secondary: #59676b;
-  --ink-tertiary: #667477;
-  --stamp: #225c70;
-  --stamp-press: #17495b;
-  --on-stamp: #ffffff;
-  --stamp-wash: rgba(34, 92, 112, 0.08);
-  --ok: #267149;
-  --ok-wash: #e8f6ee;
-  --warn: #9d6400;
-  --warn-wash: #fff7e6;
-  --text-xs: 12px;
+  /* ---------- 中性灰阶（略偏冷，适合长时间阅读） ---------- */
+  --gray-0:   #ffffff;
+  --gray-25:  #fafbfc;
+  --gray-50:  #f5f6f8;
+  --gray-100: #eef0f3;
+  --gray-150: #e6e9ee;
+  --gray-200: #dde1e7;
+  --gray-300: #c9ced6;
+  --gray-400: #a3aab5;
+  --gray-500: #6a717c;
+  --gray-600: #5d6571;
+  --gray-700: #434a55;
+  --gray-800: #2a3039;
+  --gray-900: #1b1f26;
+
+  /* ---------- 品牌主色（唯一主色：稳重深蓝） ---------- */
+  --brand-50:  #eef3fc;
+  --brand-100: #dbe6f8;
+  --brand-200: #b9cdf0;
+  --brand-500: #3a6ad4;
+  --brand-600: #2457c5;   /* 主按钮、选中、链接 */
+  --brand-700: #1d47a6;   /* 悬停 */
+  --brand-800: #183b8a;   /* 按下 */
+
+  /* ---------- 状态色（文字色 / 底色 / 描边） ---------- */
+  --success-600: #1a7a43; --success-50: #ebf7f0; --success-200: #b7e0c7;
+  --warning-600: #965a00; --warning-50: #fff6e6; --warning-200: #f2d29b;
+  --danger-600:  #c93a32; --danger-700: #a82f28; --danger-50: #fdf0ef; --danger-200: #f3c3bf;
+  --info-600:    #2457c5; --info-50:    #eef3fc; --info-200:   #b9cdf0;   /* 信息与品牌同色，减少颜色数 */
+
+  /* ---------- 语义色（组件只用这一层） ---------- */
+  --bg-page:        var(--gray-50);
+  --bg-surface:     var(--gray-0);
+  --bg-subtle:      var(--gray-25);
+  --bg-hover:       var(--gray-100);
+  --bg-active:      var(--brand-50);
+  --bg-sunken:      var(--gray-100);   /* 编辑区纸张外的桌面 */
+  --text-primary:   var(--gray-900);
+  --text-secondary: var(--gray-600);
+  --text-tertiary:  var(--gray-500);
+  --text-disabled:  var(--gray-400);
+  --text-link:      var(--brand-600);
+  --text-on-brand:  #ffffff;
+  --border-subtle:  var(--gray-150);
+  --border-default: var(--gray-200);
+  --border-strong:  var(--gray-300);
+  --focus-ring:     rgba(36, 87, 197, 0.28);          /* 旧代码按颜色使用，保持为颜色 */
+  --focus-shadow:   0 0 0 3px var(--focus-ring);
+  --focus-ring-danger: rgba(201, 58, 50, 0.32);   /* 标红字段聚焦（08 验收 M3） */
+  --focus-outline:  2px solid var(--brand-600);  /* 按钮/链接焦点：对白底 6.5:1，满足非文本 3:1（08 验收 S1） */
+  --diff-ins-bg:    #e3f4e9;
+  --diff-del-bg:    #fbe4e2;
+
+  /* ---------- 字体与字号阶梯（字号/行高） ---------- */
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Segoe UI", system-ui, sans-serif;
+  --font-doc: "SimSun", "宋体", "Noto Serif CJK SC", "Source Han Serif SC", serif;   /* 纸张正文，贴近 Word 成品 */
+  --font-mono: "Cascadia Mono", "Consolas", "Noto Sans Mono CJK SC", monospace;
+  --text-xs: 12px;  --leading-xs: 18px;   /* 辅助说明、表格次要信息 */
+  --text-sm: 13px;  --leading-sm: 20px;   /* 表格、侧栏、工具栏 */
+  --text-md: 14px;  --leading-md: 22px;   /* 正文默认 */
+  --text-lg: 16px;  --leading-lg: 24px;   /* 卡片标题、弹窗标题 */
+  --text-xl: 20px;  --leading-xl: 28px;   /* 页面标题 */
+  --text-2xl: 24px; --leading-2xl: 32px;  /* 仅登录页 */
+  --weight-regular: 400; --weight-medium: 500; --weight-semibold: 600;
+
+  /* ---------- 间距阶梯（沿用 4 的倍数，名称不变） ---------- */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px;
+
+  /* ---------- 尺寸 ---------- */
+  --control-h-sm: 28px;   /* 表格行内、工具栏 */
+  --control-h:    32px;   /* 默认按钮/输入框 */
+  --control-h-lg: 40px;   /* 登录页 */
+  --topbar-h: 48px;
+  --sidenav-w: 216px;
+  --sidenav-w-collapsed: 56px;
+  --panel-w: 400px;       /* 工作台右侧面板 */
+  --outline-w: 264px;     /* 工作台目录 */
+  --content-pad: var(--space-5);  /* 内容区内边距 */
+  --content-h: calc(100vh - var(--topbar-h) - var(--content-pad) * 2);  /* 内容区可用高度 */
+  --dialog-w-confirm: 480px;
+  --dialog-w-form: 640px;
+  --form-max-w: 720px;
+
+  /* ---------- 圆角 ---------- */
+  --radius-control: 6px;  /* 按钮、输入框、标签 */
+  --radius-sheet: 8px;    /* 卡片、弹窗、面板 */
+  --radius-pill: 999px;   /* 状态胶囊、计数徽标（新增） */
+
+  /* ---------- 边框与阴影（克制：卡片靠描边，浮层才用阴影） ---------- */
+  --border: 1px solid var(--border-default);
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-2: 0 4px 12px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.05);
+  --shadow-3: 0 16px 40px rgba(16, 24, 40, 0.16), 0 2px 6px rgba(16, 24, 40, 0.06);
+  --shadow-paper: 0 0 0 1px rgba(16, 24, 40, 0.06), 0 2px 8px rgba(16, 24, 40, 0.06);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration: 160ms;
+
+  /* ---------- 旧变量别名（迁移期保留，逐页替换后删除） ---------- */
+  --desk: var(--bg-page);
+  --sheet: var(--bg-surface);
+  --ink: var(--text-primary);
+  --ink-secondary: var(--text-secondary);
+  --ink-tertiary: var(--text-tertiary);
+  --stamp: var(--brand-600);
+  --stamp-press: var(--brand-800);
+  --on-stamp: var(--text-on-brand);
+  --stamp-wash: var(--brand-50);
+  --ok: var(--success-600);   --ok-wash: var(--success-50);
+  --warn: var(--warning-600); --warn-wash: var(--warning-50);
+  --fault: var(--danger-600); --fault-ink: var(--danger-700); --fault-wash: var(--danger-50);
+  --rule: var(--border-subtle);
+  --rule-strong: var(--border-strong);
+  --inset: var(--gray-100);
+  --inset-border: var(--border-strong);
+  --spine: var(--gray-900);
+  --spine-ink: var(--gray-100); --spine-muted: var(--gray-300);
+  --overlay: rgba(16, 24, 40, 0.45);   /* 弹窗遮罩 */
+}
+
+/* 迁移期：工作台纸张沿用旧字号（14/16），阶段2 合并后由文档格式模板（formatTemplate）接管纸张字号。 */
+.paper-content {
   --text-sm: 14px;
   --text-md: 16px;
-  --rule: rgba(37, 48, 54, 0.11);
-  --rule-strong: rgba(37, 48, 54, 0.2);
-  --inset: #f0efeb;
-  --inset-border: rgba(37, 48, 54, 0.18);
-  --focus-ring: rgba(34, 92, 112, 0.26);
-  --fault: #b42318;
-  --fault-ink: #8e1e16;
-  --fault-wash: #f8f1f0;
-  --spine: #253036;
-  --spine-ink: #e7edf3;
-  --spine-muted: #c5d0dc;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-  --radius-control: 4px;
-  --radius-sheet: 2px;
 }
 
 *,
@@ -56,20 +146,27 @@ body,
 
 body {
   margin: 0;
-  background: var(--desk);
-  color: var(--ink);
+  background: var(--bg-page);
+  color: var(--text-primary);
   font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--text-md);
+  line-height: var(--leading-md);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
 ::selection {
-  background: var(--stamp-wash);
+  background: var(--brand-100);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--brand-600);
 }

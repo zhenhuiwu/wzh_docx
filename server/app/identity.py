@@ -113,8 +113,8 @@ def _clean_account(account: str) -> str:
         raise AppError(
             422,
             "VALIDATION_FAILED",
-            "工号不正确。",
-            [{"field": "account", "message": "请填写有效工号。"}],
+            "账号不正确。",
+            [{"field": "account", "message": "请填写有效账号。"}],
         )
     return cleaned
 
@@ -199,6 +199,7 @@ def create_user(
     department: str = "",
     connection=None,
     must_change_password: bool = False,
+    allow_no_roles: bool = False,
 ) -> UUID:
     cleaned = _clean_account(account)
     display_name = name.strip()
@@ -208,7 +209,8 @@ def create_user(
         raise AppError(422, "VALIDATION_FAILED", "部门不正确。")
     _require_new_password(password)
     unknown = [role for role in roles if role not in GLOBAL_ROLES]
-    if not roles or unknown:
+    # 管理界面可以创建不带全局角色的“仅项目成员”账号；初始化管理员等内部调用仍要求至少一个角色。
+    if (not roles and not allow_no_roles) or unknown:
         raise AppError(422, "VALIDATION_FAILED", "角色不正确。")
     user_id = uuid4()
     password_hash = hash_password(password)
@@ -220,7 +222,7 @@ def create_user(
                 (account_key(cleaned),),
             ).fetchone()
             if conflict:
-                raise AppError(409, "DUPLICATE_NAME", "这个工号已经存在。")
+                raise AppError(409, "DUPLICATE_NAME", "这个账号已经存在。")
             connection.execute(
                 """
                 insert into users (
@@ -537,7 +539,7 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
     matched = verify_password(secret, stored)
     if row is None or not matched:
         _record_failure(key)
-        raise AppError(401, "AUTH_REQUIRED", "工号或密码不正确。")
+        raise AppError(401, "AUTH_REQUIRED", "账号或密码不正确。")
     if row["status"] != "active":
         raise AppError(403, "FORBIDDEN", "账号已停用。")
     token, _expires_at, _csrf = _issue_session(row["id"])

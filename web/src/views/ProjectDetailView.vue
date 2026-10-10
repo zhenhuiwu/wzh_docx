@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
 import { getProject, updateProject, type ProjectRecord } from "../api/projects";
-import { listDocuments, type DocumentRecord } from "../api/documents";
+import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
+import StatePanel from "../components/StatePanel.vue";
+import { formatDateTime, initialOf } from "../format";
 import ProjectFrame from "../components/ProjectFrame.vue";
 import { displayText, projectStatuses, statusLabel } from "../projects";
 
@@ -14,6 +16,7 @@ const documents = ref<DocumentRecord[]>([]);
 const phase = ref<"loading" | "ready" | "error">("loading");
 const documentPhase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
+const notFound = ref(false);
 const documentError = ref("");
 const editing = ref(false);
 const saving = ref(false);
@@ -58,6 +61,7 @@ async function load() {
   ++documentRequest;
   phase.value = "loading";
   errorText.value = "";
+  notFound.value = false;
   project.value = null;
   documents.value = [];
   documentPhase.value = "loading";
@@ -73,6 +77,7 @@ async function load() {
     if (request !== projectRequest || target !== projectId.value) return;
     project.value = null;
     phase.value = "error";
+    notFound.value = error instanceof ApiError && error.status === 404;
     errorText.value = messageOf(error);
   }
 }
@@ -140,21 +145,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="phase === 'loading'" class="page-state" role="status">正在读取项目…</div>
-  <div v-else-if="phase === 'error' || !project" class="page-state" role="alert">
-    <p>{{ errorText || "没有找到这个项目。" }}</p>
-    <button type="button" class="ghost" @click="load">重试</button>
-  </div>
+  <section v-if="phase === 'loading'" class="view fill"><div class="card"><StatePanel kind="loading" text="正在读取项目…" /></div></section>
+  <section v-else-if="phase === 'error' || !project" class="view fill">
+    <div class="card">
+      <StatePanel v-if="notFound || !errorText" kind="error" title="项目不存在或你无权访问。"><router-link class="primary" :to="{ name: 'projects' }">返回项目列表</router-link></StatePanel>
+      <StatePanel v-else kind="error" title="项目加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
+    </div>
+  </section>
   <ProjectFrame v-else :project="project">
     <div class="overview-body">
-      <section class="overview-section">
+      <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
-          <h2>项目概述</h2>
+          <h2 id="overview-title" class="section-title">项目概述</h2>
           <button type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''">{{ editing ? "收起编辑" : "编辑项目" }}</button>
         </div>
-        <form v-if="editing" class="edit-form" :aria-busy="saving" @submit.prevent="saveInfo">
+        <form v-if="editing" class="edit-form" :aria-busy="saving" novalidate @submit.prevent="saveInfo">
           <div class="form-grid">
-            <label>项目名称<input v-model="form.name" class="control" type="text" required :disabled="saving" /></label>
+            <label><span class="required">项目名称</span><input v-model="form.name" class="control" type="text" required :aria-invalid="formError === '请填写项目名称。' ? 'true' : undefined" :disabled="saving" /></label>
             <label>状态<select v-model="form.status" class="control" :disabled="saving"><option v-for="item in projectStatuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
             <label>甲方单位<input v-model="form.organization" class="control" type="text" :disabled="saving" /></label>
             <label>甲方联系人<input v-model="form.clientContact" class="control" type="text" :disabled="saving" /></label>
@@ -164,34 +171,48 @@ onBeforeUnmount(() => {
             <label>结束日期<input v-model="form.periodEnd" class="control" type="date" :disabled="saving" /></label>
             <label class="wide">项目说明<textarea v-model="form.description" class="control" rows="3" :disabled="saving" /></label>
           </div>
-          <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
+          <p v-if="formError" class="form-alert field-error" role="alert">{{ formError }}</p>
           <div class="form-actions"><button type="submit" class="primary" :disabled="saving">{{ saving ? "正在保存…" : "保存项目" }}</button><button type="button" class="ghost" :disabled="saving" @click="editing = false; fillForm(project)">取消</button></div>
         </form>
         <template v-else>
           <p v-if="project.description" class="description">{{ project.description }}</p>
+          <p v-else class="description faint">还没有项目说明。</p>
           <dl class="detail-grid">
-            <div><dt>负责人</dt><dd>{{ project.ownerName }}</dd></div>
+            <div><dt>负责人</dt><dd><span class="person"><span class="avatar" aria-hidden="true">{{ initialOf(project.ownerName) }}</span>{{ project.ownerName }}</span></dd></div>
             <div><dt>状态</dt><dd>{{ statusLabel(project.status) }}</dd></div>
             <div><dt>甲方单位</dt><dd>{{ displayText(project.organization) }}</dd></div>
             <div><dt>甲方联系人</dt><dd>{{ displayText(project.clientContact) }}</dd></div>
             <div><dt>所属部门</dt><dd>{{ displayText(project.department) }}</dd></div>
             <div><dt>所属组</dt><dd>{{ displayText(project.group) }}</dd></div>
+            <div><dt>计划周期</dt><dd class="num">{{ project.periodStart || project.periodEnd ? `${project.periodStart || "未定"} 至 ${project.periodEnd || "未定"}` : "—" }}</dd></div>
+            <div><dt>最近更新</dt><dd class="num">{{ formatDateTime(project.updatedAt) }}</dd></div>
           </dl>
         </template>
       </section>
-      <section class="overview-section documents-section">
+      <section class="overview-section documents-section" aria-labelledby="documents-title">
         <div class="section-head">
-          <h2>文档</h2>
-          <router-link class="primary" :to="{ name: 'project-documents', params: { id: projectId } }">查看全部文档</router-link>
+          <h2 id="documents-title" class="section-title">最近文档</h2>
+          <router-link class="ghost" :to="{ name: 'project-documents', params: { id: projectId } }">查看全部文档</router-link>
         </div>
-        <p v-if="documentPhase === 'loading'" class="list-state" role="status">正在读取文档…</p>
-        <div v-else-if="documentPhase === 'error'" class="list-state" role="alert">{{ documentError }} <button type="button" class="ghost" @click="loadDocuments">重试</button></div>
-        <div v-else-if="documents.length === 0" class="list-state">还没有文档</div>
-        <div v-else class="document-list">
-          <router-link v-for="item in documents" :key="item.id" class="document-row" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }">
-            <span class="document-name">{{ item.name }}</span>
-            <span class="document-action">打开文档 →</span>
-          </router-link>
+        <div class="doc-box">
+          <StatePanel v-if="documentPhase === 'loading'" kind="loading" text="正在读取文档…" class="compact" />
+          <StatePanel v-else-if="documentPhase === 'error'" kind="error" title="文档加载失败" :text="documentError" class="compact"><button type="button" class="ghost" @click="loadDocuments">重试</button></StatePanel>
+          <StatePanel v-else-if="documents.length === 0" title="还没有文档" text="在“文档编写”中从模板创建或上传 Word 文档。" class="compact"><router-link class="primary" :to="{ name: 'project-documents', params: { id: projectId } }">去新建文档</router-link></StatePanel>
+          <div v-else class="table-wrap document-list">
+            <table>
+              <thead><tr><th>文档名称</th><th>来源</th><th>编写人</th><th>状态</th><th>最近修改</th><th class="th-right">操作</th></tr></thead>
+              <tbody>
+                <tr v-for="item in documents" :key="item.id">
+                  <td class="doc-name-cell"><router-link class="document-name" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }">{{ item.name }}</router-link></td>
+                  <td class="muted">{{ item.sourceType === "upload" ? "上传 Word" : item.templateDocumentName || "模板" }}</td>
+                  <td>{{ item.ownerName || "—" }}</td>
+                  <td><span class="tag" :class="{ info: item.status === 'in_progress', success: item.status === 'completed' }">{{ documentStatusLabel[item.status] || item.status }}</span></td>
+                  <td class="time num">{{ formatDateTime(item.updatedAt) }}</td>
+                  <td class="cell-right"><router-link class="link" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }" :aria-label="`打开文档：${item.name}`">打开文档</router-link></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </div>
@@ -199,26 +220,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.page-state { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); min-height:calc(var(--space-7) * 8); color:var(--ink-secondary); }
-.overview-body { display:grid; min-width:0; gap:var(--space-7); padding:var(--space-6); }
+.overview-body { display:grid; min-width:0; gap:var(--space-6); padding:var(--space-5) var(--space-6) var(--space-6); }
 .overview-section { min-width:0; }
-.section-head { display:flex; justify-content:space-between; align-items:flex-start; gap:var(--space-5); margin-bottom:var(--space-5); }
-.section-head h2 { margin:0; font-size:calc(var(--text-md) * 1.25); line-height:1.4; }
-.description { max-width:calc(var(--space-7) * 17); margin:0 0 var(--space-5); color:var(--ink); font-size:var(--text-sm); line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
-.detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-5) var(--space-6); margin:0; padding:var(--space-5) 0 0; border-top:1px solid var(--rule); }
+.section-head { display:flex; justify-content:space-between; align-items:center; gap:var(--space-5); margin-bottom:var(--space-4); }
+.description { max-width:calc(var(--space-7) * 20); margin:0 0 var(--space-5); color:var(--text-primary); font-size:var(--text-md); line-height:var(--leading-md); white-space:pre-wrap; overflow-wrap:anywhere; }
+.detail-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--space-5) var(--space-6); margin:0; padding:var(--space-5); border:1px solid var(--border-subtle); border-radius:var(--radius-sheet); background:var(--bg-subtle); }
 .detail-grid div { min-width:0; }
-.detail-grid dt { margin-bottom:var(--space-1); color:var(--ink-tertiary); font-size:var(--text-xs); }
-.detail-grid dd { margin:0; color:var(--ink); font-size:var(--text-sm); overflow-wrap:anywhere; }
-.documents-section { padding-top:var(--space-6); border-top:1px solid var(--rule); }
-.document-list { border-top:1px solid var(--rule); }
-.document-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:var(--space-5); min-height:calc(var(--space-7) + var(--space-2)); border-bottom:1px solid var(--rule); color:var(--ink); text-decoration:none; }
-.document-row:hover { background:var(--desk); }
-.document-name { font-weight:600; overflow-wrap:anywhere; }
-.document-action { color:var(--stamp); font-size:var(--text-sm); }
-.list-state { padding:var(--space-5) 0; color:var(--ink-secondary); font-size:var(--text-sm); }
-.edit-form { padding:var(--space-5); border:1px solid var(--rule); border-radius:var(--radius-sheet); background:var(--desk); }
-.form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-4); }
-.form-grid label { display:grid; gap:var(--space-1); color:var(--ink-secondary); font-size:var(--text-sm); }
-.form-grid .wide { grid-column:1/-1; }
-.form-actions { display:flex; gap:var(--space-2); margin-top:var(--space-4); }
+.detail-grid dt { margin-bottom:var(--space-1); color:var(--text-tertiary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.detail-grid dd { margin:0; color:var(--text-primary); font-size:var(--text-md); overflow-wrap:anywhere; }
+.documents-section { padding-top:var(--space-6); border-top:1px solid var(--border-subtle); }
+.doc-box { border:1px solid var(--border-default); border-radius:var(--radius-sheet); overflow:hidden; }
+.doc-box .compact { min-height:calc(var(--space-7) * 4); }
+.doc-name-cell { width:40%; white-space:normal; }
+.document-name { color:var(--text-primary); font-weight:var(--weight-medium); text-decoration:none; overflow-wrap:anywhere; }
+.document-name:hover { color:var(--text-link); text-decoration:underline; text-underline-offset:3px; }
+.document-name:focus-visible { outline:none; border-radius:var(--radius-control); box-shadow:var(--focus-shadow); }
+.edit-form { display:grid; gap:var(--space-4); padding:var(--space-5); border:1px solid var(--border-default); border-radius:var(--radius-sheet); background:var(--bg-subtle); }
+.form-actions { display:flex; gap:var(--space-2); }
 </style>

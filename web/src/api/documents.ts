@@ -18,6 +18,8 @@ export interface DocumentRecord {
   updatedAt: string;
   projectName?: string;
   permissions?: DocumentPermissions;
+  mineOpenConflicts?: number;
+  memberOpenConflicts?: number | null;
 }
 
 /** 01 §4.7：仅用于展示，写接口仍以服务端 403 为准。 */
