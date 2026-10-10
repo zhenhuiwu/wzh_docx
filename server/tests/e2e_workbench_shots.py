@@ -153,12 +153,18 @@ def main() -> int:
         # 版本记录
         a.get_by_role("button", name="版本记录").click()
         expect(a.locator(".history-panel")).to_be_visible(timeout=15000)
+        try:
+            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
+        except AssertionError:
+            pass
         a.wait_for_timeout(1500)
         shot(a, "03-版本记录")
-        compare = a.locator(".history-panel").get_by_role("button", name="与上一版本比较")
-        if compare.count():  # S12：重塑后才有
+        if a.locator(".history-panel .vitem").count():  # S12：重塑后才有
             a.locator(".history-panel .vitem").first.click()
-            compare.click()
+            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
+            compare = a.locator(".history-panel").get_by_role("button", name="与上一版本比较")
+            compare.click(timeout=10000)
+            expect(a.locator(".history-panel").get_by_text("正在读取")).to_have_count(0, timeout=30000)
             a.wait_for_timeout(1200)
             shot(a, "03b-版本记录-与上一版本比较")
         a.close()

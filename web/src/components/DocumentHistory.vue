@@ -94,6 +94,8 @@ async function load(next = 0) {
   try {
     const result = await listDocumentVersions(props.documentId, next);
     items.value = result.items; offset.value = next; hasMore.value = result.hasMore;
+    // 列表先显示，正文（需渲染 Word 版式，较慢）随后到
+    loading.value = false;
     if (items.value.length) await select(items.value[0]);
     else { detailRequest++; detail.value = null; }
   } catch (e) { error.value = message(e); }
