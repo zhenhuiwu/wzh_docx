@@ -509,6 +509,22 @@ def _images(root, supplied: list[dict]) -> None:
             node.attrib.pop("src", None)
 
 
+def memoize_styles(doc) -> None:
+    """终验 S-7：python-docx 每次取段落/字符样式都要线性扫描全部样式找默认样式（styles.default_for），
+    SRS 这样的文档一次预览约 7 s，其中约 6 s 花在这里。一次渲染内样式不变，按 (style_id, type) 缓存。"""
+    part = doc.part
+    original = part.get_style
+    cache: dict[tuple, object] = {}
+
+    def get_style(style_id, style_type):
+        key = (style_id, style_type)
+        if key not in cache:
+            cache[key] = original(style_id, style_type)
+        return cache[key]
+
+    part.get_style = get_style
+
+
 def render_document_html(source_path: str | Path, current_markdown: str, images: list[dict] | None = None, *, outline_headings: bool = False) -> str:
     """Return safe editable body HTML styled from the actual edited Word file.
 
@@ -520,6 +536,7 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         edited = Path(folder) / "edited.docx"
         edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied), outline_headings=outline_headings)
         doc = Document(edited)
+        memoize_styles(doc)
         root = html.Element("div")
         tab_mark = _pick_tab_mark(current_markdown)
         for block in _html_blocks(_hide_inline_tabs(current_markdown, tab_mark)):

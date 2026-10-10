@@ -222,6 +222,9 @@ def parse_docx(file_path: str, *, flat_lists: bool = False, outline_headings: bo
         raise RuntimeError("python-docx 未安装")
 
     doc = Document(file_path)
+    from app.docx_preview import memoize_styles
+
+    memoize_styles(doc)  # 终验 S-7：同上，样式查找缓存
 
     # 构建格式模板
     format_template = _build_format_template(doc, outline_headings=outline_headings)

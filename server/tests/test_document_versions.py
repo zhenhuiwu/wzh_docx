@@ -161,6 +161,10 @@ def test_diagram_versions_restore_native_word_image_metadata_and_export(version_
     saved_response = client.get(f"/api/v1/documents/{did}/versions/1")
     assert saved_response.status_code == 200, saved_response.text
     saved = saved_response.json()["data"]
+    assert saved["html"]
+    # 终验 S-7：比较视图只取 markdown，不渲染 Word 版式
+    light = client.get(f"/api/v1/documents/{did}/versions/1?html=false").json()["data"]
+    assert light["html"] == "" and light["markdownContent"] == saved["markdownContent"]
     assert saved["kind"] == "diagram" and saved["formatTemplate"]["images"][0]["ref"] == f"docx-image:diagram-{gid}"
     plain = restore(client, headers, did, 0, 1)
     assert plain["revision"] == 2 and plain["formatTemplate"]["images"] == []

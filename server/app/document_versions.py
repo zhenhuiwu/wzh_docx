@@ -120,7 +120,8 @@ def list_versions(request: Request, document_id: str, offset: int = 0, limit: in
 
 
 @router.get("/documents/{document_id}/versions/{revision}")
-def get_version(request: Request, document_id: str, revision: int) -> dict:
+def get_version(request: Request, document_id: str, revision: int, html: bool = True) -> dict:
+    """html=false 时只返回 markdown（终验 S-7：版本比较只需要两版 markdown，不必等 Word 版式渲染）。"""
     from app.documents import _editing_html
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.read")
@@ -129,7 +130,7 @@ def get_version(request: Request, document_id: str, revision: int) -> dict:
         snapshot = [current[index] for index in range(16)]
         snapshot[6], snapshot[7] = version["format_template"], version["markdown_content"]
         result = _public(version, detail=True)
-        result["html"] = _editing_html(connection, snapshot)
+        result["html"] = _editing_html(connection, snapshot) if html else ""
         connection.commit()
     return {"data": result, "requestId": request.state.request_id}
 
