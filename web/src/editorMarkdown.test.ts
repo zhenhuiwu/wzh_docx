@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cellInline, escapeMarkdownText, escapeParagraphStart, finishMarkdown, SPACE, TAB } from "./editorMarkdown";
+import { cellInline, escapeMarkdownText, escapeParagraphStart, finishMarkdown, protectText, SPACE, TAB } from "./editorMarkdown";
 
 describe("editorMarkdown 纯函数（01 §6.0）", () => {
   it("表格分隔行与服务器写法一致", () => {
@@ -22,4 +22,16 @@ describe("editorMarkdown 纯函数（01 §6.0）", () => {
   it("单元格内容折成单行", () => {
     expect(cellInline("\n第一行 \n\n 第二行\n")).toBe("第一行<br>第二行");
   });
+});
+
+describe("审查 S2：占位符不改写正文已有字符", () => {
+  it("私用区字符 U+E000/U+E001 原样保留", () => {
+    expect(finishMarkdown("x\uE000y\uE001z")).toBe("x\uE000y\uE001z");
+  });
+  it("正文里已有占位符本身也能逐字节往返", () => {
+    const text = "a\uFDD0b\uFDD1c\uFDD2d e\tf\uFDD2a";
+    expect(protectText(text)).not.toMatch(/[ \t]/);
+    expect(finishMarkdown(protectText(text))).toBe(text);
+  });
+  it("NBSP 不变", () => { expect(finishMarkdown("a\u00a0b")).toBe("a\u00a0b"); });
 });

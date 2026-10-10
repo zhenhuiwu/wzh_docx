@@ -3,8 +3,9 @@
 `POST /documents/{id}/objects/patch`：前端按对象 ID 提交 update/insert/delete/move。
 在**当前存活对象**上逐条检查对象修订号：对象自基线以来未被他人改过才应用；
 被改过且内容不同 → MODIFIED，被删 → DELETED，锚点丢失 → ANCHOR_LOST，移动目标失效 → STRUCTURE。
-有冲突时整体拒绝（atomic 与否都一样），冲突副本按条目存储，409 带 appliableOps（无冲突 op 的下标）
-和 appliableMarkdown（只应用无冲突 op 的全文），前端用新键再提交（决策2）。
+有冲突时整体拒绝，冲突副本按条目存储。atomic=false 时 409 带 appliableOps（无冲突 op 的下标）
+和 appliableMarkdown（只应用无冲突 op 的全文），前端用新键再提交（决策2）；atomic=true（AI/结构/恢复类，
+必须整体成功或整体失败）时 409 不带这两项，避免前端拆开重发（审查 S7）。
 写入沿用整篇路径的乐观重试 + 第4次文档锁（01 §5.4）。
 """
 
@@ -260,7 +261,7 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                 doc, conflicts, applied = _apply(connection, did, live, body.ops)
                 if conflicts:
                     conflicted = {op_index for op_index, _, _ in conflicts}
-                    partial, _, _ = _apply(connection, did, live, body.ops, skip=conflicted)
+                    partial = None if body.atomic else _apply(connection, did, live, body.ops, skip=conflicted)[0]
                     # 冲突副本里的“我的全文”：在当前正文上按我的意图应用全部 op（冲突处用我的版本）。
                     mine_doc = _Doc(live)
                     for op_index, op in enumerate(body.ops):
@@ -270,8 +271,12 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                     error = store_conflict(connection, document_id=did, actor=principal.user_id,
                                            base_revision=body.baseDocumentRevision, doc_revision=revision, source="patch",
                                            rhash=rhash, mine_md=mine_doc.markdown(prefix), items=items,
-                                           appliable_md=partial.markdown(prefix))
-                    error.details["appliableOps"] = [index for index in range(len(body.ops)) if index not in conflicted]
+                                           appliable_md=None if partial is None else partial.markdown(prefix))
+                    if body.atomic:
+                        for key in ("appliableOps", "appliableMarkdown", "appliableBaseRevision"):
+                            error.details.pop(key, None)
+                    else:
+                        error.details["appliableOps"] = [index for index in range(len(body.ops)) if index not in conflicted]
                     raise error
                 merged_md = doc.markdown(prefix)
                 merged_flag = revision != body.baseDocumentRevision

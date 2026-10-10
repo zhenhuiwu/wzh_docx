@@ -7,8 +7,13 @@ import TurndownService from "turndown";
 // @ts-expect-error The GFM plugin does not publish TypeScript declarations.
 import { gfm } from "turndown-plugin-gfm";
 
-export const TAB = "\uE000";
-export const SPACE = "\uE001";
+// 审查 S2：占位符用 Unicode 非字符（不会出现在正常文本里，私用区字符则可能来自 Word 符号字体）；
+// 正文里万一已有这几个字符，用 ESC 转义后再还原，保证逐字节往返。
+export const TAB = "\uFDD0";
+export const SPACE = "\uFDD1";
+const ESC = "\uFDD2";
+const ESCAPED: Record<string, string> = { [TAB]: `${ESC}a`, [SPACE]: `${ESC}b`, [ESC]: `${ESC}${ESC}` };
+const UNESCAPED: Record<string, string> = { a: TAB, b: SPACE, [ESC]: ESC };
 
 const inCell = (node: Node) => Boolean((node as Element).parentElement?.closest?.("td,th"));
 
@@ -20,8 +25,8 @@ export function escapeMarkdownText(text: string): string {
 /** 与 docx_parser.py:154-157 一致的普通段落行首转义。 */
 export function escapeParagraphStart(content: string): string {
   let text = content
-    .replace(/^([\s\uE000\uE001]*\d+)\./, "$1\\.")
-    .replace(/^([+-])(?=[\s\uE000\uE001])/, "\\$1");
+    .replace(/^([\s\uFDD0\uFDD1]*\d+)\./, "$1\\.")
+    .replace(/^([+-])(?=[\s\uFDD0\uFDD1])/, "\\$1");
   if (/^-{3,}$/.test(text)) text = text.replace(/-/g, "\\-");
   return text;
 }
@@ -35,8 +40,8 @@ export function cellInline(content: string): string {
 export function finishMarkdown(markdown: string): string {
   return markdown
     .replace(/^(\|(?: --- \|)+)$/gm, (row) => "|" + "---|".repeat((row.match(/---/g) || []).length))
-    .split(TAB).join("\t")
-    .split(SPACE).join(" ");
+    .replace(/\uFDD2([\s\S])|\uFDD0|\uFDD1/g, (match, escaped?: string) =>
+      escaped !== undefined ? (UNESCAPED[escaped] ?? match) : match === TAB ? "\t" : " ");
 }
 
 export interface StoredImage { ref: string; content_type: string; data: string }
@@ -79,13 +84,18 @@ export function createTurndown(imageRule: TurndownService.Rule): TurndownService
   return t;
 }
 
+/** 文本节点内容：先转义已有占位符，再把制表符/空格换成占位符。 */
+export function protectText(value: string): string {
+  return value.replace(/[\uFDD0-\uFDD2]/g, (c) => ESCAPED[c]).replace(/\t/g, TAB).replace(/ /g, SPACE);
+}
+
 /** 转换前保护空格与制表符；只跳过纯换行的 HTML 序列化空白。不改 U+00A0。 */
 export function protectWhitespace(root: HTMLElement): void {
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const value = node.nodeValue ?? "";
     if (/^\s*$/.test(value) && value.includes("\n")) continue;
-    node.nodeValue = value.replace(/\t/g, TAB).replace(/ /g, SPACE);
+    node.nodeValue = protectText(value);
   }
 }
 

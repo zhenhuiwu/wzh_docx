@@ -10,6 +10,7 @@ import hashlib
 import json
 import sqlite3
 import threading
+import weakref
 from contextlib import nullcontext
 from typing import Callable
 from uuid import UUID, uuid4
@@ -27,7 +28,8 @@ from app.models import format_timestamp
 
 router = APIRouter()
 
-_LOCKS: dict[str, threading.Lock] = {}
+# 审查 S8：弱引用字典，调用方持有锁对象期间条目存在，之后自动回收
+_LOCKS: "weakref.WeakValueDictionary[str, threading.Lock]" = weakref.WeakValueDictionary()
 _LOCKS_GUARD = threading.Lock()
 OPTIMISTIC_ATTEMPTS = 3
 
@@ -545,6 +547,9 @@ def _apply_actions(connection, did: UUID, payload: dict, request_items: list[Res
         reason, action = item["reason"], request_item.action
         if action not in _ALLOWED[reason]:
             raise AppError(422, "VALIDATION_FAILED", "这处冲突不能使用该处理方式。")
+        if reason == "DELETED" and action == "keep_mine" and not item["mine"].get("deleted"):
+            # 审查 S1：对方删、我改时“保留我的”就是把我的内容作为新段落恢复（原对象已删，不能按原位替换）
+            action = "restore_as_new"
         refreshed = _latest_theirs(payload, request_item.itemIndex)
         object_ids = (refreshed or {}).get("objectIds", item["objectIds"])
         revisions = (refreshed or {}).get("theirsRevisions", item.get("theirsRevisions", {}))
@@ -642,11 +647,13 @@ def _refresh_attempt(connection, conflict, payload: dict, indexes: list[int]) ->
     for index in indexes:
         item = next(entry for entry in payload["conflicts"] if int(entry["itemIndex"]) == index)
         refreshed = _latest_theirs(payload, index) or {}
-        object_ids = [value for value in refreshed.get("objectIds", item["objectIds"]) if value in live]
-        rows = [live[value] for value in object_ids]
+        # 审查 S1：保留原 objectIds 用于定位（已删的另记 goneObjectIds），不能过滤成空数组
+        object_ids = list(refreshed.get("objectIds", item["objectIds"]))
+        rows = [live[value] for value in object_ids if value in live]
         theirs = _theirs_info(connection, conflict["document_id"], rows, names) if rows else {
             "markdown": item["theirs"].get("markdown"), "deleted": True, "revision": None}
         snapshot[str(index)] = {"theirs": theirs, "objectIds": object_ids,
+                                "goneObjectIds": [value for value in object_ids if value not in live],
                                 "theirsRevisions": {str(row["id"]): int(row["revision"]) for row in rows}}
     payload.setdefault("attempts", []).append({"at": format_timestamp_now(connection), "items": snapshot})
     with write_transaction(connection):

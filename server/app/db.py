@@ -178,6 +178,8 @@ def migrate() -> list[str]:
                 "select 1 from schema_migrations where version = ?", (path.stem,)
             ).fetchone():
                 continue
+            # 审查 S10：成员补齐迁移前后各留一份清单（01 §3.3）
+            report_before = _members_before(connection, path.stem)
             try:
                 connection._conn.executescript(
                     "BEGIN;\n" + path.read_text(encoding="utf-8")
@@ -186,5 +188,29 @@ def migrate() -> list[str]:
             except sqlite3.Error:
                 connection.rollback()
                 raise
+            if report_before is not None:
+                _members_after(connection, path.stem, report_before)
             applied.append(path.name)
     return applied
+
+
+_MEMBER_REPORT_MIGRATIONS = ("110_",)
+
+
+def _members_before(connection: DictConnection, version: str) -> dict | None:
+    if not version.startswith(_MEMBER_REPORT_MIGRATIONS):
+        return None
+    from app.members_report import members_snapshot
+    try:
+        return members_snapshot(connection._conn)
+    except sqlite3.Error:
+        return None  # 空库（projects 表还不存在）不出报告
+
+
+def _members_after(connection: DictConnection, version: str, before: dict) -> None:
+    from app.members_report import members_snapshot, write_migration_report
+    if not before["projects"]:
+        return  # 新库没有项目，无需核对
+    url = get_settings().database_url
+    directory = Path(url.removeprefix("sqlite:///")).parent if url.startswith("sqlite:///") else Path(".")
+    write_migration_report(directory, version, before, members_snapshot(connection._conn))

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import weakref
 from io import BytesIO
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
@@ -47,7 +48,8 @@ router.include_router(patch_router)
 # 缓存命中与 edit_original_docx 都在锁外。进程内锁只对单进程部署有效。
 _COM_SLOT = BoundedSemaphore(1)
 WORD_SLOT_TIMEOUT_SECONDS = 120.0
-_target_locks: dict[str, Lock] = {}
+# 审查 S8：弱引用字典，没有线程持有/等待时自动清掉，不随预览目标数增长
+_target_locks: "weakref.WeakValueDictionary[str, Lock]" = weakref.WeakValueDictionary()
 _target_locks_guard = Lock()
 
 

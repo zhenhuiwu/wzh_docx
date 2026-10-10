@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, Request
 
-from app.db import connect
+from app.db import MAINTENANCE_BUSY_MS, connect
 from app.document_access import document_principal, is_admin, load_document
 from app.document_location import LocItem, compute_locations
 from app.errors import AppError
@@ -460,7 +460,7 @@ def _cli(argv: list[str] | None = None) -> int:
     mode.add_argument("--backfill", action="store_true", help="为所有可往返的文档建立/对齐对象")
     args = parser.parse_args(argv)
     failed: list[str] = []
-    with connect() as conn:
+    with connect(MAINTENANCE_BUSY_MS) as conn:  # 审查 S3：在线回填与保存并发时多等一会，不直接报 locked
         ids = [row["id"] for row in conn.execute("SELECT id FROM documents ORDER BY created_at").fetchall()]
         for did in ids:
             if args.check:

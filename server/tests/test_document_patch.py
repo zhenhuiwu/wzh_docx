@@ -190,3 +190,19 @@ def test_preview_carries_object_ids(team):
     import re
     found = set(re.findall(r'data-object-id="([^"]+)"', preview["html"]))
     assert found == ids
+
+
+def test_patch_atomic_conflict_has_no_appliable_parts(team):
+    # 审查 S7：atomic=true 整体拒绝，409 不给可部分应用的 op/全文
+    client, did, _ = team
+    items = objects(client, did)
+    p2, ref = by_text(items, "第二段。"), by_text(items, "引用段。")
+    assert patch(client, did, 1, [update(p2, "A 的第二段。")], _as(client, "editor"), "atomic-a-1").status_code == 200
+    rejected = client.post(f"/api/v1/documents/{did}/objects/patch", headers=_as(client, "editor2"), json={
+        "clientSaveKey": "atomic-b-1", "baseDocumentRevision": 1, "atomic": True,
+        "ops": [update(p2, "B 的第二段。"), update(ref, "B 改引用段。")]})
+    assert rejected.status_code == 409, rejected.text
+    details = rejected.json()["error"]["details"]
+    assert details["conflictId"] and details["conflicts"]
+    assert not {"appliableOps", "appliableMarkdown", "appliableBaseRevision"} & set(details)
+    assert "B 改引用段。" not in current(client, did)["markdownContent"]
