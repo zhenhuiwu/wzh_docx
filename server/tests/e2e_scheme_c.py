@@ -662,8 +662,71 @@ def s_self_theirs(ctx: Run, page):
     return {"conflict": True}
 
 
+# —— 设计师必改 1、2：列表项换成对方版本那一刻就有常驻提示；之后多批续写都在“我的版本”里 ——
+@scenario("列表项 换版即提示 多批续写不互相覆盖")
+def s_list_batches(ctx: Run, page):
+    selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+    doc_id = selfconf.make_doc(ctx.data, f"方案C列表多批-{time.strftime('%H%M%S')}", 0)
+    ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + LIST)
+    ctx.open(page, doc_id)
+    target = page.locator(".paper-content li", has_text="列表项一").first
+    target.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    ctx.zhang_edit(doc_id, "列表项一", "列表项一（对方改）")
+    page.keyboard.press("Control+s")
+    page.keyboard.type("，续零】", delay=150)  # 409 返回时还在编辑区里打
+    note = page.get_by_test_id("sink-note")
+    expect(note).to_be_visible(timeout=15000)
+    first_note = note.inner_text()
+    expect(page.locator(".paper-content li", has_text="列表项一（对方改）")).to_be_visible(timeout=20000)
+    page.wait_for_timeout(1500)
+    batches = ["〔续一〕", "〔续二〕", "〔续三〕"]
+    for text in batches:
+        page.keyboard.type(text, delay=60)
+        page.wait_for_timeout(2500)
+    deadline = time.time() + 15
+    while True:
+        latest = "\n".join((item.get("mineLatest") or {}).get("markdown") or "" for item in ctx.items(doc_id))
+        if all(text in latest for text in batches) or time.time() > deadline:
+            break
+        time.sleep(0.5)
+    missing = [text for text in ["【我改的", *batches] if text not in latest]
+    assert not missing, f"我的版本缺 {missing}：{latest}"
+    assert "列表项一（对方改）" in ctx.server(doc_id)["markdownContent"]
+    open_panel(page)
+    mine_card = card(page).locator(".ccard-side.mine").inner_text()
+    assert batches[-1] in mine_card, f"冲突卡未刷新：{mine_card}"
+    return {"first_note": first_note[:60], "latest": latest[-80:]}
+
+
+# —— 设计师必改 3：断网续写后关页重开，不出现幽灵草稿条、编辑区不锁 ——
+@scenario("断网续写关页重开 无幽灵草稿条")
+def s_offline_reopen(ctx: Run, page):
+    doc_id = ctx.doc(page, "方案C断网关页")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    ctx.wait_snapshot(doc_id, MARK)
+    page.context.set_offline(True)
+    page.evaluate("window.dispatchEvent(new Event('offline'))")
+    base.type_after(page, "第3段", "〔断网关页续写〕")
+    page.wait_for_timeout(1500)
+    url = page.url
+    other = page.context.new_page()
+    page.close(run_before_unload=False)
+    other.context.set_offline(False)
+    other.goto(url)
+    expect(other.locator(".paper-content")).to_be_visible(timeout=90000)
+    hit = ctx.wait_snapshot(doc_id, "〔断网关页续写〕", 30)
+    assert "〔断网关页续写〕" in ((hit.get("mineLatest") or {}).get("markdown") or ""), hit
+    other.wait_for_timeout(3000)
+    assert not other.get_by_test_id("draft-restore").count(), "出现了幽灵草稿条"
+    assert other.locator(".paper-content").get_attribute("contenteditable") == "true", "编辑区被锁"
+    other.close()
+    return {}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
-             s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs]
+             s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen]
 
 
 def main() -> int:

@@ -99,7 +99,9 @@ let loadSinkComposing = false;
  */
 let unfrozenConflict: { conflictId: string; itemIndex: number; mine: string; at: number } | null = null;
 let caretSink: HTMLTextAreaElement | null = null;
-let caretSinkTarget: { conflictId: string; itemIndex: number; mine: string } | null = null;
+let caretSinkTarget: { conflictId: string; itemIndex: number; mine: string; synced?: boolean } | null = null;
+let caretSinkComposing = false;
+let caretSinkIme = false;
 let caretSinkTimer = 0;
 let caretSinkSeq = 0;
 const sinkNote = ref<{ conflictId: string; text: string } | null>(null);
@@ -575,6 +577,10 @@ function resetSaveState() {
   exportError.value = "";
   pendingKey = null;
 }
+/** 设计师必改 3：localDrafts 是深层 ref，元素是 Proxy，不能拿原始草稿对象做 ===；按 tabId + savedAt 认同一份草稿。 */
+function sameDraft(a: Pick<DraftV2, "tabId" | "savedAt">, b: Pick<DraftV2, "tabId" | "savedAt">): boolean {
+  return a.tabId === b.tabId && a.savedAt === b.savedAt;
+}
 function account() { return draftAccount || readSession()?.staffId || "user"; }
 const PRESENCE_WAIT_MS = 250;
 function findLocalDrafts(record: DocumentRecord) {
@@ -609,12 +615,12 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
     const rest: DraftV2 = { ...draft, conflictsEdits: [] };
     if (draft.wholeDocument && draft.markdown === record.markdownContent) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
-      localDrafts.value = localDrafts.value.filter(item => item !== draft);
+      localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
       localDraft.value = localDrafts.value[0] ?? null;
       noteAction("上次关闭页面前在冲突段里写的内容已存为冲突副本（见冲突面板）。", 6000);
     } else if (writeDraft(window.localStorage, account(), rest) === "ok") {
-      localDrafts.value = localDrafts.value.map(item => item === draft ? rest : item);
-      if (localDraft.value === draft) localDraft.value = rest;
+      localDrafts.value = localDrafts.value.map(item => sameDraft(item, draft) ? rest : item);
+      if (localDraft.value && sameDraft(localDraft.value, draft)) localDraft.value = rest;
     }
   }
   if (drafts.length) void refreshConflicts();
@@ -637,7 +643,7 @@ async function settlePendingSaves(record: DocumentRecord, retried = false) {
     }
     if (!landed || document.value !== record) continue;
     if (!removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt })) continue;
-    localDrafts.value = localDrafts.value.filter(item => item !== draft);
+    localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
     localDraft.value = localDrafts.value[0] ?? null;
     noteAction("上次关闭页面前的修改已保存到服务器。");
   }
@@ -1338,11 +1344,14 @@ function openCaretSink(root: HTMLElement, target: { conflictId: string; itemInde
   sink.setAttribute("aria-label", "冲突后接着输入的内容，会并入冲突副本“我的版本”");
   sink.setAttribute("data-testid", "caret-sink");
   Object.assign(sink.style, { position: "fixed", left: `${Math.max(0, rect.left)}px`, top: `${Math.max(0, rect.top)}px`, width: "2px", height: "1.2em", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", zIndex: "1" });
-  sink.addEventListener("input", () => { window.clearTimeout(caretSinkTimer); caretSinkTimer = window.setTimeout(() => void flushCaretSink(), 800); });
-  sink.addEventListener("blur", () => { void flushCaretSink().finally(() => dropCaretSink()); });
+  sink.addEventListener("input", () => { window.clearTimeout(caretSinkTimer); if (!caretSinkComposing) caretSinkTimer = window.setTimeout(() => void flushCaretSink(), 800); });
+  sink.addEventListener("compositionstart", () => { caretSinkComposing = true; caretSinkIme = true; window.clearTimeout(caretSinkTimer); });
+  sink.addEventListener("compositionend", () => { caretSinkComposing = false; caretSinkIme = false; window.clearTimeout(caretSinkTimer); caretSinkTimer = window.setTimeout(() => void flushCaretSink(), 300); });
+  sink.addEventListener("blur", () => { caretSinkComposing = false; void flushCaretSink().finally(() => dropCaretSink()); });
   window.document.body.appendChild(sink);
   caretSink = sink;
-  caretSinkTarget = { ...target };
+  caretSinkSent = "";
+  caretSinkTarget = { conflictId: target.conflictId, itemIndex: target.itemIndex, mine: target.mine };
   sink.focus({ preventScroll: true });
 }
 function dropCaretSink() {
@@ -1350,21 +1359,42 @@ function dropCaretSink() {
   caretSink?.remove();
   caretSink = null;
 }
-async function flushCaretSink() {
+let caretSinkFlight: Promise<void> | null = null;
+let caretSinkSent = "";
+async function flushCaretSink(): Promise<void> {
   window.clearTimeout(caretSinkTimer);
-  const record = document.value, target = caretSinkTarget, typed = caretSink?.value || "";
+  if (caretSinkFlight) { await caretSinkFlight.catch(() => undefined); }
+  if (caretSinkComposing) return; // 设计师建议 3：组字中不提交拼音，上屏后再提交
+  const record = document.value, target = caretSinkTarget, sink = caretSink;
+  const all = sink?.value ?? caretSinkSent;
+  const typed = all.startsWith(caretSinkSent) ? all.slice(caretSinkSent.length) : all;
   if (!record || !target || !typed) return;
-  const markdown = target.mine + typed;
-  caretSinkSeq = nextSeq(caretSinkSeq);
-  const text = `冲突后接着输入的“${typed.length > 30 ? `${typed.slice(0, 30)}…` : typed}”没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
-  sinkNote.value = { conflictId: target.conflictId, text };
-  try {
-    await saveConflictMine(record.id, target.conflictId, target.itemIndex, markdown, `sink-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
-    void conflictPanel.value?.load();
-  } catch {
-    // 存不上：内容仍在提示里原样列出，并写进本机草稿兜底
-    sinkNote.value = { conflictId: target.conflictId, text: `冲突后接着输入的“${typed}”没能写进正文，也没能存进冲突副本，请复制后在冲突处理时粘贴。` };
-  }
+  caretSinkFlight = (async () => {
+    // 设计师必改 1：在服务器最新的“我的版本”（mineLatest，含编辑区自动保存进去的续写）后面追加，每次提交后以返回的最新快照为准
+    if (!target.synced) {
+      try {
+        const latest = (await listConflicts(record.id, "open", "me")).find(item => item.conflictId === target.conflictId && item.itemIndex === target.itemIndex);
+        if (latest) target.mine = latest.mineLatest?.markdown ?? latest.mine?.markdown ?? target.mine;
+      } catch { /* 取不到就用 409 时的版本 */ }
+      target.synced = true;
+    }
+    const markdown = target.mine + typed;
+    caretSinkSeq = nextSeq(caretSinkSeq);
+    const quoted = all.length > 30 ? `${all.slice(0, 30)}…` : all;
+    const text = looksLikePinyin(all, caretSinkIme)
+      ? "冲突后接着输入的内容没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。"
+      : `冲突后接着输入的“${quoted}”没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
+    sinkNote.value = { conflictId: target.conflictId, text };
+    try {
+      const result = await saveConflictMine(record.id, target.conflictId, target.itemIndex, markdown, `sink-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
+      target.mine = result.mineLatest?.markdown ?? markdown;
+      caretSinkSent += typed;
+      void conflictPanel.value?.load();
+    } catch {
+      sinkNote.value = { conflictId: target.conflictId, text: `冲突后接着输入的“${all}”没能写进正文，也没能存进冲突副本，请复制后在冲突处理时粘贴。` };
+    }
+  })();
+  try { await caretSinkFlight; } finally { caretSinkFlight = null; }
 }
 function beginEditorLock(reason: string) {
   const root = editor.value;
@@ -2098,7 +2128,7 @@ async function finishRestore(draft: DraftV2, record: DocumentRecord) {
   // 仍有未存上的部分（如冲突已转为冲突副本）时不重绘，与原逻辑一致。
   if (!isDirty.value && document.value === record) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
   removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
-  localDrafts.value = localDrafts.value.filter(item => item !== draft);
+  localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
   localDraft.value = localDrafts.value[0] ?? null;
   // 恢复的是本标签自己的草稿时，保存期间写下的同键草稿已经落库，按本页面写入者清掉
   if (document.value === record) persistLocalDraft();
@@ -2138,7 +2168,7 @@ function discardLocalDraft() {
   if (!draftConfirmDiscard.value) { draftConfirmDiscard.value = true; return; }
   draftConfirmDiscard.value = false;
   removeDraft(window.localStorage, account(), document.value.id, draft.tabId, { savedAt: draft.savedAt });
-  localDrafts.value = localDrafts.value.filter(item => item !== draft);
+  localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
   localDraft.value = localDrafts.value[0] ?? null;
 }
 function chooseLocalDraft(index: number) {
@@ -2268,7 +2298,10 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         explicitBase = null;
       }
       // 审查员第 2 条：提示条显示期间（含点了“立即刷新”的这次保存）不再补发“已合并”短提示
-      noteMerged(result);
+      // 设计师建议 1：冲突后重交其余部分时合并进来的正是冲突对方的那次修改（已在冲突卡里），不再误报“已合并”
+      if (Date.now() - lastConflictAt > 10000) noteMerged(result);
+      // 设计师建议 2：这次保存把续写追加成了冲突快照（列表项等）：冲突卡跟着刷新
+      if (result.frozenByConflict?.length) void conflictPanel.value?.load();
       // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
       const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
       if (!typedNewer && !frozenOpen.value.length) othersUpdated.value = null;
@@ -2565,6 +2598,8 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const allFrozen = conflicts.length > 0 && frozenKeys.length === conflicts.length;
       const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
       unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now() } : null;
+      // 设计师必改 2：不能冻结的条目（列表项等）会换成对方的版本——从这一刻起就常驻说明，不等用户再打字
+      if (loose) sinkNote.value = { conflictId: loose.conflictId, text: `这一项与 ${conflictName(loose)} 的修改冲突，正文里换成 ${conflictName(loose)} 的版本；你在这一项里写的内容（含之后接着写的）存为冲突副本“我的版本”，可在冲突面板里处理。` };
       void refreshConflicts().then(() => conflictPanel.value?.load());
       if (conflictOpensPanel(trigger)) {
         openConflicts("mine");
