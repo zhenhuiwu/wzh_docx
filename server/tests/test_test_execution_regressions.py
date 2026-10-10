@@ -14,10 +14,17 @@ import zlib
 from docx import Document
 import pytest
 
-from app.test_executor import MissingInput, _concurrency_async, _unit, build_report, execute_run
+import shutil
+
+from app.test_executor import MIN_NODE_MAJOR, MissingInput, _concurrency_async, _node_major, _unit, build_report, execute_run
 from app.test_management import _interrupt_result
 
 
+_NODE = shutil.which("node")
+_NODE_MAJOR = _node_major(_NODE) if _NODE else 0
+
+
+@pytest.mark.skipif(_NODE_MAJOR < MIN_NODE_MAJOR, reason=f"requires Node.js >= {MIN_NODE_MAJOR} (per-file test:summary)")
 @pytest.mark.parametrize("code,selector,expected", [
     ("const add = (a,b) => a+b;", "", "blocked"),
     ("const test = require('node:test'); test.todo('pending');", "", "blocked"),
@@ -37,6 +44,17 @@ def test_node_requires_real_completed_tests(tmp_path, code, selector, expected):
     observed = _unit({"frontendRoot": str(source)}, case, evidence, lambda: False, lambda _: None)
     assert observed["status"] == expected
     assert observed["steps"][0]["status"] == expected
+
+
+@pytest.mark.skipif(not _NODE or _NODE_MAJOR >= MIN_NODE_MAJOR, reason="only meaningful on an older Node.js")
+def test_old_node_is_reported_as_missing_input(tmp_path):
+    source, evidence = tmp_path / "source", tmp_path / "evidence"
+    source.mkdir()
+    evidence.mkdir()
+    (source / "test.cjs").write_text("require('node:test')('x', () => {});", encoding="utf-8")
+    case = {"id": str(uuid4()), "steps": [{"runner": "node", "root": "frontend", "testFile": "test.cjs"}]}
+    with pytest.raises(MissingInput, match="Node.js 22"):
+        _unit({"frontendRoot": str(source)}, case, evidence, lambda: False, lambda _: None)
 
 
 @pytest.mark.parametrize("body", [

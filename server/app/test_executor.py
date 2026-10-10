@@ -338,6 +338,18 @@ def _source(task: dict, side: str, relative: str | None = None) -> Path:
         raise MissingInput(str(error)) from None
 
 
+MIN_NODE_MAJOR = 22
+
+
+def _node_major(node: str) -> int:
+    """Node 22 added the per-file test:summary event the result check relies on."""
+    try:
+        output = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10, check=False).stdout
+        return int(output.strip().lstrip("v").split(".", 1)[0])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
 def _unit(task: dict, case: dict, folder: Path, cancelled, progress) -> dict:
     results = {"status": "running", "steps": []}
     if not case.get("steps"):
@@ -409,6 +421,8 @@ def _unit(task: dict, case: dict, folder: Path, cancelled, progress) -> dict:
             node = shutil.which("node")
             if not node:
                 raise MissingInput("服务器未安装 Node.js。")
+            if _node_major(node) < MIN_NODE_MAJOR:
+                raise MissingInput(f"Node 内置测试需要 Node.js {MIN_NODE_MAJOR} 及以上版本，以取得逐文件测试汇总。")
             test_file = _source(task, step.get("root", "frontend"), str(step.get("testFile", "")))
             if test_file.suffix not in {".js", ".mjs", ".cjs"}:
                 raise MissingInput("Node 内置测试只执行 JS/MJS/CJS 测试文件。")
