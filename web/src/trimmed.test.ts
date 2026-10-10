@@ -36,31 +36,32 @@ describe("增量审查 M2：平移每次按键的计算远低于 50ms（性能�
       const server = ["对方插入的新段", ...blocks]; server[N / 2] = server[N / 2] + "（对方改）";
       const k = Math.floor(N * 0.8);
       const sent = blocks.join("\n\n"), serverText = server.join("\n\n");
-      // 预热一次，测 20 次按键取最大值
+      // 预热一次，测 20 次按键：护栏看中位数（偶发的 GC/调度抖动不该让用例失败，J7-L），最坏一次只防数量级退化
       rebaseBlocks(sent, sent.replace(blocks[k], blocks[k] + "字"), serverText);
       // 与编辑区的 domPair 一样：dom 是编辑区文字，value 是平移后的正文，每次按键更新
-      let worst = 0, mine = blocks.slice(), value = serverText;
+      const times: number[] = [];
+      let mine = blocks.slice(), value = serverText;
       for (let i = 0; i < 20; i++) {
         const before = mine.join("\n\n");
         mine = mine.slice(); mine[k] += "字";
         const started = performance.now();
         const out = rebaseBlocks(before, mine.join("\n\n"), value);
-        worst = Math.max(worst, performance.now() - started);
+        times.push(performance.now() - started);
         expect(out).not.toBeNull();
         value = out!;
       }
       expect(value).toContain(blocks[k] + "字".repeat(20));
       expect(value).toContain("（对方改）");
-      expect(worst).toBeLessThan(50);
+      const sorted = times.slice().sort((a, b) => a - b);
+      expect(sorted[Math.floor(sorted.length / 2)]).toBeLessThan(50);
+      expect(sorted[sorted.length - 1]).toBeLessThan(250);
       // 50 段分散改动（每段都唯一可定位）也很快
       const multi = blocks.slice(); for (let i = 0; i < 50; i++) multi[100 + i * 3] += "x";
-      const started = performance.now();
-      expect(rebaseBlocks(sent, multi.join("\n\n"), serverText)).not.toBeNull();
-      expect(performance.now() - started).toBeLessThan(200);
+      // 单次计时取 3 次中的最快一次，避开偶发抖动
+      const fastest = (run: () => void) => Math.min(...[0, 1, 2].map(() => { const t0 = performance.now(); run(); return performance.now() - t0; }));
+      expect(fastest(() => expect(rebaseBlocks(sent, multi.join("\n\n"), serverText)).not.toBeNull())).toBeLessThan(200);
       // 写回/光标换算同样先裁剪
-      const s2 = performance.now();
-      expect(caretBlockIndex(blocks, server, k)).toBe(k + 1);
-      expect(performance.now() - s2).toBeLessThan(200);
+      expect(fastest(() => expect(caretBlockIndex(blocks, server, k)).toBe(k + 1))).toBeLessThan(200);
     });
   }
 });

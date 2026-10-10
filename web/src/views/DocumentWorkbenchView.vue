@@ -8,7 +8,7 @@ import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
-import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
+import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText, theirsName } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
@@ -90,6 +90,9 @@ let caretLostTimer: number | undefined;
 let loadPoint: { node: Node; offset: number } | null = null;
 let typedDuringLoad = "";
 let imeDuringLoad = false;
+/** F-L1 缺口：载入锁定期间点了正文，焦点先落到一个隐形输入框，直接上屏/组字/粘贴的字都先收在这里，解锁后写回点击处。 */
+let loadSink: HTMLTextAreaElement | null = null;
+let loadSinkComposing = false;
 // 测试工程师 F-H4：最近一次保存进入冲突的时间（恢复草稿据此判断“冲突未处理”）
 let lastConflictAt = 0;
 let lockHadFocus = false;
@@ -842,7 +845,7 @@ function sectionName(item: ConflictItem) {
 }
 const isHeading = (block: HTMLElement) => /^H[1-6]$/.test(block.tagName);
 function conflictName(item: ConflictItem) {
-  return (item.theirs?.deleted ? item.theirs?.deletedBy?.name : item.theirs?.updatedBy?.name) || "其他成员";
+  return theirsName(item, readSession()?.userId);
 }
 /** 冲突块：红色竖线 + 浅红底（class 只加在编辑区 DOM 上，转 Markdown 前去掉）；标签画在纸面浮层里，不进入正文。 */
 function applyConflictMarks() {
@@ -1195,14 +1198,42 @@ function noteLoadPointer(event: PointerEvent) {
   const range = (window.document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }).caretRangeFromPoint?.(event.clientX, event.clientY);
   loadPoint = range && root.contains(range.startContainer) ? { node: range.startContainer, offset: range.startOffset } : null;
 }
+function openLoadSink(event: MouseEvent) {
+  const root = editor.value;
+  if (!checkingDrafts.value || event.button !== 0 || !root || !(event.target instanceof Node) || !root.contains(event.target)) return;
+  event.preventDefault(); // 焦点不落到暂不可编辑的正文上（那样直接上屏的输入会无声丢失）
+  if (!loadSink) {
+    const sink = window.document.createElement("textarea");
+    sink.setAttribute("aria-label", "正文载入中，输入的内容先暂存，载入后写回");
+    sink.setAttribute("data-testid", "load-sink");
+    Object.assign(sink.style, { position: "fixed", left: `${event.clientX}px`, top: `${event.clientY}px`, width: "2px", height: "1.2em", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", zIndex: "1" });
+    sink.addEventListener("compositionstart", () => { loadSinkComposing = true; });
+    sink.addEventListener("compositionend", () => { loadSinkComposing = false; if (!checkingDrafts.value) void flushLoadTyping(); });
+    window.document.body.appendChild(sink);
+    loadSink = sink;
+  }
+  loadSink.focus({ preventScroll: true });
+}
+function dropLoadSink() {
+  loadSink?.remove();
+  loadSink = null;
+  loadSinkComposing = false;
+}
 function onEditorFocusIn() { caretLostAt = 0; }
 /** 测试工程师 F-L1：载入锁定结束后，把锁定期间敲下的字写到当时点击的位置；写不进去就提示，不无声丢掉。 */
 async function flushLoadTyping() {
-  const point = loadPoint, typed = typedDuringLoad, ime = imeDuringLoad;
+  if (loadSink && loadSinkComposing) return; // 还在组字：等上屏（compositionend）后再写回
+  const sinkUsed = Boolean(loadSink);
+  const point = loadPoint, typed = typedDuringLoad + (loadSink?.value || ""), ime = imeDuringLoad;
+  dropLoadSink();
   loadPoint = null;
   typedDuringLoad = "";
   imeDuringLoad = false;
-  if (!typed && !ime) return;
+  if (!typed && !ime) {
+    // 锁定期间点过正文但没打字：解锁后把光标放回点击处
+    if (sinkUsed && point) { await nextTick(); placeLoadCaret(point); }
+    return;
+  }
   await nextTick();
   const root = editor.value;
   let placed = false;
@@ -1221,6 +1252,19 @@ async function flushLoadTyping() {
   }
   if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000, "caret");
   else if (typed && !placed) noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
+}
+function placeLoadCaret(point: { node: Node; offset: number }) {
+  const root = editor.value;
+  if (!root || !editable.value || !root.contains(point.node)) return;
+  root.contentEditable = "true";
+  root.focus({ preventScroll: true });
+  try {
+    const range = window.document.createRange();
+    range.setStart(point.node, Math.min(point.offset, point.node.nodeType === Node.TEXT_NODE ? (point.node.textContent || "").length : point.node.childNodes.length));
+    range.collapse(true);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+  } catch { /* 点击处已不在：不放光标 */ }
 }
 function onBodyTarget(event: Event): boolean {
   const target = event.target as Node | null;
@@ -1984,7 +2028,9 @@ async function restoreLocalDraft() {
     const conflicted = lastConflictAt >= restoreStarted;
     if (conflicted) {
       // 恢复的内容与他人的修改冲突：冲突部分已存为冲突副本，其余已（或正在）保存；不是“重试中”
-      noteAction("恢复的内容有部分与他人的修改冲突，已存为冲突副本（见冲突面板）；其余内容已保存。处理完冲突后再恢复下一份草稿。", 10000);
+      // J2-L：冲突可能来自自己先恢复的另一份草稿，不说“他人”；没有下一份草稿时不提“再恢复下一份”
+      const more = localDrafts.value.some(other => other.tabId !== draft.tabId);
+      noteAction(`恢复的内容有部分与正文里已有的修改冲突，已存为冲突副本（见冲突面板）；其余内容已保存。${more ? "处理完冲突后再恢复下一份草稿。" : ""}`, 10000);
     }
     if (retrying.value || saving.value) {
       // 最后一审建议 3：没存上服务器之前不删这份草稿，也不解锁编辑区（编辑区里仍是旧正文，解锁后一输入就会把恢复的内容冲掉）。
@@ -2979,6 +3025,7 @@ onMounted(() => {
   window.addEventListener("keydown", bufferLockedTyping, true);
   window.addEventListener("compositionstart", noteLockedComposition, true);
   window.addEventListener("pointerdown", noteLoadPointer, true);
+  window.addEventListener("mousedown", openLoadSink, true);
   window.addEventListener("focusin", onEditorFocusIn);
   void load();
 });
@@ -2997,6 +3044,8 @@ onUnmounted(() => {
   window.removeEventListener("keydown", bufferLockedTyping, true);
   window.removeEventListener("compositionstart", noteLockedComposition, true);
   window.removeEventListener("pointerdown", noteLoadPointer, true);
+  window.removeEventListener("mousedown", openLoadSink, true);
+  dropLoadSink();
   window.removeEventListener("focusin", onEditorFocusIn);
   window.clearTimeout(caretLostTimer);
   window.document.removeEventListener("pointerdown", onExportMenuOutside, true);

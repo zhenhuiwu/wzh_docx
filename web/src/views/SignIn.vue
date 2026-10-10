@@ -74,6 +74,7 @@ async function onSubmit() {
     writeStaffId(rememberStaffId.value ? staff : null);
     writeSession({
       staffId: session.user.account,
+      userId: session.user.id,
       name: session.user.name,
       mustChangePassword: Boolean(session.user.requiresFirstLoginChange),
       department: session.user.department,

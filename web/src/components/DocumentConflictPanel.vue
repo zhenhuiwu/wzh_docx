@@ -5,9 +5,10 @@ import ConflictCompareDialog from "./ConflictCompareDialog.vue";
 import { diffWords, isTable, tableCellDiffs } from "../textDiff";
 import { ApiError } from "../api/client";
 import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type ResolveRequestItem, type ResolveResult } from "../api/documents";
-import { ACTION_DONE_TEXT, REASON_TEXT, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
+import { ACTION_DONE_TEXT, REASON_TEXT, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
 import { locationText, shortTime } from "../saveModel";
 import { continuedChars, type LiveMine } from "../frozenConflict";
+import { readSession } from "../session";
 
 const props = defineProps<{
   documentId: string; documentName: string; revision: number; canViewMembers: boolean; canResolve: boolean;
@@ -65,7 +66,7 @@ function whenOf(item: ConflictItem) {
   return at ? shortTime(at) : "";
 }
 function whoOf(item: ConflictItem) {
-  return (item.theirs?.deleted ? item.theirs?.deletedBy?.name : item.theirs?.updatedBy?.name) || "其他成员";
+  return theirsName(item, readSession()?.userId);
 }
 
 // —— 方案 C：我的版本以最新快照为准（编辑区里正在写的优先）——
@@ -141,7 +142,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
         const fresh = (apiError.details?.conflicts as ConflictItem[] | undefined)?.find(entry => entry.itemIndex === item.itemIndex);
         if (fresh) {
           items.value = items.value.map(entry => entry === item ? { ...entry, ...fresh, conflictId: item.conflictId } : entry);
-          cardNotice.value = { ...cardNotice.value, [id(item)]: `${fresh.theirs?.updatedBy?.name || "对方"} 又修改了一次，请重新确认。` };
+          cardNotice.value = { ...cardNotice.value, [id(item)]: `${whoOf(fresh)} 又修改了一次，请重新确认。` };
         }
         return;
       }

@@ -2,6 +2,16 @@
 import type { ConflictAction, ConflictItem, ConflictSummary, Person } from "./api/documents";
 import { isTable } from "./textDiff";
 
+/** 测试工程师 J2-L：冲突“对方”就是我自己（另一份草稿、另一个标签页先写进了正文）时，不把自己的名字当成“对方”。 */
+export const SELF_THEIRS_NAME = "你自己（另一份草稿或标签页）";
+export function theirsName(item: Pick<ConflictItem, "theirs" | "actor">, selfId?: string | null): string {
+  const who = item.theirs?.deleted ? item.theirs?.deletedBy : item.theirs?.updatedBy;
+  // 列表接口带 actor；409 返回的条目没有 actor，用当前登录用户 ID
+  const me = item.actor?.id || selfId;
+  if (who?.id && me && who.id === me) return SELF_THEIRS_NAME;
+  return who?.name || "其他成员";
+}
+
 /** “冲突 N”：只用服务器的 mineOpen；summary 请求失败时才用本地计数兜底。 */
 export function conflictCount(summary: ConflictSummary | null, localFallback = 0): number {
   return summary ? summary.mineOpen : localFallback;

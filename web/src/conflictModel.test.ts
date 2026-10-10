@@ -53,3 +53,17 @@ describe("冲突入口与他人更新文案（界面验收 M2/M3/M6）", () => {
     expect(othersUpdatedText(["李工", "王工", "李工"], 3, false)).toBe("李工 等 2 人更新了 3 处内容。你的修改保存后会自动显示他们的更新。");
   });
 });
+
+describe("theirsName（J2-L：对方就是自己时不显示自己的名字）", () => {
+  it("对方是别人：显示姓名；是自己：显示“你自己（另一份草稿或标签页）”；缺省：其他成员", async () => {
+    const { theirsName, SELF_THEIRS_NAME } = await import("./conflictModel");
+    const me = { id: "u1", name: "李工" }, zhang = { id: "u2", name: "张工" };
+    expect(theirsName({ actor: me, theirs: { updatedBy: zhang } })).toBe("张工");
+    expect(theirsName({ actor: me, theirs: { updatedBy: me } })).toBe(SELF_THEIRS_NAME);
+    expect(theirsName({ actor: me, theirs: { deleted: true, deletedBy: me } })).toBe(SELF_THEIRS_NAME);
+    expect(theirsName({ actor: null, theirs: {} })).toBe("其他成员");
+    // 409 返回的条目没有 actor：用当前登录用户 ID
+    expect(theirsName({ actor: null, theirs: { updatedBy: me } }, "u1")).toBe(SELF_THEIRS_NAME);
+    expect(theirsName({ actor: null, theirs: { updatedBy: zhang } }, "u1")).toBe("张工");
+  });
+});

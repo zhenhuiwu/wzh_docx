@@ -6,6 +6,8 @@ const STAFF_MEMORY = "doc-workbench.session";
 
 export interface Session {
   staffId: string;
+  /** 用户 ID：用来认出冲突里的“对方”其实是自己（J2-L）。 */
+  userId?: string;
   name: string;
   mustChangePassword: boolean;
   /** 仅用于界面展示与导航显隐；真正的权限由服务端校验。 */
@@ -112,6 +114,7 @@ export async function ensureSession(): Promise<Session | null> {
     const me = await getCurrentSession();
     current.value = {
       staffId: me.user.account,
+      userId: me.user.id,
       name: me.user.name,
       mustChangePassword: Boolean(me.user.requiresFirstLoginChange),
       department: me.user.department,

@@ -277,9 +277,12 @@ def s_keep_mine(ctx: Run, page):
     card(page).get_by_role("button", name="保留我的").click()
     expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
     expect(page.locator(".wb-notice", has_text="已用你的版本（含续写）更新这一段。")).to_be_visible(timeout=5000)
+    assert not page.locator(".conflict-panel .ccard-notice").count(), "第一次点就要求重新确认"
+    assert not ctx.items(doc_id), "冲突仍未处理"
     md = ctx.server(doc_id)["markdownContent"]
     blocks = md.split("\n\n")
-    assert any(MARK in b for b in blocks) and "〔回车分出的段〕" in blocks, md[:400]
+    assert P3 + MARK in blocks and "〔回车分出的段〕" in blocks, md[:400]
+    assert P3_THEIRS not in md and md.count(MARK) == 1, md[:400]
     editor = page.locator(".paper-content").inner_text()
     assert MARK in editor and "〔回车分出的段〕" in editor
     return {}
@@ -297,6 +300,12 @@ def s_use_theirs(ctx: Run, page):
     card(page).locator(".ccard-confirm").get_by_role("button", name="使用对方的版本").click()
     expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
     expect(page.locator(".paper-content p", has_text="第3段")).to_have_text(P3_THEIRS, timeout=20000)
+    page.wait_for_timeout(3500)
+    base.wait_saved(page, 30000)
+    md = ctx.server(doc_id)["markdownContent"]
+    block = next(b for b in md.split("\n\n") if b.startswith("第3段"))
+    assert block == P3_THEIRS, f"使用对方的版本后留下了半句：{block}"
+    assert MARK[5:12] not in md and MARK[:5] not in md, md[:400]
     handled = page.locator(".conflict-handled")
     expect(handled).to_be_visible(timeout=10000)
     if not handled.evaluate("e => e.open"):
@@ -320,8 +329,10 @@ def s_keep_both(ctx: Run, page):
     expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
     expect(page.locator(".wb-notice", has_text="已在你的版本前插入 张工 的版本，两段都在正文中。")).to_be_visible(timeout=5000)
     md = ctx.server(doc_id)["markdownContent"]
-    i_theirs, i_mine = md.find(P3_THEIRS), md.find(MARK)
-    assert 0 <= i_theirs < i_mine, f"顺序不对：theirs@{i_theirs} mine@{i_mine}"
+    blocks = md.split("\n\n")
+    assert P3_THEIRS in blocks and P3 + MARK in blocks, f"两段不完整：{blocks}"
+    i_theirs, i_mine = blocks.index(P3_THEIRS), blocks.index(P3 + MARK)
+    assert i_mine == i_theirs + 1, f"顺序不对：对方在第 {i_theirs} 块、我的完整版在第 {i_mine} 块"
     page.wait_for_timeout(4000)
     base.wait_saved(page, 30000)
     md2 = ctx.server(doc_id)["markdownContent"]
@@ -345,8 +356,9 @@ def s_manual(ctx: Run, page):
     assert MARK in value and "〔后来又写〕" in value, value
     card(page).get_by_role("button", name="采用合并结果").click()
     expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
+    assert not page.locator(".conflict-panel .ccard-notice").count(), "第一次采用就要求重新确认"
     md = ctx.server(doc_id)["markdownContent"]
-    assert "〔后来又写〕" in md and P3_THEIRS in md
+    assert "〔后来又写〕" in md and P3_THEIRS in md and MARK in md and md.count(MARK) == 1, md[:400]
     return {}
 
 
@@ -498,8 +510,149 @@ def s_tm2(ctx: Run, page):
     return {"editor_top": top}
 
 
+# —— F-M4：表格、列表里冲突后继续打的字不丢 ——
+TABLE = "| 项目 | 说明 |\n| --- | --- |\n| 甲 | 单元格甲 |\n| 乙 | 单元格乙 |\n| 丙 | 单元格丙 |"
+LIST = "- 列表项一\n- 列表项二\n- 列表项三"
+TMARK = "【表0123456789ABCDEFGHIJ尾】"
+CASES = {"表格同一行": ("td", "单元格甲", ("| 甲 |", "| 甲（对方改） |")), "表格另一行": ("td", "单元格甲", ("单元格丙", "单元格丙（对方改）")),
+         "列表同一项": ("li", "列表项一", ("列表项一", "列表项一（对方改）"))}
+
+
+def tablist_rows(ctx: Run, page) -> list[dict]:
+    out = []
+    gaps = [int(item) for item in os.environ.get("TGAPS", "0,600,1500").split(",")]
+    for case, (tag, anchor, (old, new)) in CASES.items():
+        for gap in gaps:
+            for i in range(int(os.environ.get("TN", "3"))):
+                selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+                doc_id = selfconf.make_doc(ctx.data, f"方案C{case}{gap}-{i}-{time.strftime('%H%M%S')}", 0)
+                ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + TABLE + "\n\n" + LIST)
+                ctx.open(page, doc_id)
+                target = page.locator(f".paper-content {tag}", has_text=anchor).first
+                target.scroll_into_view_if_needed()
+                target.click()
+                page.keyboard.press("End")
+                page.keyboard.type(TMARK[:5])
+                ctx.zhang_edit(doc_id, old, new)
+                page.keyboard.press("Control+s")
+                page.wait_for_timeout(gap)
+                page.keyboard.type(TMARK[5:-2], delay=150)
+                page.keyboard.insert_text(TMARK[-2:])  # 不产生 keydown 的直接上屏
+                page.wait_for_timeout(5000)
+                try:
+                    base.wait_saved(page, 20000)
+                except Exception:  # noqa: BLE001 - 有未处理冲突时状态不是“已保存”
+                    pass
+                md = ctx.server(doc_id)["markdownContent"]
+                items = ctx.items(doc_id)
+                latest = "\n".join(((item.get("mineLatest") or {}).get("markdown") or (item.get("mine") or {}).get("markdown") or "") for item in items)
+                editor = page.locator(".paper-content").inner_text()
+                frozen = page.locator(".paper-content [data-frozen]").count()
+                body = page.locator("body").inner_text()
+                row = {"case": case, "gap": gap, "i": i, "server_full": TMARK in md, "conflict_full": TMARK in latest, "editor_full": TMARK in editor.replace("\t", ""),
+                       "frozen": frozen, "other_kept": new in md, "dup": md.count(TMARK[:3]) + latest.count(TMARK[:3]) > 1 and TMARK not in md,
+                       "lost_notice": "没有写入" in body}
+                row["ok"] = (row["server_full"] or row["conflict_full"]) and row["other_kept"] and not row["lost_notice"]
+                out.append(row)
+                print("  " + json.dumps(row, ensure_ascii=False), flush=True)
+                if not row["ok"]:
+                    base.OUT.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(base.OUT / f"schemec-fm4-{case}-{gap}-{i}.png"))
+    return out
+
+
+@scenario("F-M4 表格列表 冲突后续打不丢")
+def s_tablist(ctx: Run, page):
+    got = tablist_rows(ctx, page)
+    bad = [row for row in got if not row["ok"]]
+    assert not bad, f"{len(bad)}/{len(got)} 轮不通过：{bad[:3]}"
+    return {"rounds": len(got), "frozen": sum(1 for row in got if row["frozen"])}
+
+
+# —— F-L1 缺口：载入锁定期间不经按键的直接上屏 / 组字 ——
+def load_lock_round(ctx: Run, page, mode: str, n: int) -> dict:
+    mark = f"【载入{mode}{n}】"
+    for attempt in range(6):
+        selfconf.PARAS = [f"第{i}段：原始内容 {i}。" for i in range(1, 9)]
+        doc_id = selfconf.make_doc(ctx.data, f"方案C载入锁定{mode}{n}-{attempt}-{time.strftime('%H%M%S')}", 0)
+        page.goto(f"{base.WEB}/projects/{ctx.data['project']['id']}/documents/{doc_id}")
+        try:
+            page.wait_for_selector(".paper-content[contenteditable='false'] p", state="attached", timeout=30000)
+        except Exception:  # noqa: BLE001 - 锁定窗口太短没等到：这次不算，重来
+            print(f"  {mode}{n} attempt {attempt}: 没等到锁定窗口", flush=True)
+            continue
+        # 不用 locator.click()：它要等元素“可操作”，会一直等到解锁；按坐标直接点（与真人一样）
+        box = page.locator(".paper-content p", has_text="第2段").first.bounding_box()
+        if not box:
+            continue
+        page.mouse.click(box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2)
+        if not page.locator("[data-testid=load-sink]").count():
+            print(f"  {mode}{n} attempt {attempt}: 点下去时已解锁", flush=True)
+            continue  # 点下去时已经解锁：这次没打中锁定窗口，重来
+        if mode == "insert":
+            page.keyboard.insert_text(mark)
+        elif mode == "ime":
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Input.imeSetComposition", {"text": "zairu", "selectionStart": 5, "selectionEnd": 5})
+            page.wait_for_timeout(120)
+            cdp.send("Input.insertText", {"text": mark})
+        else:
+            page.keyboard.type(mark)
+        page.wait_for_timeout(500)
+        base.wait_saved(page, 30000)
+        page.wait_for_timeout(3500)
+        base.wait_saved(page, 30000)
+        md = ctx.server(doc_id)["markdownContent"]
+        block = next((b for b in md.split("\n\n") if b.startswith("第2段") or mark in b), "")
+        notes = page.locator("body").inner_text()
+        return {"mode": mode, "n": n, "attempt": attempt, "in_p2": mark in block and block.count(mark) == 1, "dup": md.count(mark) > 1,
+                "sink_left": page.locator("[data-testid=load-sink]").count(), "lost_note": "没能写入" in notes}
+    return {"mode": mode, "n": n, "attempt": "miss"}
+
+
+@scenario("F-L1 载入锁定 直接上屏和组字不丢")
+def s_load_lock(ctx: Run, page):
+    got = [load_lock_round(ctx, page, mode, n) for mode in ("insert", "ime", "type") for n in range(int(os.environ.get("LN", "3")))]
+    for row in got:
+        print("  " + json.dumps(row, ensure_ascii=False), flush=True)
+    hits = [row for row in got if row["attempt"] != "miss"]
+    bad = [row for row in hits if not row["in_p2"] or row["dup"] or row["sink_left"]]
+    assert hits, "一次也没打中载入锁定窗口"
+    assert not bad, f"{len(bad)}/{len(hits)} 轮不通过：{bad[:3]}"
+    return {"hits": len(hits), "rounds": len(got)}
+
+
+# —— J2-L：“对方”其实是我自己（另一个标签页 / 另一份草稿先写进了正文）——
+@scenario("J2-L 自己另一标签页 不显示为对方")
+def s_self_theirs(ctx: Run, page):
+    doc_id = ctx.doc(page, "方案C自己两标签")
+    other = page.context.new_page()
+    other.goto(page.url)
+    expect(other.locator(".paper-content")).to_be_visible(timeout=90000)
+    base.wait_saved(other, 90000)
+    other.wait_for_timeout(600)
+    base.type_after(other, "第3段", "〔标签乙〕")
+    other.keyboard.press("Control+s")
+    base.wait_saved(other, 30000)
+    other.close()
+    base.type_after(page, "第3段", "〔标签甲〕")
+    page.keyboard.press("Control+s")
+    page.wait_for_timeout(2500)
+    items = ctx.items(doc_id)
+    if not items:
+        md = ctx.server(doc_id)["markdownContent"]
+        assert "〔标签甲〕" in md and "〔标签乙〕" in md, md[:400]
+        return {"conflict": False, "merged": True}
+    open_panel(page)
+    text = page.locator(".conflict-panel").inner_text() + "\n" + page.locator(".paper-content").evaluate("e => e.parentElement.innerText")
+    assert "李工 的版本" not in text and "与 李工 的修改冲突" not in text, text[:600]
+    assert "你自己（另一份草稿或标签页）" in text, text[:600]
+    assert_no_self_named(page)
+    return {"conflict": True}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
-             s_timing_small, s_timing_big]
+             s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs]
 
 
 def main() -> int:
