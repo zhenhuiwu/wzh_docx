@@ -109,7 +109,7 @@
 .secret:focus-within {
   outline: none;
   border-color: var(--brand-600);
-  box-shadow: var(--focus-shadow);
+  box-shadow: var(--focus-shadow-control);
 }
 
 .control.is-invalid,
@@ -120,8 +120,8 @@
 .control.is-invalid:focus-visible,
 .control.is-invalid:focus,
 .secret.is-invalid:focus-within {
-  border-color: var(--danger-600);
-  box-shadow: 0 0 0 3px var(--danger-50);
+  border-color: var(--danger-700);
+  box-shadow: var(--focus-shadow-danger);
 }
 
 .control:disabled {

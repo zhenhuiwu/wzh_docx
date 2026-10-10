@@ -112,8 +112,8 @@ defineExpose({ input });
   outline-offset: 2px;
 }
 
-.file-picker:has(.file-picker-input:focus-visible) { border-color: var(--brand-600); }
-.file-picker.is-invalid:has(.file-picker-input:focus-visible) { border-color: var(--danger-700); box-shadow: 0 0 0 3px var(--focus-ring-danger); }
+.file-picker:has(.file-picker-input:focus-visible) { border-color: var(--brand-600); box-shadow: var(--focus-shadow-control); }
+.file-picker.is-invalid:has(.file-picker-input:focus-visible) { border-color: var(--danger-700); box-shadow: var(--focus-shadow-danger); }
 
 .file-picker-name {
   min-width: 0;
