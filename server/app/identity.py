@@ -558,13 +558,23 @@ def change_password(request: Request, body: PasswordBody) -> Response:
     require_csrf(request, principal)
     current = _clean_password(body.currentPassword, "currentPassword")
     new_password = _require_new_password(body.newPassword)
+    # Separate counter from sign-in so a stolen session cannot guess the
+    # current password without limit, yet cannot lock the owner out of login.
+    guard = f"change-password:{principal.user_id}"
     with connect() as connection:
+        if _locked(connection, guard):
+            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请 10 分钟后再试。")
         row = connection.execute(
             "select password_hash from users where id = %s",
             (principal.user_id,),
         ).fetchone()
     if row is None or not verify_password(current, row["password_hash"]):
-        raise AppError(401, "AUTH_REQUIRED", "当前密码不正确。")
+        _record_failure(guard)
+        # 422 rather than 401: the session is still valid and must not be treated as signed out.
+        raise AppError(
+            422, "CURRENT_PASSWORD_INCORRECT", "当前密码不正确。",
+            [{"field": "currentPassword", "message": "当前密码不正确。"}],
+        )
     if current == new_password:
         raise AppError(422, "VALIDATION_FAILED", "新密码需要和当前密码不同。")
     updated = hash_password(new_password)
@@ -595,4 +605,5 @@ def change_password(request: Request, body: PasswordBody) -> Response:
                 """,
                 (_token(), principal.session_id),
             )
+            _clear_failures(connection, guard)
     return Response(status_code=204)

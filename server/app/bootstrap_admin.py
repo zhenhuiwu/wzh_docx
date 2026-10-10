@@ -135,22 +135,24 @@ def bootstrap_first_admin() -> bool:
 
 
 # Earlier portable packages shipped this fixed password for "admin".
-_KNOWN_DEFAULTS = (("admin", "admin123"),)
+# Passwords published in old docs / scripts. Any account still using one must change it.
+KNOWN_DEFAULT_PASSWORDS = ("admin123",)
 
 
 def flag_known_default_passwords() -> int:
-    """Force a password change for accounts still using a published default."""
+    """Force a password change for every account still using a published default."""
     flagged = 0
     with connect() as connection:
         with connection.transaction(immediate=True):
-            for account, password in _KNOWN_DEFAULTS:
-                row = connection.execute(
-                    "select id, password_hash, must_change_password from users where account_key = %s",
-                    (account,),
-                ).fetchone()
-                if row and not row["must_change_password"] and verify_password(password, row["password_hash"]):
+            rows = connection.execute(
+                "select id, password_hash from users where must_change_password = 0"
+            ).fetchall()
+            for row in rows:
+                if any(verify_password(password, row["password_hash"]) for password in KNOWN_DEFAULT_PASSWORDS):
                     connection.execute("update users set must_change_password = 1 where id = %s", (row["id"],))
                     flagged += 1
+    if flagged:
+        logger.warning("%d 个账号仍在使用公开的默认密码，已要求其下次登录时修改。", flagged)
     return flagged
 
 

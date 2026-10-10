@@ -59,8 +59,12 @@ async function onSubmit() {
     await router.replace(loginDestination(route.query.redirect));
   } catch (error) {
     phase.value = "idle";
-    if (error instanceof ApiError && error.code === "AUTH_REQUIRED" && error.message.includes("当前密码")) {
+    if (error instanceof ApiError && error.code === "CURRENT_PASSWORD_INCORRECT") {
       currentError.value = error.message;
+    } else if (error instanceof ApiError && error.code === "AUTH_REQUIRED") {
+      // 会话已失效（例如在其他窗口退出），回到登录页。
+      await router.replace({ path: "/login" });
+      return;
     } else if (error instanceof ApiError && error.fieldErrors.length) {
       for (const item of error.fieldErrors) {
         if (item.field === "currentPassword") currentError.value = item.message;

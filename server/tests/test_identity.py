@@ -196,6 +196,36 @@ def test_change_password_revokes_other_sessions(client: TestClient) -> None:
     assert resigned.status_code == 200
 
 
+def test_wrong_current_password_has_stable_code_and_is_limited(client: TestClient) -> None:
+    _reset("dev03-guess")
+    create_user(account="dev03-guess", name="猜测", password=PASSWORD, roles=["project_creator"])
+    signed = _login(client, "dev03-guess", PASSWORD)
+    csrf = signed.json()["data"]["csrfToken"]
+
+    def attempt(current: str):
+        return client.post(
+            "/api/v1/auth/change-password",
+            json={"currentPassword": current, "newPassword": "guessed-secret-9"},
+            headers={"X-CSRF-Token": csrf},
+        )
+
+    for _ in range(8):
+        wrong = attempt("not-the-password")
+        assert wrong.status_code == 422, wrong.text
+        assert wrong.json()["error"]["code"] == "CURRENT_PASSWORD_INCORRECT"
+        assert wrong.json()["error"]["fieldErrors"][0]["field"] == "currentPassword"
+    assert client.get("/api/v1/auth/me").status_code == 200
+    limited = attempt(PASSWORD)
+    assert limited.status_code == 429 and limited.json()["error"]["code"] == "LIMIT_EXCEEDED"
+    # The change-password counter does not lock the account out of signing in.
+    other = TestClient(client.app)
+    assert _login(other, "dev03-guess", PASSWORD).status_code == 200
+    with connect() as connection:
+        connection.execute("delete from login_guards where account_key like 'change-password:%'")
+        connection.commit()
+    assert attempt(PASSWORD).status_code == 204
+
+
 def test_disabled_account_cannot_login(client: TestClient) -> None:
     _reset("dev03-disabled")
     user_id = create_user(
@@ -248,17 +278,26 @@ def test_bootstrap_admin_must_change_password_before_other_apis(runtime_env, mon
 
 def test_known_default_password_is_flagged_for_change(runtime_env) -> None:
     from app.bootstrap_admin import flag_known_default_passwords
-
-    _reset("admin")
-    create_user(account="admin", name="管理员", password=PASSWORD, roles=["system_admin"])
-    assert flag_known_default_passwords() == 0
     from app.identity import hash_password
 
+    for account in ("admin", "dev03-default", "dev03-strong"):
+        _reset(account)
+        create_user(account=account, name=account, password=PASSWORD, roles=["project_creator"])
+    flag_known_default_passwords()
     with connect() as connection:
         with connection.transaction():
-            connection.execute("update users set password_hash = %s where account_key = 'admin'", (hash_password("admin123"),))
-    assert flag_known_default_passwords() == 1
+            connection.execute(
+                "update users set password_hash = %s where account_key in ('admin', 'dev03-default')",
+                (hash_password("admin123"),),
+            )
+    assert flag_known_default_passwords() >= 2
     with connect() as connection:
-        row = connection.execute("select must_change_password from users where account_key = 'admin'").fetchone()
-    assert row["must_change_password"]
+        rows = {
+            row["account_key"]: bool(row["must_change_password"])
+            for row in connection.execute(
+                "select account_key, must_change_password from users "
+                "where account_key in ('admin', 'dev03-default', 'dev03-strong')"
+            )
+        }
+    assert rows == {"admin": True, "dev03-default": True, "dev03-strong": False}
     assert flag_known_default_passwords() == 0
