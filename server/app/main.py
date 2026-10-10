@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.bootstrap_admin import bootstrap_first_admin, flag_known_default_passwords
-from app.db import journal_mode, migrate, ping
+from app import service_lock
+from app.db import database_path, journal_mode, migrate, ping
 from app.errors import AppError, database_busy_error, error_content, install_error_handlers
 from app.files import router as files_router
 from app.identity import router as identity_router
@@ -53,13 +54,17 @@ def get_health(request: Request) -> dict[str, object]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    service_lock.acquire(database_path())  # 维护脚本据此判断服务是否在运行
     migrate()
     logger.info("sqlite journal_mode=%s", journal_mode())
     seed_writing_skills()
     bootstrap_first_admin()
     flag_known_default_passwords()
     recover_interrupted_tasks()
-    yield
+    try:
+        yield
+    finally:
+        service_lock.release()
 
 
 def create_app() -> FastAPI:

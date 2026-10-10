@@ -1,6 +1,6 @@
 """单独回滚迁移 114（document_objects.deleted_after_ref）。
 
-只在需要退回到 114 之前的程序版本时使用；先停服务，用与服务相同的 DATABASE_URL 运行::
+只在需要退回到 114 之前的程序版本时使用；**先停服务**，用与服务相同的 DATABASE_URL 运行::
 
     uv run python -m app.rollback_migration_114          # 只检查，不改库
     uv run python -m app.rollback_migration_114 --yes    # 先整库备份，再回滚
@@ -9,7 +9,11 @@
 注意：
 - 该列记录“删除时紧挨在前面的对象”，回滚后这些位置信息丢失；已删除段落“恢复为新段落”回退到章节路径 + 序号定位（与 114 之前一致）。
 - 备份文件与库同目录，名为 <库名>.before-rollback-114-<时间>.db；需要撤销回滚时停服务后用它覆盖原库即可。
-- 回滚后若仍启动含 114 的新版本，服务启动时会自动重新执行 114（列重新加上，旧删除记录的该列为 NULL，按迁移原注释回退定位）。
+- **回滚后必须用 114 之前的旧版本程序启动服务。** 若仍启动含 114 的新版本，服务启动时会自动重新执行 114
+  （列重新加上，旧删除记录的该列为 NULL），回滚等于白做。
+- 服务在运行时脚本拒绝回滚（退出码 2）：正在运行的新版本程序仍会写这一列，回滚后删段保存会出错。
+  判断依据：服务启动时持有的 <库名>.service.lock 运行标记；Linux 上另查是否有其他进程打开着库文件（含 -wal/-shm）；
+  最后尝试拿库的独占写锁。旧版本程序没有运行标记，请务必确认它也已停止。
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from app import service_lock
 from app.config import get_settings
 
 VERSION = "114_document_objects_deleted_after"
@@ -43,6 +48,24 @@ def _state(connection: sqlite3.Connection) -> tuple[bool, bool]:
     return recorded, COLUMN in columns
 
 
+def _in_use(path: Path, connection: sqlite3.Connection) -> str:
+    """返回占用原因；空串表示没发现服务在用这个库。"""
+    if service_lock.service_running(path):
+        return f"运行标记 {service_lock.lock_path(path).name} 被占用"
+    others = service_lock.processes_with_file(path)
+    if others:
+        return f"进程 {', '.join(map(str, others))} 打开着该库"
+    try:
+        connection.execute("pragma busy_timeout = 0")
+        connection.execute("BEGIN EXCLUSIVE")
+        connection.execute("ROLLBACK")
+    except sqlite3.OperationalError:
+        return "库正被其他连接锁定"
+    finally:
+        connection.execute("pragma busy_timeout = 30000")
+    return ""
+
+
 def rollback(path: Path, apply: bool) -> int:
     if not path.exists():
         print(f"没有找到数据库：{path}", file=sys.stderr)
@@ -58,8 +81,13 @@ def rollback(path: Path, apply: bool) -> int:
         ).fetchone()[0] if has_column else 0
         print(f"数据库：{path}")
         print(f"迁移记录：{'有' if recorded else '无'}；{COLUMN} 列：{'有' if has_column else '无'}；其中有值的已删除对象 {filled} 个（回滚后丢失）。")
+        busy = _in_use(path, connection)
+        if busy:
+            print(f"服务似乎正在运行（{busy}）。请先停止使用该库的服务，再执行回滚。", file=sys.stderr)
+            if apply:
+                return 2
         if not apply:
-            print("只做了检查。确认已停服务后加 --yes 执行回滚。")
+            print("只做了检查。确认已停服务后加 --yes 执行回滚；回滚后必须用 114 之前的旧版本程序启动，否则会重新执行 114。")
             return 0
         backup = path.with_name(f"{path.name}.before-rollback-114-{datetime.now():%Y%m%d-%H%M%S}.db")
         target = sqlite3.connect(backup)
@@ -78,7 +106,7 @@ def rollback(path: Path, apply: bool) -> int:
         except sqlite3.Error:
             connection.execute("ROLLBACK")
             raise
-        print("已回滚迁移 114。")
+        print("已回滚迁移 114。现在请用 114 之前的旧版本程序启动服务（新版本启动会重新执行 114）。")
         return 0
     finally:
         connection.close()

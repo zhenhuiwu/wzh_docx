@@ -128,6 +128,13 @@ BUSY_TIMEOUT_MS = 5000      # 决策6：在线请求等待写锁最多 5 秒
 MAINTENANCE_BUSY_MS = 30000  # 迁移、回填 CLI
 
 
+def database_path() -> Path:
+    url = get_settings().database_url
+    if not url.startswith("sqlite:///"):
+        raise ValueError("DATABASE_URL must be sqlite:///...")
+    return Path(url.removeprefix("sqlite:///"))
+
+
 @contextmanager
 def connect(busy_ms: int | None = None) -> Iterator[DictConnection]:
     busy_ms = BUSY_TIMEOUT_MS if busy_ms is None else busy_ms
