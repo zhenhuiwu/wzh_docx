@@ -69,6 +69,7 @@ BACKEND_PID=""
 FRONTEND_PID=""
 CLEANED=0
 
+# shellcheck disable=SC2329  # invoked from the traps below
 stop_group() {
   local pid="$1" label="$2"
   [ -n "$pid" ] || return 0
@@ -82,6 +83,7 @@ stop_group() {
   kill -KILL -- "-$pid" 2>/dev/null || true
 }
 
+# shellcheck disable=SC2329  # invoked from the traps below
 cleanup() {
   [ "$CLEANED" = 1 ] && return 0
   CLEANED=1
@@ -89,6 +91,7 @@ cleanup() {
   stop_group "$FRONTEND_PID" "前端"
   stop_group "$BACKEND_PID" "后端"
 }
+# shellcheck disable=SC2329  # invoked from the traps below
 on_signal() { cleanup; trap - EXIT; exit "$1"; }
 # 先注册清理，再启动后台进程；Ctrl+C（INT）、kill（TERM）、HUP 和正常退出都只清理一次。
 trap cleanup EXIT
