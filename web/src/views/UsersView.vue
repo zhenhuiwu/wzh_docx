@@ -256,7 +256,7 @@ onMounted(async () => {
       <input id="user-account" ref="accountInput" v-model="account" class="control" type="text" autocomplete="off" :disabled="submitting" />
       <label for="user-name">姓名</label>
       <input id="user-name" v-model="personName" class="control" type="text" autocomplete="off" :disabled="submitting" />
-      <label for="user-password">初始密码（至少 12 个字符）</label>
+      <label for="user-password">初始密码（至少 12 个字符，用户首次登录后须修改）</label>
       <input id="user-password" v-model="password" class="control" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" :disabled="submitting" />
       <label for="user-department">部门</label>
       <input id="user-department" v-model="department" class="control" type="text" autocomplete="off" :disabled="submitting" />
@@ -276,7 +276,7 @@ onMounted(async () => {
         {{ pending.name }}（{{ pending.account }}）
         <template v-if="pendingAction === 'disable'">停用后不能登录，已有会话会失效。</template>
         <template v-else-if="pendingAction === 'enable'">启用后可以重新登录。</template>
-        <template v-else-if="pendingAction === 'reset'">重置后原密码与已有会话失效。</template>
+        <template v-else-if="pendingAction === 'reset'">重置后原密码与已有会话失效，用户下次登录须修改密码。</template>
         <template v-else>撤销后该账号需要重新登录。</template>
       </p>
       <template v-if="pendingAction === 'reset'">

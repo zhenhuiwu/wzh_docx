@@ -336,6 +336,7 @@ def create_account(request: Request, body: UserCreateBody) -> dict[str, object]:
                 roles=roles,
                 department=body.department.strip(),
                 connection=connection,
+                must_change_password=True,
             )
             connection.execute(
                 """
@@ -483,6 +484,8 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
 
     _require_new_password(body.password)
     stored = hash_password(body.password)
+    # A password chosen by someone else must be replaced by its owner.
+    must_change = target != actor.user_id
     with connect() as connection:
         with connection.transaction(immediate=True):
             row = connection.execute(
@@ -496,12 +499,12 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
                 """
                 update users
                 set password_hash = %s,
-                    must_change_password = false,
+                    must_change_password = %s,
                     revision = revision + 1,
                     updated_at = now()
                 where id = %s
                 """,
-                (stored, target),
+                (stored, 1 if must_change else 0, target),
             )
             _revoke(connection, target)
             _record(connection, target, actor.user_id, "reset", reason)
@@ -509,7 +512,7 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
         "data": {
             "userId": str(target),
             "status": "updated",
-            "requiresFirstLoginChange": False,
+            "requiresFirstLoginChange": must_change,
             "message": "密码已重置。",
         },
         "requestId": request.state.request_id,

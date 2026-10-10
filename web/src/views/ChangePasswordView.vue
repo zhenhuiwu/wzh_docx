@@ -92,7 +92,7 @@ function signOut() {
       <p class="brand">文档工作室</p>
       <h1>修改密码</h1>
       <p v-if="required" class="notice" role="status">
-        账号 {{ account }} 正在使用初始密码，修改后才能继续使用。
+        账号 {{ account }} 正在使用初始或管理员设定的临时密码，修改后才能继续使用。
       </p>
 
       <div class="field">
