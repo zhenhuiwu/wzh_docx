@@ -445,11 +445,13 @@ def _idempotent_file(
 
 
 def authorize_read(request: Request, file_id: str) -> None:
-    """下载/预览权限（审查 S9，用户已决定收紧）。
+    """下载/预览权限（审查 S9 收紧，待用户确认；auditor 新增可读项目文件同样待用户确认）。
 
     - 项目文件（project_id 非空、不属于知识库）：项目成员、system_admin 或 auditor（只读审计）可读；
       全局 files.read 不再跨项目放行。
     - 其余文件：仍要求 files.read，再由 guard_knowledge_file 按知识库/模板范围检查。
+    - 状态码（复审 S9）：与项目接口对非成员返回 404 的口径一致，凡是“不能读”一律 404“没有这个文件。”，
+      不存在的 id 也是 404，不再用 403/404 的差别泄露文件是否存在。
     """
 
     from app.identity import require_session
@@ -465,7 +467,7 @@ def authorize_read(request: Request, file_id: str) -> None:
             raise AppError(404, "NOT_FOUND", "没有这个文件。")
     if has_permission(actor.roles, "files.read"):
         return
-    raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
+    raise AppError(404, "NOT_FOUND", "没有这个文件。")
 
 
 def project_file_reader(roles) -> bool:

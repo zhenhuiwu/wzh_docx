@@ -165,7 +165,7 @@ def test_project_files_need_membership(document_context):  # noqa: F811
 
 
 def test_project_files_global_files_read_not_cross_project(document_context):  # noqa: F811
-    """审查 S9（用户决定收紧）：全局 files.read 不跨项目；system_admin、auditor 可读；非项目文件仍按 files.read。"""
+    """审查 S9（收紧，待用户确认）：全局 files.read 不跨项目；system_admin、auditor 可读；非项目文件仍按 files.read。"""
     client, _, project, _other, _, source = document_context
     migrate()
     media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -189,7 +189,27 @@ def test_project_files_global_files_read_not_cross_project(document_context):  #
         assert client.get(f"/api/v1/files/{project_file.id}/content").status_code == 200, account
     client.cookies.clear()
     _login(client, "s9-audit")
-    assert client.get(f"/api/v1/files/{loose.id}/content").status_code == 403  # auditor 没有 files.read
+    assert client.get(f"/api/v1/files/{loose.id}/content").status_code == 404  # auditor 没有 files.read：与非成员同为 404（复审 S9）
+
+
+def test_file_status_does_not_leak_existence(document_context):  # noqa: F811
+    """复审 S9：无全局角色的非成员访问真实项目文件与不存在的 id，状态码与文案完全相同（404）。"""
+    client, _, project, _other, _, source = document_context
+    migrate()
+    media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    project_file = store_bytes(name="项目原稿.docx", media_type=media, purpose="attachment", project_id=project, content=source)
+    loose = store_bytes(name="非项目模板.docx", media_type=media, purpose="template", project_id=None, content=source)
+    with connect() as connection:
+        create_user(account="s9-nobody", name="无角色", password=PASSWORD, roles=[], allow_no_roles=True, connection=connection)
+        connection.commit()
+    client.cookies.clear()
+    _login(client, "s9-nobody")
+    answers = []
+    for file_id in (project_file.id, loose.id, uuid4()):
+        for kind in ("content", "preview"):
+            response = client.get(f"/api/v1/files/{file_id}/{kind}")
+            answers.append((response.status_code, response.json()["error"]["code"], response.json()["error"]["message"]))
+    assert set(answers) == {(404, "NOT_FOUND", "没有这个文件。")}, answers
 
 
 def test_member_without_global_role_uploads_to_own_project_only(members):
