@@ -848,9 +848,40 @@ def s_sink_offline(ctx: Run, page):
     return {"latest": got[-60:]}
 
 
+@scenario("K6-L 刷新后再关页重开 无幽灵草稿条")
+def s_reload_close_reopen(ctx: Run, page):
+    """测试工程师 K6-L：续写存不上时刷新（从草稿补发成快照），再关页重开，都不能出现恢复条或锁定编辑。"""
+    doc_id = ctx.doc(page, "方案C刷新关页")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    ctx.wait_snapshot(doc_id, MARK)
+    page.route("**/conflicts/*/mine", lambda route: route.abort())
+    base.type_after(page, "第3段", "〔刷新前续写〕")
+    page.wait_for_timeout(4500)
+    page.unroute("**/conflicts/*/mine")
+    page.reload()
+    expect(page.locator(".paper-content")).to_be_visible(timeout=90000)
+    hit = ctx.wait_snapshot(doc_id, "〔刷新前续写〕", 30)
+    assert "〔刷新前续写〕" in ((hit.get("mineLatest") or {}).get("markdown") or ""), hit
+    page.wait_for_timeout(3000)
+    rows = {"reload_bar": page.get_by_test_id("draft-restore").count()}
+    assert page.locator(".paper-content").get_attribute("contenteditable") == "true", "刷新后编辑区被锁"
+    url = page.url
+    other = page.context.new_page()
+    page.close(run_before_unload=False)
+    other.goto(url)
+    expect(other.locator(".paper-content")).to_be_visible(timeout=90000)
+    other.wait_for_timeout(3000)
+    rows["reopen_bar"] = other.get_by_test_id("draft-restore").count()
+    editable = other.locator(".paper-content").get_attribute("contenteditable")
+    other.context.close()
+    assert not rows["reload_bar"] and not rows["reopen_bar"], f"出现了幽灵草稿条 {rows}"
+    assert editable == "true", "重开后编辑区被锁"
+    return rows
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline]
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen]
 
 
 def main() -> int:
