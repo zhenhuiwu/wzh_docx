@@ -15,7 +15,7 @@ import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedI
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
-import { frozenMark, looksLikePinyin, noteYields, substituteFrozen, type NoteKind } from "../frozenConflict";
+import { frozenMark, looksLikePinyin, nextSeq, noteYields, substituteFrozen, type NoteKind } from "../frozenConflict";
 import { flash } from "../flash";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
@@ -78,15 +78,6 @@ const refreshingEditor = ref(false);
 const refreshReason = ref("");
 // 终验 F-L1：打开文档后约 0.25 秒在确认其他标签与本机草稿，期间正文不可编辑——显示载入状态，不再无声丢键
 const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "") || (checkingDrafts.value && phase.value === "ready" ? "正在检查本机草稿，马上就能编辑…" : ""));
-// T-S2：加载提示延迟 350ms 出现（短刷新不闪一下）；消失时立即消失
-const refreshNoticeShown = ref("");
-let refreshNoticeTimer: number | undefined;
-watch(refreshNotice, (value) => {
-  window.clearTimeout(refreshNoticeTimer);
-  if (!value) { refreshNoticeShown.value = ""; return; }
-  if (refreshNoticeShown.value) { refreshNoticeShown.value = value; return; }
-  refreshNoticeTimer = window.setTimeout(() => { refreshNoticeShown.value = refreshNotice.value; }, 350);
-});
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
@@ -187,7 +178,7 @@ interface Frozen {
   /** 编辑区冻结区当前的文字 */
   mine: string;
   /** 服务器上最新一份快照的内容与时间 */
-  saved: string; savedAt: string | null; savedTab: string | null;
+  saved: string; savedAt: string | null; savedTab: string | null; snapshotId: string | null;
   failing: boolean;
   /** 冻结区第一块在编辑区顶层块里的位置（冻结区被整段删掉时据此放回占位） */
   index: number;
@@ -198,7 +189,9 @@ const frozen = ref<Record<string, Frozen>>({});
 const frozenOpen = computed(() => Object.values(frozen.value).filter(item => !item.resolved));
 const frozenUnsaved = computed(() => frozenOpen.value.filter(item => item.mine !== item.saved).length);
 let snapshotTimer: number | undefined;
-const snapshotKeys = new Map<string, { markdown: string; key: string }>();
+const snapshotKeys = new Map<string, { markdown: string; key: string; seq: number }>();
+// 审查点 2：快照序号（本标签单调递增）
+let snapshotSeq = 0;
 let snapshotFlight: Promise<void> | undefined;
 // 恢复本机草稿时编辑区显示的不是提交的内容，冲突不能冻结编辑区（按原流程重交可合并部分）
 let draftRestoring = false;
@@ -594,7 +587,7 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
     let all = true;
     for (const [n, edit] of draft.conflictsEdits.entries()) {
       try {
-        await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `draft-${draft.savedAt}-${n}-${draft.tabId}`.slice(0, 80), draft.tabId);
+        await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `draft-${draft.savedAt}-${n}-${draft.tabId}`.slice(0, 80), draft.tabId, draft.savedAt || undefined);
       } catch (error) {
         if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED"].includes(error.code))) all = false;
       }
@@ -1117,6 +1110,15 @@ function showEditorHtml(html: string, mapped?: boolean) {
 /** yieldToTyping：不锁编辑区，先在后台取版式，期间用户一输入就放弃重绘（返回 false）；
  *  stateApplied：调用方已把正文/修订号写好（保存合并路径），这里只负责重绘。 */
 /** T-S2：不锁编辑区的载入说明延迟 350ms 再出现（正常速度下不闪），以浮层显示，不推动编辑区。 */
+// T-S2：加载提示延迟 350ms 出现（短刷新不闪一下）；消失时立即消失
+const refreshNoticeShown = ref("");
+let refreshNoticeTimer: number | undefined;
+watch(refreshNotice, (value) => {
+  window.clearTimeout(refreshNoticeTimer);
+  if (!value) { refreshNoticeShown.value = ""; return; }
+  if (refreshNoticeShown.value) { refreshNoticeShown.value = value; return; }
+  refreshNoticeTimer = window.setTimeout(() => { refreshNoticeShown.value = refreshNotice.value; }, 350);
+});
 const floatingReason = ref("");
 function reasonLater(reason: string): () => void {
   const timer = window.setTimeout(() => { floatingReason.value = reason; }, 350);
@@ -2122,11 +2124,14 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   saving.value = true;
   window.clearTimeout(savingTimer);
   savingTimer = window.setTimeout(() => { if (saving.value) showSaving.value = true; }, 400);
-  const explicit = extra.baseMarkdown ?? null;
-  const base = extra.replay ? extra.replay.base : explicit !== null ? (baseRevision ?? record.revision) : (baseRevision ?? mergeBase ?? record.revision);
+  // 增量审查建议 5：同一内容的普通重试复用 pendingKey 时，连同当时的基准修订和显式基准一起复用（键相同、请求体也相同，
+  // 否则基准在重试之间变了会被服务器判为“同键不同内容”）
+  const reuse = extra.replay ?? (pendingKey && pendingKey.content === content ? pendingKey : null);
+  const explicit = reuse ? reuse.baseMarkdown ?? null : extra.baseMarkdown ?? null;
+  const base = reuse ? reuse.base : explicit !== null ? (baseRevision ?? record.revision) : (baseRevision ?? mergeBase ?? record.revision);
   // 与本次提交对应的编辑区文字：平移中为 domPair.dom，冲突重交为冲突时的编辑区文字，其余就是提交的正文
-  const dsend = extra.replay ? extra.replay.dsend : editor ? editor.dom : explicit === null && domPair && content === domPair.value ? domPair.dom : content;
-  const gen = extra.replay ? extra.replay.gen : editor ? editor.gen : fallbackGen;
+  const dsend = reuse ? reuse.dsend : editor ? editor.dom : explicit === null && domPair && content === domPair.value ? domPair.dom : content;
+  const gen = reuse ? reuse.gen : editor ? editor.gen : fallbackGen;
   if (!pendingKey || pendingKey.content !== content) {
     pendingKey = { content, key: crypto.randomUUID(), base, dsend, gen, editor, ...(explicit !== null ? { baseMarkdown: explicit } : {}) };
   }
@@ -2222,7 +2227,7 @@ function rebaseOnto(sent: string, serverText: string): boolean {
   if (value === null || !editor.value) return false;
   // 测试工程师 F-H3 的硬性不变量：基准只在“正文 = 服务器新版本 + 我未保存的修改”时前移。
   // 服务器新版本里相对 sent 新出现的段落（对方写进来的）必须原样留在平移结果里，否则不前移，交给显式基准由服务器合并。
-  if (!keepsServerChanges(sent, serverText, value)) return false;
+  if (!keepsServerChanges(sent, serverText, value, markdownContent.value)) return false;
   domPair = { dom: editorText(), value };
   markdownContent.value = value;
   persistLocalDraft();
@@ -2322,7 +2327,7 @@ function freezeConflicts(items: ConflictItem[]): string[] {
     frozen.value[key] = {
       key, conflictId: item.conflictId, itemIndex: item.itemIndex, name: conflictName(item), objectIds: (item.objectIds || []).map(String),
       deleted: theirsDeleted, theirs: theirsDeleted ? "" : item.theirs?.markdown || "", original, mine: blocksMarkdown(region), saved: latest,
-      savedAt: item.mineLatest?.savedAt ?? item.createdAt ?? null, savedTab: item.mineLatest?.tabId ?? null, failing: false,
+      savedAt: item.mineLatest?.savedAt ?? item.createdAt ?? null, savedTab: item.mineLatest?.tabId ?? null, snapshotId: item.mineLatest?.snapshotId ?? null, failing: false,
       index: Math.max(0, topLevel(root).indexOf(region[0])), resolved: false,
     };
     keys.push(key);
@@ -2348,13 +2353,16 @@ async function flushSnapshots(): Promise<void> {
     for (const entry of work) {
       const markdown = entry.mine;
       let sending = snapshotKeys.get(entry.key);
-      if (!sending || sending.markdown !== markdown) { sending = { markdown, key: crypto.randomUUID() }; snapshotKeys.set(entry.key, sending); }
+      // 同一份内容重发用同一个键和序号（幂等）；内容变了才换键、取更大的序号
+      if (!sending || sending.markdown !== markdown) { snapshotSeq = nextSeq(snapshotSeq); sending = { markdown, key: crypto.randomUUID(), seq: snapshotSeq }; snapshotKeys.set(entry.key, sending); }
       try {
-        const result = await saveConflictMine(record.id, entry.conflictId, entry.itemIndex, markdown, sending.key, browserTab || undefined);
+        const result = await saveConflictMine(record.id, entry.conflictId, entry.itemIndex, markdown, sending.key, browserTab || undefined, sending.seq);
         if (document.value !== record) return;
-        entry.saved = result.mineLatest.markdown;
+        // stale：本标签更新的一份已先到（乱序），服务器保留那份；这份内容视为已处理
+        entry.saved = result.stale ? markdown : result.mineLatest.markdown;
         entry.savedAt = result.mineLatest.savedAt;
         entry.savedTab = result.mineLatest.tabId;
+        entry.snapshotId = result.mineLatest.snapshotId ?? null;
         entry.failing = false;
         snapshotKeys.delete(entry.key);
       } catch (error) {
@@ -2363,6 +2371,12 @@ async function flushSnapshots(): Promise<void> {
           entry.resolved = true;
           entry.saved = entry.mine;
           void refreshConflicts();
+          continue;
+        }
+        if (error instanceof ApiError && error.code === "SNAPSHOT_LIMIT") {
+          // 副本份数到上限：内容仍在编辑区和本机草稿里，提示先处理冲突（不再自动重试）
+          entry.failing = true;
+          noteAction("这处冲突的副本已保存太多份，请先在冲突面板处理；你写的内容仍在编辑区和本机草稿里。", 10000);
           continue;
         }
         entry.failing = true;
@@ -2448,7 +2462,9 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const details = apiError.details || {};
       const appliable = typeof details.appliableMarkdown === "string" ? details.appliableMarkdown : null;
       const appliableBase = typeof details.appliableBaseRevision === "number" ? details.appliableBaseRevision : null;
-      const conflicts = Array.isArray(details.conflicts) ? details.conflicts as ConflictItem[] : [];
+      // 409 里的条目不带 conflictId（在 details 顶层），补上
+      const conflicts = (Array.isArray(details.conflicts) ? details.conflicts as ConflictItem[] : [])
+        .map(item => ({ ...item, conflictId: item.conflictId ?? (typeof details.conflictId === "string" ? details.conflictId : "") }));
       if (draftRestoring && typeof details.conflictId === "string") restoreConflictIds.value = [...new Set([...restoreConflictIds.value, details.conflictId])];
       // 方案 C：编辑区里的冲突段冻结（不重绘、不动光标与组字），正文这一段用服务器版本代替后按原基准重新提交其余部分
       const frozenKeys = fromEditor ? freezeConflicts(conflicts) : [];
@@ -2654,11 +2670,13 @@ async function beforeResolve(): Promise<boolean> {
   if (savePromise) await savePromise;
   if (editor.value && frozenOpen.value.length) editorText();
   await flushSnapshots();
+  // 让冲突面板拿到刚存上的快照 id（审查点 3：处理请求带上它）
+  await nextTick();
   return !isDirty.value && !frozenUnsaved.value;
 }
 /** 卡片上“我的版本”的实时内容（冻结区里的文字）与快照状态。 */
 const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry => [entry.key, {
-  markdown: entry.mine, saved: entry.mine === entry.saved, savedAt: entry.savedAt, failing: entry.failing, original: entry.original,
+  markdown: entry.mine, saved: entry.mine === entry.saved, savedAt: entry.savedAt, failing: entry.failing, original: entry.original, snapshotId: entry.snapshotId,
   otherTab: Boolean(entry.savedTab && entry.savedTab !== browserTab && entry.mine === entry.saved),
 }])));
 async function acceptResolution(result: ResolveResult) {

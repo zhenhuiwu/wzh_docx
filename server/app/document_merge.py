@@ -78,6 +78,50 @@ def _dropped_whitespace(seg_b: list[Block], seg_t: list[Block], seg_m: list[Bloc
     return int(_whitespace_only(seg_m, seg_b) and _raw(seg_m) != _raw(seg_t))
 
 
+SPLIT_SIMILARITY = 0.5
+
+
+def _similar(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return matcher.real_quick_ratio() >= SPLIT_SIMILARITY and matcher.quick_ratio() >= SPLIT_SIMILARITY \
+        and matcher.ratio() >= SPLIT_SIMILARITY
+
+
+def _ratio(a: str, b: str) -> float:
+    return 1.0 if a == b else difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _better(x: str, y: str, own_x: str, own_y: str) -> bool:
+    """x、y 足够相似，且比 y（或 x）与自己按位置配对的那块更像：说明按位置配对错位了。"""
+    score = _ratio(x, y)
+    return score >= SPLIT_SIMILARITY and score > _ratio(own_x, own_y)
+
+
+def _pairable(ops, a_blocks, b_blocks):
+    """审查 N1：块数相同的替换按位置逐块拆开前先核对配对是不是同一段：每一对要么相似（相似度 ≥ 0.5），
+    要么两块都不像区间里的其他块（原位整段改写）。否则（如删 A、改 B、插 X 得到的 [A,B]→[B',X]，B' 像 B）
+    改记为 replace_whole，整块作为一个 hunk，不按位置错配。"""
+    out = []
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "replace" and i2 - i1 == j2 - j1 > 1:
+            size = i2 - i1
+            a = [block.body for block in a_blocks[i1:i2]]
+            b = [block.body for block in b_blocks[j1:j2]]
+            for k in range(size):
+                if _similar(a[k], b[k]):
+                    continue
+                # 不相似的一对（整段改写）只有在两块都不像本区间里别的块时才算“同一位置的改写”；
+                # 像别处的块（N1：[A,B]→[B',X] 里 B' 像 B）说明发生了错位，按位置配对会配错
+                if any(_better(a[other], b[k], a[k], b[k]) or _better(a[k], b[other], a[other], b[other])
+                       for other in range(size) if other != k):
+                    tag = "replace_whole"
+                    break
+        out.append((tag, i1, i2, j1, j2))
+    return out
+
+
 def _boundaries(ops, n: int, m: int) -> tuple[dict[int, int], dict[int, int]]:
     """start[b]：base 位置 b 在另一侧对应的下标（位于 b 处插入之后）；end[b]：位于插入之前。"""
     start: dict[int, int] = {}
@@ -155,8 +199,8 @@ def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool =
     if not theirs_changed:
         return MergeResult(mine_prefix, [Entry(block, "m", index) for index, block in enumerate(mine)])
     kb, kt, km = [_key(b) for b in base], [_key(b) for b in theirs], [_key(b) for b in mine]
-    ops_t = difflib.SequenceMatcher(None, kb, kt, autojunk=False).get_opcodes()
-    ops_m = difflib.SequenceMatcher(None, kb, km, autojunk=False).get_opcodes()
+    ops_t = _pairable(difflib.SequenceMatcher(None, kb, kt, autojunk=False).get_opcodes(), base, theirs)
+    ops_m = _pairable(difflib.SequenceMatcher(None, kb, km, autojunk=False).get_opcodes(), base, mine)
     start_t, end_t = _boundaries(ops_t, len(base), len(theirs))
     start_m, end_m = _boundaries(ops_m, len(base), len(mine))
     hunks = sorted([(b1, b2, "t") for b1, b2 in _hunks(ops_t)] + [(b1, b2, "m") for b1, b2 in _hunks(ops_m)],

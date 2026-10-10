@@ -101,10 +101,32 @@ describe("测试工程师 F-H3：基准前移的不变量（keepsServerChanges�
   it("对方的修改都在（另一段 / 表格另一行）时允许前移", () => {
     const other = "# T\n\n第1段（对方改）。\n\n第3段：原始内容 3。【丙01\n\n第7段。";
     const value = rebaseBlocks(sent, sent.replace("【丙01", "【丙0123】"), other)!;
-    expect(keepsServerChanges(sent, other, value)).toBe(true);
+    expect(keepsServerChanges(sent, other, value, sent.replace("【丙01", "【丙0123】"))).toBe(true);
     const table = "| a | b |\n|---|---|\n| 1【P1】 | 2 |\n| 3 | 4 |";
     const tableServer = table.replace("| 4 |", "| 4改 |");
     const tableValue = rebaseBlocks(table, table.replace("【P1】", "【P1】【P2】"), tableServer)!;
-    expect(keepsServerChanges(table, tableServer, tableValue)).toBe(true);
+    expect(keepsServerChanges(table, tableServer, tableValue, table.replace("【P1】", "【P1】【P2】"))).toBe(true);
+  });
+  it("增量审查建议 4：多重集合——对方新加的同文字行（如第二个“无。”）被吞掉时不允许前移", () => {
+    const sent = "甲。\n\n无。\n\n乙。";
+    const server = "甲。\n\n无。\n\n无。\n\n乙。";
+    const mine = "甲。【我】\n\n无。\n\n乙。";
+    expect(keepsServerChanges(sent, server, "甲。【我】\n\n无。\n\n乙。", mine)).toBe(false);
+    expect(keepsServerChanges(sent, server, "甲。【我】\n\n无。\n\n无。\n\n乙。", mine)).toBe(true);
+  });
+});
+
+describe("增量审查建议 3：同文字块平移要求邻居锚点", () => {
+  it("S=[无, 无(改), C] → T=[无, C改, 无*]：不平移（交显式基准）", () => {
+    const sent = "无。\n\n无。\n\nC。";
+    const mine = "无。\n\n无。【我】\n\nC。";
+    const server = "无。\n\nC改。\n\n无。";
+    expect(rebaseBlocks(sent, mine, server)).toBeNull();
+  });
+  it("同文字块两侧有唯一邻段锚定时照常平移", () => {
+    const sent = "甲。\n\n无。\n\n乙。\n\n无。\n\n丙。";
+    const mine = "甲。\n\n无。【我】\n\n乙。\n\n无。\n\n丙。";
+    const server = "甲。\n\n无。\n\n乙（改）。\n\n无。\n\n丙。";
+    expect(rebaseBlocks(sent, mine, server)).toBe("甲。\n\n无。【我】\n\n乙（改）。\n\n无。\n\n丙。");
   });
 });

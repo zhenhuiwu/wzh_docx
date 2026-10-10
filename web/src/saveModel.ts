@@ -35,7 +35,7 @@ export function classifySaveError(error: ErrorLike): FailureKind {
   const code = error.code ?? "";
   if (status === 0 || status === 502 || status === 504 || (status === 503 && code !== "AI_UNAVAILABLE")) return "retry";
   if (status === 409 && code === "OBJECT_CONFLICT") return "conflict";
-  if (status === 409 && code === "BASE_REVISION_UNAVAILABLE") return "blocked";
+  if (status === 409 && (code === "BASE_REVISION_UNAVAILABLE" || code === "BASE_MISMATCH")) return "blocked";
   if (status === 409) return "stale";
   if (status === 422 && code === "IDEMPOTENCY_KEY_REUSED") return "rekey";
   if (status === 403 && code !== "PASSWORD_CHANGE_REQUIRED") return "readonly";

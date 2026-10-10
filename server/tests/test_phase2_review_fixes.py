@@ -458,3 +458,78 @@ def test_explicit_base_requires_merge(team):
     r = client.patch(f"/api/v1/documents/{did}/content", headers=_as(client, "editor"),
                      json={"expectedRevision": 1, "markdownContent": TEXT, "baseMarkdown": TEXT})
     assert r.status_code == 422
+
+
+def test_equal_count_replace_not_split_when_blocks_differ():
+    """增量审查 N1（/tmp/p8-shift.py）：[A,B]→[B（我改）,X] 块数相同但不是同一段，不能按位置拆成 A→B'、B→X。
+    应只有一处完整冲突，正文里 B 只出现一次（对方的版本），不出现重复段。"""
+    from app.document_merge import merge3
+    base = "段A：甲。\n\n段B：乙。\n\n段C：丙。\n\n段D：丁。"
+    theirs = base.replace("段B：乙。", "段B：乙（张改）。")
+    mine = base.replace("段A：甲。\n\n段B：乙。", "段B：乙（我改）。\n\n新段X。")
+    result = merge3(base, theirs, mine)
+    assert len(result.conflicts) == 1, result.conflicts
+    blocks = result.markdown.split("\n\n")
+    assert sum("段B" in block for block in blocks) == 1, blocks
+    assert "段B：乙（张改）。" in blocks and "段B：乙（我改）。" not in blocks
+    # 75fde3f 要改进的两种情况仍逐块处理：同时改相邻两段（只有一段双方都改）
+    mine2 = base.replace("段A：甲。", "段A：甲【我】。").replace("段B：乙。", "段B：乙【我】。")
+    result2 = merge3(base, theirs, mine2)
+    assert len(result2.conflicts) == 1 and "段A：甲【我】。" in result2.markdown
+
+
+def test_shift_replace_http_single_structure_conflict(team):
+    """N1 的 HTTP 复现：409 只有一处冲突，mine/theirs 是同一段区间（不把“新段X”配给“段B（张改）”），可合并部分不重复。"""
+    client, did, _users = team
+    text = "段A：甲。\n\n段B：乙。\n\n段C：丙。\n\n段D：丁。"
+    start = current(client, did)
+    assert save(client, did, start["revision"], text, _as(client, "editor")).status_code == 200
+    rev = current(client, did)["revision"]
+    assert save(client, did, rev, text.replace("段B：乙。", "段B：乙（张改）。"), _as(client, "editor2")).status_code == 200
+    mine = text.replace("段A：甲。\n\n段B：乙。", "段B：乙（我改）。\n\n新段X。")
+    r = save(client, did, rev, mine, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    details = r.json()["error"]["details"]
+    assert len(details["conflicts"]) == 1, details["conflicts"]
+    item = details["conflicts"][0]
+    assert "新段X" in item["mine"]["markdown"] and "段B：乙（我改）" in item["mine"]["markdown"]
+    assert "段B：乙（张改）" in item["theirs"]["markdown"]
+    appliable = details.get("appliableMarkdown") or ""
+    assert appliable.count("段B") <= 1, appliable
+
+
+def test_explicit_base_empty_or_unrelated_is_409_not_silent_merge(team):
+    """增量审查建议 1(b)（/tmp/p8-basemd.py）：空基准或与 expectedRevision 那一版几乎无共同段落 → 409 BASE_MISMATCH，正文不变。"""
+    client, did, _users = team
+    before = current(client, did)
+    mine = TEXT.replace("第三段。", "第三段【我改】。")
+    for base_md in ("", "完全无关的一段。\n\n另一段。\n\n第三段。\n\n第四段。"):
+        r = _save_with_base(client, did, before["revision"], mine, base_md, _as(client, "editor"))
+        assert r.status_code == 409 and r.json()["error"]["code"] == "BASE_MISMATCH", r.text
+    assert current(client, did)["markdownContent"] == before["markdownContent"]
+    # 正常的显式基准（只差一处）仍照常合并
+    r = _save_with_base(client, did, before["revision"], mine, TEXT.replace("引用段。", "引用段（编辑区没显示的旧样子）。"),
+                        _as(client, "editor"))
+    assert r.status_code == 200, r.text
+
+
+def test_content_and_base_size_limits(team):
+    client, did, _users = team
+    big = "长" * 4_000_001
+    r = _save_with_base(client, did, 1, TEXT, big, _as(client, "editor"))
+    assert r.status_code == 422, r.status_code
+    r = client.patch(f"/api/v1/documents/{did}/content", headers=_as(client, "editor"),
+                     json={"expectedRevision": 1, "markdownContent": big, "allowMerge": True})
+    assert r.status_code == 422, r.status_code
+
+
+def test_explicit_base_does_not_dedupe_when_others_changed(team):
+    """增量审查建议 1(c)：显式基准与正文之间有别人的新增段（合并进来但编辑区没显示），我又打了相同文字的一段——
+    不能按“没人改过”去重吞掉我的这段。"""
+    client, did, _users = team
+    assert save(client, did, 1, TEXT.replace("第二段。", "第二段。\n\n同文字的新段。"), _as(client, "editor2")).status_code == 200
+    rev = current(client, did)["revision"]
+    mine = TEXT.replace("第二段。", "第二段。\n\n同文字的新段。").replace("引用段。", "引用段【我】。")
+    r = _save_with_base(client, did, rev, mine, TEXT, _as(client, "editor"))
+    # 不静默去重：要么两段都在，要么列为冲突让人确认
+    assert r.status_code == 409 or current(client, did)["markdownContent"].count("同文字的新段。") == 2, r.text

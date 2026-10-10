@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 import sqlite3
 import threading
 import weakref
@@ -204,8 +205,8 @@ def _latest_snapshots(connection, conflict_id) -> dict[int, dict]:
     rows = connection.execute(
         "SELECT id, item_index, markdown, created_at, tab_id FROM document_conflict_mine_snapshots WHERE conflict_id=%s "
         "ORDER BY rowid", (str(conflict_id),)).fetchall()
-    return {int(row["item_index"]): {"id": str(row["id"]), "markdown": row["markdown"], "savedAt": str(row["created_at"]),
-                                     "tabId": row["tab_id"]} for row in rows}
+    return {int(row["item_index"]): {"id": str(row["id"]), "markdown": row["markdown"], "savedAt": format_timestamp(row["created_at"]),
+                                     "tabId": None if row["tab_id"] is None else str(row["tab_id"])} for row in rows}
 
 
 def _mine_latest(item: dict, snapshot: dict | None) -> dict:
@@ -311,7 +312,7 @@ def store_conflict(connection, *, document_id: UUID, actor: UUID, base_revision:
 # ---------------------------------------------------------------- 方案 C：冲突段冻结 + “我的版本”快照
 
 def append_snapshot(connection, *, conflict_id, item_index: int, actor, markdown: str, key: str,
-                    tab_id: str | None = None, source: str = "editor") -> dict:
+                    tab_id: str | None = None, source: str = "editor", seq: int | None = None) -> dict:
     """只追加一份快照（须在写事务内调用）。同键同内容返回已有那份；同键不同内容 422；与最新一份相同则不重复写。"""
     existing = connection.execute(
         "SELECT id, item_index, markdown, created_at, tab_id FROM document_conflict_mine_snapshots "
@@ -319,18 +320,19 @@ def append_snapshot(connection, *, conflict_id, item_index: int, actor, markdown
     if existing is not None:
         if int(existing["item_index"]) != item_index or existing["markdown"] != markdown:
             raise AppError(422, "IDEMPOTENCY_KEY_REUSED", "保存键已用于另一份内容，请重新保存。")
-        return {"id": str(existing["id"]), "markdown": existing["markdown"], "savedAt": str(existing["created_at"]),
-                "tabId": existing["tab_id"], "replayed": True}
+        return {"id": str(existing["id"]), "markdown": existing["markdown"], "savedAt": format_timestamp(existing["created_at"]),
+                "tabId": None if existing["tab_id"] is None else str(existing["tab_id"]), "replayed": True}
     latest = _latest_snapshots(connection, conflict_id).get(item_index)
-    if latest is not None and latest["markdown"] == markdown:
+    if latest is not None and latest["markdown"] == markdown and seq is None:
+        # 带序号的照样追加一行（内容相同）：记下这个序号，之后乱序到达的更小序号才能被识别为旧快照
         return {**latest, "unchanged": True}
     snapshot_id = str(uuid4())
     connection.execute(
         """INSERT INTO document_conflict_mine_snapshots (id, conflict_id, item_index, actor_id, markdown, client_save_key,
-               tab_id, source) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-        (snapshot_id, str(conflict_id), item_index, str(actor), markdown, key, tab_id, source))
+               tab_id, source, seq) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (snapshot_id, str(conflict_id), item_index, str(actor), markdown, key, tab_id, source, seq))
     row = connection.execute("SELECT created_at FROM document_conflict_mine_snapshots WHERE id=%s", (snapshot_id,)).fetchone()
-    return {"id": snapshot_id, "markdown": markdown, "savedAt": str(row["created_at"]), "tabId": tab_id}
+    return {"id": snapshot_id, "markdown": markdown, "savedAt": format_timestamp(row["created_at"]), "tabId": tab_id}
 
 
 def _frozen_matches(connection, document_id: UUID, actor, items: list[dict]) -> dict[int, tuple[str, int]]:
@@ -368,6 +370,31 @@ def _frozen_mine(item: dict) -> str:
 
 # ---------------------------------------------------------------- 整篇合并提交
 
+BASE_MISMATCH_MIN_BLOCKS = 4
+BASE_MISMATCH_MIN_SHARE = 0.3
+
+
+def _check_explicit_base(connection, document_id: UUID, base_revision: int, base_markdown: str) -> None:
+    """增量审查建议 1(b)：显式基准与 expectedRevision 那一版明显对不上（空基准、或几乎没有共同段落）时 409，
+    不静默按它合并（前端出错时会把整段当成新增，造成重复）。基准是“上次保存对应的编辑区文字”，与该版只差
+    合并进来但没显示的少量他人修改，正常情况下共同段落占绝大多数。"""
+    version = _version_markdown(connection, document_id, base_revision)
+    if version is None or base_markdown == version:
+        return
+    _, version_blocks = split(version)
+    _, base_blocks = split(base_markdown)
+    if not version_blocks:
+        return
+    mismatch = not base_blocks
+    if not mismatch and len(version_blocks) >= BASE_MISMATCH_MIN_BLOCKS:
+        pool = Counter(block.body for block in version_blocks)
+        shared = sum((pool & Counter(block.body for block in base_blocks)).values())
+        mismatch = shared < BASE_MISMATCH_MIN_SHARE * len(version_blocks)
+    if mismatch:
+        raise AppError(409, "BASE_MISMATCH", "保存所依据的内容与服务器上的版本对不上，已停止保存，请刷新后再试（你的修改保留在本机）。",
+                       details={"baseRevision": base_revision})
+
+
 def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: int, mine_md: str, kind: str,
                  client_save_key: str | None, check_word: Callable[[str], None], source: str = "content",
                  extra: dict | None = None, after_write: Callable | None = None,
@@ -384,6 +411,8 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
     if replayed is not None:
         return replayed
     base_md = base_markdown if base_markdown is not None else _version_markdown(connection, document_id, base_revision)
+    if base_markdown is not None:
+        _check_explicit_base(connection, document_id, base_revision, base_markdown)
     for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
         guard = document_lock(document_id) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
         with guard:
@@ -406,7 +435,11 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                     """SELECT COUNT(*) AS n FROM document_changes WHERE document_id=%s AND doc_revision > %s
                        AND kind NOT IN ('backfill','realign') AND (actor_id IS NULL OR actor_id <> %s)""",
                     (document_id, base_revision, actor)).fetchone()["n"]
-                result = merge3(base_md, theirs, mine_md, dedupe_inserts=others == 0)
+                # 增量审查建议 2：带显式基准时 others（从 base_revision 起算）恒为 0，不能据此去重——
+                # 显式基准与正文的差异里可能有别人的修改（合并进来但编辑区没显示），按修订差判断：只有修订没变才去重
+                dedupe = others == 0 if base_markdown is None else revision == base_revision and base_markdown == _version_markdown(
+                    connection, document_id, base_revision)
+                result = merge3(base_md, theirs, mine_md, dedupe_inserts=dedupe)
                 if result.conflicts or result.prefix_conflict:
                     if not result.conflicts:
                         result.conflicts = []
@@ -635,6 +668,8 @@ class ResolveItem(BaseModel):
     theirsRevision: int | None = None
     markdown: str | None = None
     placement: Placement | None = None
+    # 审查点 3：客户端看到（并据此确认）的“我的版本”快照 id；""＝没有快照（原始版本）。与服务器最新一份不一致时 409
+    mineSnapshotId: str | None = Field(default=None, max_length=64)
 
 
 class ResolveBody(BaseModel):
@@ -927,9 +962,18 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
                 snap = connection.execute("SELECT revision, markdown_content FROM documents WHERE id=%s", (did,)).fetchone()
                 revision = int(snap["revision"])
                 payload = json.loads(conflict["payload_json"])
+                used = _latest_snapshots(connection, conflict["id"])
+                for request_item in body.items:
+                    seen = request_item.mineSnapshotId
+                    now_id = (used.get(request_item.itemIndex) or {}).get("id") or ""
+                    if seen is not None and seen != now_id:
+                        raise AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
+                            "conflictId": str(conflict["id"]), "itemIndex": request_item.itemIndex,
+                            "mineLatest": _mine_latest(next((entry for entry in payload["conflicts"]
+                                                             if int(entry["itemIndex"]) == request_item.itemIndex), {}),
+                                                       used.get(request_item.itemIndex))})
                 try:
-                    markdown, results, writes = _apply_actions(connection, did, payload, body.items,
-                                                               _latest_snapshots(connection, conflict["id"]))
+                    markdown, results, writes = _apply_actions(connection, did, payload, body.items, used)
                 except _Reconflict as again:
                     _refresh_attempt(connection, conflict, payload, again.indexes)
                     error = conflict_error(connection, conflict["id"])
@@ -950,6 +994,10 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
                             "AND item_index IN (SELECT value FROM json_each(%s))",
                             (conflict["id"], json.dumps(indexes))).fetchone()["n"]
                         if still_open != len(indexes):
+                            raise _Retry()
+                        # 审查点 3：处理用的快照必须仍是最新一份（与追加快照在同一把写锁下比较；变了就按新快照重来）
+                        fresh = _latest_snapshots(connection, conflict["id"])
+                        if any((fresh.get(index) or {}).get("id") != (used.get(index) or {}).get("id") for index in indexes):
                             raise _Retry()
                         change_id = None
                         if writes and markdown != snap["markdown_content"]:
@@ -980,12 +1028,17 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
         raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
 
 
+MAX_SNAPSHOTS_PER_ITEM = 500
+
+
 class MineSnapshotBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     itemIndex: int = Field(ge=0)
     markdown: str = Field(max_length=2_000_000)
     clientSaveKey: str = Field(min_length=8, max_length=80)
     tabId: str | None = Field(default=None, max_length=80)
+    # 审查点 2：同一标签页内单调递增的序号；同标签已存过更大（或相同）序号时，这份是乱序到达的旧快照，不写入
+    seq: int | None = Field(default=None, ge=1, le=2**53)
 
 
 @router.post("/documents/{document_id}/conflicts/{conflict_id}/mine")
@@ -1009,13 +1062,25 @@ def save_mine_snapshot(request: Request, document_id: str, conflict_id: str, bod
             if item["status"] != "open" and replayed is None:
                 raise AppError(409, "CONFLICT_ALREADY_RESOLVED", "这处冲突已经处理过。", details={"items": [
                     {"itemIndex": body.itemIndex, "status": item["status"], "action": item["action"]}]})
-            snapshot = append_snapshot(connection, conflict_id=conflict["id"], item_index=body.itemIndex,
-                                       actor=principal.user_id, markdown=body.markdown, key=body.clientSaveKey,
-                                       tab_id=body.tabId)
+            stale = replayed is None and body.seq is not None and body.tabId is not None and connection.execute(
+                "SELECT 1 FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s AND tab_id=%s AND seq>=%s",
+                (str(conflict["id"]), body.itemIndex, body.tabId, body.seq)).fetchone() is not None
+            if stale:
+                snapshot = {**(_latest_snapshots(connection, conflict["id"]).get(body.itemIndex) or {}), "stale": True}
+            else:
+                if replayed is None and connection.execute(
+                        "SELECT COUNT(*) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s",
+                        (str(conflict["id"]), body.itemIndex)).fetchone()["n"] >= MAX_SNAPSHOTS_PER_ITEM:
+                    raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已保存太多份，请先在冲突面板处理。",
+                                   details={"itemIndex": body.itemIndex})
+                snapshot = append_snapshot(connection, conflict_id=conflict["id"], item_index=body.itemIndex,
+                                           actor=principal.user_id, markdown=body.markdown, key=body.clientSaveKey,
+                                           tab_id=body.tabId, seq=body.seq)
         return {"data": {"conflictId": str(conflict["id"]), "itemIndex": body.itemIndex,
-                         "mineLatest": {"markdown": snapshot["markdown"], "savedAt": snapshot["savedAt"],
-                                        "tabId": snapshot["tabId"], "snapshotId": snapshot["id"]},
-                         "replayed": bool(snapshot.get("replayed")), "unchanged": bool(snapshot.get("unchanged"))},
+                         "mineLatest": {"markdown": snapshot.get("markdown"), "savedAt": snapshot.get("savedAt"),
+                                        "tabId": snapshot.get("tabId"), "snapshotId": snapshot.get("id")},
+                         "replayed": bool(snapshot.get("replayed")), "unchanged": bool(snapshot.get("unchanged")),
+                         "stale": bool(snapshot.get("stale"))},
                 "requestId": request.state.request_id}
 
 

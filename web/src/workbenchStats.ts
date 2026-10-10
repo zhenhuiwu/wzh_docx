@@ -215,7 +215,17 @@ function rebaseSeq(s: string[], m: string[], t: string[], inner: boolean): strin
   const cs = new Map<string, number>(), ct = new Map<string, number>(), at = new Map<string, number>();
   for (const x of s) cs.set(x, (cs.get(x) ?? 0) + 1);
   t.forEach((x, i) => { ct.set(x, (ct.get(x) ?? 0) + 1); at.set(x, i); });
-  const direct = (k: number) => (cs.get(s[k]) === 1 && ct.get(s[k]) === 1 ? at.get(s[k])! : mapBlockIndex(s, t, k, KEY_LIMIT, 40_000));
+  const unique = (k: number) => (k >= 0 && k < s.length && cs.get(s[k]) === 1 && ct.get(s[k]) === 1 ? at.get(s[k])! : -2);
+  // 增量审查建议 3：同文字块（如“无。”）按序列对齐找到的位置还要有同一侧的邻居锚点（相邻块文字唯一且正好挨着，
+  // 或文档首尾）；没有锚点就不平移（返回 -1），交给显式基准由服务器合并——否则 S=[无,无(改),C]→T=[无,C改,无*] 会错位
+  const direct = (k: number) => {
+    const only = unique(k);
+    if (only !== -2) return only;
+    const j = mapBlockIndex(s, t, k, KEY_LIMIT, 40_000);
+    if (j < 0) return j;
+    const anchored = (k === 0 && j === 0) || (k === s.length - 1 && j === t.length - 1) || unique(k - 1) === j - 1 || unique(k + 1) === j + 1;
+    return anchored ? j : -1;
+  };
   // 重复文字（如“无。”）定位不了时，借相邻段：左右两邻都能确定、在 t 里正好夹着一段且就是这段原文
   const map = (k: number) => {
     const j = direct(k);
@@ -277,8 +287,18 @@ export function rebaseBlocks(sent: string, mine: string, server: string): string
  * sent 是那次提交的正文，serverText 是服务器返回的新正文，value 是平移后的正文：serverText 里相对 sent 新出现的每一行
  * （对方写进来的；按行比较，列表/表格里对方改的那一行同样要在）都必须原样出现在 value 里。
  */
-export function keepsServerChanges(sent: string, serverText: string, value: string): boolean {
-  const before = new Set(sent.split("\n"));
-  const after = new Set(value.split("\n"));
-  return serverText.split("\n").every(line => before.has(line) || after.has(line));
+export function keepsServerChanges(sent: string, serverText: string, value: string, mine: string = sent): boolean {
+  // 增量审查建议 4：按多重集合比较——服务器正文里每一行出现几次，平移结果里就得有几次，
+  // 只扣掉我自己删掉/改掉的那几次（sent 比 mine 多出来的）。集合比较在同文字行（如“无。”）上形同虚设。
+  const count = (text: string) => {
+    const out = new Map<string, number>();
+    for (const line of text.split("\n")) out.set(line, (out.get(line) ?? 0) + 1);
+    return out;
+  };
+  const cs = count(sent), cm = count(mine), cv = count(value), ct = count(serverText);
+  for (const [line, n] of ct) {
+    const removed = Math.max(0, (cs.get(line) ?? 0) - (cm.get(line) ?? 0));
+    if ((cv.get(line) ?? 0) < n - removed) return false;
+  }
+  return true;
 }

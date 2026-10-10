@@ -105,7 +105,6 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
   if (choice.action === "keep_mine" || choice.action === "manual" || choice.action === "keep_both") request.theirsRevision = item.theirs?.revision ?? null;
   if (choice.action === "manual") request.markdown = markdown ?? "";
   if (choice.placement) request.placement = { mode: choice.placement };
-  const key = keys.keyFor(JSON.stringify([item.conflictId, request]));
   busyKey.value = id(item);
   busyLabel.value = choice.label;
   cardError.value = { ...cardError.value, [id(item)]: "" };
@@ -114,6 +113,9 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
       cardError.value = { ...cardError.value, [id(item)]: "正文还有修改没保存成功，请先保存后再处理冲突。" };
       return;
     }
+    // 审查点 3：带上我看到的“我的版本”快照（处理前已把编辑区里的续写存上）；服务器上不是这一份时 409，不用旧快照处理
+    if (tab.value === "mine") request.mineSnapshotId = (live(item) ? live(item)!.snapshotId : item.mineLatest?.snapshotId) ?? "";
+    const key = keys.keyFor(JSON.stringify([item.conflictId, request]));
     const result = await resolveConflict(props.documentId, item.conflictId, key, props.revision, [request]);
     keys.done();
     const fallback = result.items.some(entry => entry.placementFallback);
@@ -123,6 +125,12 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     await load();
   } catch (error) {
     const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", "暂时不能连接服务。");
+    if (apiError.code === "MINE_SNAPSHOT_CHANGED") {
+      keys.done();
+      await load();
+      cardNotice.value = { ...cardNotice.value, [id(item)]: "你的版本刚有更新（可能来自另一个标签页），请确认最新内容后再处理。" };
+      return;
+    }
     switch (classifyResolveError(apiError)) {
       case "archive":
         keys.done();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { continuedChars, frozenMark, looksLikePinyin, noteYields, substituteFrozen } from "./frozenConflict";
+import { continuedChars, frozenMark, looksLikePinyin, nextSeq, noteYields, substituteFrozen } from "./frozenConflict";
 
 describe("frozenConflict", () => {
   it("substitutes frozen placeholders with the server version", () => {
@@ -13,6 +13,7 @@ describe("frozenConflict", () => {
   it("counts continued characters", () => {
     expect(continuedChars("我的前半句", "我的前半句，后半句接着写完。")).toBe(9);
     expect(continuedChars("一样", "一样")).toBe(0);
+    expect(continuedChars("段。【丙012", "段。【丙0123456789ABCDEFGHIJ丁】")).toBe(19);
   });
   it("detects pinyin typed after losing focus", () => {
     expect(looksLikePinyin("wojiezhexie", true)).toBe(true);
@@ -25,5 +26,10 @@ describe("frozenConflict", () => {
     expect(noteYields("others", true, "")).toBe(false);
     expect(noteYields("caret", false, "others")).toBe(false);
     expect(noteYields("caret", true, "caret")).toBe(false);
+  });
+  it("快照序号单调递增（审查点 2）", () => {
+    expect(nextSeq(0, 1000)).toBe(1000);
+    expect(nextSeq(1000, 1000)).toBe(1001);
+    expect(nextSeq(5000, 1000)).toBe(5001);
   });
 });
