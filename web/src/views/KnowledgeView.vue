@@ -9,6 +9,7 @@ import { ApiError } from "../api/client";
 import { getCurrentSession } from "../api/identity";
 import { createKnowledgeBase, listKnowledgeBases, type KnowledgeBase } from "../api/knowledge";
 import { listProjects, type ProjectRecord } from "../api/projects";
+import { useFieldErrors } from "../fieldErrors";
 
 const router = useRouter();
 const items = ref<KnowledgeBase[]>([]);
@@ -25,6 +26,7 @@ const scope = ref<"organization" | "project">("project");
 const projectId = ref("");
 const ownerId = ref("");
 const formError = ref("");
+const fields = useFieldErrors<"name" | "project">("kb");
 
 async function load() {
   phase.value = "loading";
@@ -41,14 +43,10 @@ async function load() {
 
 async function submitCreate() {
   formError.value = "";
-  if (!name.value.trim()) {
-    formError.value = "请填写名称";
-    return;
-  }
-  if (scope.value === "project" && !projectId.value) {
-    formError.value = "项目知识库必须选择项目";
-    return;
-  }
+  if (await fields.report({
+    name: name.value.trim() ? "" : "请填写名称。",
+    project: scope.value === "project" && !projectId.value ? "项目知识库必须选择项目。" : "",
+  })) return;
   submitting.value = true;
   try {
     const created = await createKnowledgeBase({
@@ -76,7 +74,7 @@ watch(creating, async (open) => {
   if (!open && dialog.open) dialog.close();
 });
 function dismissCreate() {
-  if (!submitting.value) { creating.value = false; formError.value = ""; }
+  if (!submitting.value) { creating.value = false; formError.value = ""; fields.clear(); }
 }
 
 onMounted(async () => {
@@ -134,7 +132,7 @@ onMounted(async () => {
       <form v-if="creating" class="create" novalidate @submit.prevent="submitCreate">
         <div class="dialog-head"><h2 id="create-kb-title">新建知识库</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="submitting" @click="dismissCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <div class="dialog-fields">
-          <div class="field span-2"><label for="kb-name" class="required">名称</label><input id="kb-name" ref="nameInput" v-model="name" class="control" type="text" :disabled="submitting" /></div>
+          <div class="field span-2"><label for="kb-name" class="required">名称</label><input id="kb-name" ref="nameInput" v-model="name" class="control" v-bind="fields.invalid('name')" type="text" :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></div>
           <div class="field span-2"><label for="kb-summary">说明</label><input id="kb-summary" v-model="summary" class="control" type="text" :disabled="submitting" /></div>
           <div class="field">
             <label for="kb-scope" class="required">归属</label>
@@ -145,10 +143,11 @@ onMounted(async () => {
           </div>
           <div v-if="scope === 'project'" class="field">
             <label for="kb-project" class="required">项目</label>
-            <select id="kb-project" v-model="projectId" class="control" :disabled="submitting">
+            <select id="kb-project" v-model="projectId" class="control" v-bind="fields.invalid('project')" :disabled="submitting" @change="fields.clear('project')">
               <option value="">请选择</option>
               <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
             </select>
+            <span v-if="fields.errors.value.project" :id="fields.errorId('project')" class="field-error" role="alert">{{ fields.errors.value.project }}</span>
           </div>
         </div>
         <p v-if="formError" class="form-alert dialog-status" role="alert">{{ formError }}</p>

@@ -8,6 +8,7 @@ const canManage = computed(() => hasPermission(readSession(), "templates.manage"
 import { formatDateTime } from "../format";
 import { ApiError } from "../api/client";
 import { createTemplate, listTemplates, templateStatusLabel, type TemplateRecord } from "../api/templates";
+import { useFieldErrors } from "../fieldErrors";
 
 const page = ref(1);
 const nameQuery = ref("");
@@ -22,6 +23,7 @@ const name = ref("");
 const category = ref("");
 const description = ref("");
 const formError = ref("");
+const fields = useFieldErrors<"name" | "category">("tpl");
 const pageCount = () => Math.max(1, Math.ceil(total.value / 20));
 
 function messageOf(error: unknown) {
@@ -54,10 +56,10 @@ function resetQuery() {
 
 async function submitCreate() {
   formError.value = "";
-  if (!name.value.trim() || !category.value.trim()) {
-    formError.value = "请填写模板名称和分类";
-    return;
-  }
+  if (await fields.report({
+    name: name.value.trim() ? "" : "请填写模板名称。",
+    category: category.value.trim() ? "" : "请填写分类。",
+  })) return;
   submitting.value = true;
   try {
     await createTemplate({
@@ -88,7 +90,7 @@ watch(creating, async (open) => {
   if (!open && dialog.open) dialog.close();
 });
 function dismissCreate() {
-  if (!submitting.value) { creating.value = false; formError.value = ""; }
+  if (!submitting.value) { creating.value = false; formError.value = ""; fields.clear(); }
 }
 
 onMounted(() => void load());
@@ -151,8 +153,8 @@ onMounted(() => void load());
       <form v-if="creating" class="create" novalidate @submit.prevent="submitCreate">
         <div class="dialog-head"><h2 id="create-tpl-title">新建模板组</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="submitting" @click="dismissCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <div class="dialog-fields">
-          <div class="field"><label for="tpl-name" class="required">模板名称</label><input id="tpl-name" ref="nameInput" v-model="name" class="control" type="text" :disabled="submitting" /></div>
-          <div class="field"><label for="tpl-category" class="required">分类</label><input id="tpl-category" v-model="category" class="control" type="text" placeholder="如：软件需求规格说明" :disabled="submitting" /></div>
+          <div class="field"><label for="tpl-name" class="required">模板名称</label><input id="tpl-name" ref="nameInput" v-model="name" class="control" v-bind="fields.invalid('name')" type="text" :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></div>
+          <div class="field"><label for="tpl-category" class="required">分类</label><input id="tpl-category" v-model="category" class="control" v-bind="fields.invalid('category')" type="text" placeholder="如：软件需求规格说明" :disabled="submitting" @input="fields.clear('category')" /><span v-if="fields.errors.value.category" :id="fields.errorId('category')" class="field-error" role="alert">{{ fields.errors.value.category }}</span></div>
           <div class="field span-2"><label for="tpl-desc">描述</label><textarea id="tpl-desc" v-model="description" class="control" rows="3" :disabled="submitting"></textarea></div>
         </div>
         <p v-if="formError" class="form-alert dialog-status" role="alert">{{ formError }}</p>

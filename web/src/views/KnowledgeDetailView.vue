@@ -5,6 +5,7 @@ import { useRoute } from "vue-router";
 import { ApiError } from "../api/client";
 import { uploadFile } from "../api/files";
 import { createSource, getKnowledgeBase, listSources, type KnowledgeBase, type SourceVersion } from "../api/knowledge";
+import FilePicker from "../components/FilePicker.vue";
 
 const route = useRoute();
 const baseId = computed(() => String(route.params.id));
@@ -80,7 +81,7 @@ onMounted(() => void load());
         <form class="query upload" @submit.prevent="submitFile">
           <div class="query-fields">
             <label><span>资料名称</span><input v-model="name" class="control" type="text" :disabled="submitting" /></label>
-            <label><span>文件</span><input class="control file" type="file" :disabled="submitting" @change="file = ($event.target as HTMLInputElement).files?.[0] ?? null" /></label>
+            <label><span>文件</span><FilePicker class="file" :file="file" :disabled="submitting" @change="picked => { file = picked; }" /></label>
           </div>
           <div class="query-actions"><button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button></div>
         </form>

@@ -8,6 +8,7 @@ import { getTemplate, listTemplateDocuments, createTemplateDocument, deleteTempl
   parseTemplateWord, getTemplateDocument, saveTemplateStructure,
   type TemplateRecord, type TemplateDocument, type TemplateImportStructure, templateStatusLabel } from "../api/templates";
 import TemplateImportEditor from "../components/TemplateImportEditor.vue";
+import FilePicker from "../components/FilePicker.vue";
 
 // 只读角色（templates.read）不显示导入、核对、移除（09 审查 M2）。
 const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
@@ -179,7 +180,7 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       <template v-if="adding">
         <form v-if="!editingId" class="import-form" @submit.prevent="parseWord">
           <label>模板文档名称<input v-model="docName" type="text" class="control" :disabled="busy" @input="dirty = true" /></label>
-          <label>Word 文件<input type="file" accept=".docx" class="control" :disabled="busy || Boolean(structure)" @change="chooseFile" /></label>
+          <label>Word 文件<FilePicker accept=".docx" :file="docFile" :disabled="busy || Boolean(structure)" @change="(_file, event) => chooseFile(event)" /></label>
           <button v-if="!structure" class="primary" type="submit" :disabled="busy">{{ busy ? '正在解析…' : '解析并核对' }}</button>
           <button v-if="!structure" class="ghost" type="button" :disabled="busy" @click="cancel">取消</button>
         </form>

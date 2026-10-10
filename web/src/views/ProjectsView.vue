@@ -7,6 +7,7 @@ import { projectStatuses, statusLabel } from "../projects";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
 import { hasPermission, readSession } from "../session";
+import { useFieldErrors } from "../fieldErrors";
 
 // 只有能建项目的角色显示“新建项目”（审计员等只读角色不显示，09 审查 S3）。
 const canCreate = computed(() => hasPermission(readSession(), "projects.create"));
@@ -32,6 +33,7 @@ const errorText = ref("");
 const creating = ref(false);
 const submitting = ref(false);
 const formError = ref("");
+const fields = useFieldErrors<"name" | "ownerId">("project");
 const createDialog = ref<HTMLDialogElement | null>(null);
 const nameInput = ref<HTMLInputElement | null>(null);
 const form = ref({ name: "", ownerId: "", group: "", department: "", organization: "", clientContact: "", status: "not_started" as ProjectRecord["status"] });
@@ -124,20 +126,17 @@ function resetCreate() {
   creating.value = false;
   form.value = { name: "", ownerId: users.value[0]?.id ?? "", group: "", department: "", organization: "", clientContact: "", status: "not_started" };
   formError.value = "";
+  fields.clear();
 }
 
 async function submitCreate() {
   if (submitting.value) return;
   formError.value = "";
-  if (!form.value.name.trim()) {
-    formError.value = "请填写项目名称。";
-    nameInput.value?.focus();
-    return;
-  }
-  if (!form.value.ownerId) {
-    formError.value = "请选择负责人。";
-    return;
-  }
+  const name = form.value.name.trim();
+  if (await fields.report({
+    name: !name ? "请填写项目名称。" : name.length > 120 ? "项目名称不能超过 120 个字符。" : "",
+    ownerId: form.value.ownerId ? "" : "请选择负责人。",
+  })) return;
   submitting.value = true;
   try {
     const created = await createProject({
@@ -213,8 +212,8 @@ onMounted(async () => {
       <form class="create-form" novalidate @submit.prevent="submitCreate">
         <div class="dialog-head"><h2 id="create-project-title">新建项目</h2><button type="button" class="subtle icon-close" aria-label="关闭新建项目" :disabled="submitting" @click="closeCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <div class="dialog-fields">
-          <label class="wide"><span class="required">项目名称</span><input ref="nameInput" v-model="form.name" class="control" type="text" required :aria-invalid="formError === '请填写项目名称。' ? 'true' : undefined" :disabled="submitting" /></label>
-          <label><span class="required">负责人</span><select v-model="form.ownerId" class="control" required :disabled="submitting || users.length === 0"><option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }}（{{ user.account }}）</option></select></label>
+          <label class="wide"><span class="required">项目名称</span><input id="project-name" ref="nameInput" v-model="form.name" class="control" v-bind="fields.invalid('name')" type="text" required :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></label>
+          <label><span class="required">负责人</span><select id="project-ownerId" v-model="form.ownerId" class="control" v-bind="fields.invalid('ownerId')" required :disabled="submitting || users.length === 0" @change="fields.clear('ownerId')"><option v-for="user in users" :key="user.id" :value="user.id">{{ user.name }}（{{ user.account }}）</option></select><span v-if="fields.errors.value.ownerId" :id="fields.errorId('ownerId')" class="field-error" role="alert">{{ fields.errors.value.ownerId }}</span></label>
           <label>状态<select v-model="form.status" class="control" :disabled="submitting"><option v-for="item in projectStatuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
           <label>所属部门<input v-model="form.department" class="control" type="text" :disabled="submitting" /></label>
           <label>所属组<input v-model="form.group" class="control" type="text" :disabled="submitting" /></label>
@@ -224,7 +223,7 @@ onMounted(async () => {
         <p v-if="usersLoading" class="hint dialog-status" role="status"><span class="spinner" aria-hidden="true"></span> 正在加载负责人…</p>
         <p v-else-if="usersError" class="form-alert dialog-status" role="alert">负责人加载失败：{{ usersError }} <button type="button" class="text" @click="loadOwners">重试</button></p>
         <p v-else-if="users.length === 0" class="form-alert dialog-status" role="alert">没有可用的负责人。</p>
-        <p v-if="formError" class="form-alert field-error" role="alert">{{ formError }}</p>
+        <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         <div class="dialog-actions"><button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button><button type="submit" class="primary" :disabled="submitting || users.length === 0">{{ submitting ? "正在创建…" : "创建项目" }}</button></div>
       </form>
     </dialog>
@@ -249,5 +248,4 @@ onMounted(async () => {
 .project-name:focus-visible { outline:none; border-radius:var(--radius-control); box-shadow:var(--focus-shadow); }
 .clamp { display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .pager .page-input { width:calc(var(--space-7) * 1.5); }
-.create-form .field-error { margin:0 var(--space-5) var(--space-4); }
 </style>

@@ -8,6 +8,8 @@ import { formatDateTime } from "../format";
 import { listTemplates, listTemplateDocuments, type TemplateRecord, type TemplateDocument } from "../api/templates";
 import { uploadFile } from "../api/files";
 import ProjectFrame from "../components/ProjectFrame.vue";
+import FilePicker from "../components/FilePicker.vue";
+import { useFieldErrors } from "../fieldErrors";
 
 const route = useRoute();
 const projectId = computed(() => {
@@ -34,6 +36,7 @@ const templates = ref<TemplateRecord[]>([]);
 const templateDocs = ref<TemplateDocument[]>([]);
 const submitting = ref(false);
 const formError = ref("");
+const fields = useFieldErrors<"name" | "group" | "templateDoc" | "file">("doc");
 const nameInput = ref<HTMLInputElement | null>(null);
 const createDialog = ref<HTMLDialogElement | null>(null);
 type ChoicePhase = "idle" | "loading" | "ready" | "error";
@@ -148,6 +151,7 @@ function startCreate() {
   selectedTemplateDocId.value = "";
   uploadedFile.value = null;
   formError.value = "";
+  fields.clear();
   void loadTemplates();
   void nextTick(() => nameInput.value?.focus());
 }
@@ -170,27 +174,14 @@ async function submitCreate() {
     file: uploadedFile.value,
   };
 
-  if (!input.name || input.name.length > 120) {
-    formError.value = "文档名称应为 1–120 个字符。";
-    nameInput.value?.focus();
-    return;
-  }
-
-  if (input.sourceType === "template") {
-    if (!templateReady.value) {
-      formError.value = "请选择模板文档";
-      return;
-    }
-  } else {
-    if (!input.file) {
-      formError.value = "请选择要上传的 Word 文件";
-      return;
-    }
-    if (!input.file.name.toLowerCase().endsWith(".docx")) {
-      formError.value = "请选择 .docx 格式的 Word 文件。";
-      return;
-    }
-  }
+  const fromTemplate = input.sourceType === "template";
+  const groupOk = templates.value.some(item => item.id === selectedTemplateId.value);
+  if (await fields.report({
+    name: !input.name || input.name.length > 120 ? "文档名称应为 1–120 个字符。" : "",
+    group: fromTemplate && !groupOk ? "请选择模板组。" : "",
+    templateDoc: fromTemplate && groupOk && !templateReady.value ? "请选择已核对的文档模板。" : "",
+    file: fromTemplate ? "" : !input.file ? "请选择要上传的 Word 文件。" : !input.file.name.toLowerCase().endsWith(".docx") ? "请选择 .docx 格式的 Word 文件。" : "",
+  })) return;
 
   submitting.value = true;
   try {
@@ -289,18 +280,20 @@ onBeforeUnmount(() => {
 
             <label class="stacked-label">
               <span class="required">文档名称</span>
-              <input ref="nameInput" v-model="docName" class="control" type="text" maxlength="120" :disabled="submitting" />
+              <input id="doc-name" ref="nameInput" v-model="docName" class="control" v-bind="fields.invalid('name')" type="text" maxlength="120" :disabled="submitting" @input="fields.clear('name')" />
+              <span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span>
             </label>
 
             <div v-if="sourceType === 'template'" class="template-source">
               <label class="stacked-label">
                 <span class="required">选择模板组</span>
-                <select v-model="selectedTemplateId" class="control" :disabled="submitting || templatesPhase !== 'ready' || templates.length === 0" @change="onTemplateChange">
+                <select id="doc-group" v-model="selectedTemplateId" class="control" v-bind="fields.invalid('group')" :disabled="submitting || templatesPhase !== 'ready' || templates.length === 0" @change="fields.clear('group'); fields.clear('templateDoc'); onTemplateChange()">
                   <option value="">请选择</option>
                   <option v-for="t in templates" :key="t.id" :value="t.id">
                     {{ t.name }} ({{ t.category }})
                   </option>
                 </select>
+                <span v-if="fields.errors.value.group" :id="fields.errorId('group')" class="field-error" role="alert">{{ fields.errors.value.group }}</span>
               </label>
               <p v-if="templatesPhase === 'loading'" class="hint" role="status"><span class="spinner" aria-hidden="true"></span> 正在加载模板组…</p>
               <p v-else-if="templatesPhase === 'error'" class="field-error" role="alert">
@@ -310,12 +303,13 @@ onBeforeUnmount(() => {
 
               <label v-if="selectedTemplateId" class="stacked-label">
                 <span class="required">选择文档模板</span>
-                <select v-model="selectedTemplateDocId" class="control" :disabled="submitting || templateDocsPhase !== 'ready' || templateDocs.length === 0">
+                <select id="doc-templateDoc" v-model="selectedTemplateDocId" class="control" v-bind="fields.invalid('templateDoc')" @change="fields.clear('templateDoc')" :disabled="submitting || templateDocsPhase !== 'ready' || templateDocs.length === 0">
                   <option value="">请选择</option>
                   <option v-for="doc in templateDocs" :key="doc.id" :value="doc.id" :disabled="!doc.importStructure?.reviewed">
                     {{ doc.name }}{{ doc.importStructure?.reviewed ? '' : '（待核对）' }}
                   </option>
                 </select>
+                <span v-if="fields.errors.value.templateDoc" :id="fields.errorId('templateDoc')" class="field-error" role="alert">{{ fields.errors.value.templateDoc }}</span>
               </label>
               <p v-if="templateDocsPhase === 'loading'" class="hint" role="status"><span class="spinner" aria-hidden="true"></span> 正在加载文档模板…</p>
               <p v-else-if="templateDocsPhase === 'error'" class="field-error" role="alert">
@@ -327,13 +321,16 @@ onBeforeUnmount(() => {
 
             <label v-else class="stacked-label">
               <span class="required">上传 Word 文件（.docx）</span>
-              <input
-                class="control"
-                type="file"
+              <FilePicker
+                id="doc-file"
                 accept=".docx"
+                :file="uploadedFile"
                 :disabled="submitting"
-                @change="uploadedFile = ($event.target as HTMLInputElement).files?.[0] ?? null"
+                :invalid="Boolean(fields.errors.value.file)"
+                v-bind="fields.invalid('file')"
+                @change="file => { uploadedFile = file; fields.clear('file'); }"
               />
+              <span v-if="fields.errors.value.file" :id="fields.errorId('file')" class="field-error" role="alert">{{ fields.errors.value.file }}</span>
             </label>
 
             <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>

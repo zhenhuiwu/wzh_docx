@@ -8,6 +8,8 @@ import { uploadFile } from "../api/files";
 import { listProjects, type ProjectRecord } from "../api/projects";
 import { documentHeadings, getDocument, listDocuments, type DocumentRecord } from "../api/documents";
 import { analyzeTestTask, createTestTask, downloadTestReport, getTestTask, insertTestResults, listTestTasks, runTestTask, setTestCaseEnabled, stopTestTask, testEvidenceUrl, updateTestTask, type TestCase, type TestDocumentInsertion, type TestRun, type TestTask, type TestTaskInput } from "../api/testTasks";
+import { useFieldErrors } from "../fieldErrors";
+import FilePicker from "../components/FilePicker.vue";
 
 // 写操作按权限显隐（09 审查 M1）：tests.edit 建任务/改配置/提取，tests.execute 运行/停止。
 const canEdit = computed(() => hasPermission(readSession(), "tests.edit"));
@@ -62,6 +64,8 @@ const submitting = ref(false);
 const formError = ref("");
 const planFile = ref<File | null>(null);
 const reportFile = ref<File | null>(null);
+const fields = useFieldErrors<"name" | "projectId" | "plan" | "report" | "frontendUrl" | "backendUrl" | "concurrency" | "requests">("task");
+const concurrencyDetails = ref<HTMLDetailsElement | null>(null);
 const form = ref<TestTaskInput>(emptyForm());
 const previewDialog = ref<HTMLDialogElement | null>(null);
 const previewUrl = ref("");
@@ -240,6 +244,7 @@ async function openCreate() {
   planFile.value = null;
   reportFile.value = null;
   formError.value = "";
+  fields.clear();
   creating.value = true;
   await nextTick();
   createDialog.value?.showModal();
@@ -254,6 +259,7 @@ async function openEdit() {
   planFile.value = null;
   reportFile.value = null;
   formError.value = "";
+  fields.clear();
   creating.value = true;
   await nextTick();
   createDialog.value?.showModal();
@@ -266,16 +272,24 @@ function closeCreate() {
 
 async function submitCreate() {
   formError.value = "";
-  if (!form.value.name.trim()) { formError.value = "请填写任务名称。"; nameInput.value?.focus(); return; }
-  if (!form.value.projectId) { formError.value = "请选择所属项目。"; return; }
-  if ((!editingId.value && !planFile.value) || (planFile.value && !/\.docx$/i.test(planFile.value.name))) { formError.value = "请选择 .docx 格式的测试计划。"; return; }
-  if (reportFile.value && !/\.docx$/i.test(reportFile.value.name)) { formError.value = "待补充的测试文档必须是 .docx 文件。"; return; }
-  for (const value of [form.value.frontendUrl, form.value.backendUrl]) {
-    if (!value.trim()) continue;
-    try { if (!["http:", "https:"].includes(new URL(value.trim()).protocol)) throw new Error(); }
-    catch { formError.value = "服务地址应以 http:// 或 https:// 开头。"; return; }
-  }
-  if (!Number.isInteger(form.value.concurrency) || form.value.concurrency < 1 || form.value.concurrency > 20 || !Number.isInteger(form.value.requests) || form.value.requests < 1 || form.value.requests > 200) { formError.value = "并发数应为 1–20，请求总数应为 1–200。"; return; }
+  const urlError = (value: string) => {
+    if (!value.trim()) return "";
+    try { return ["http:", "https:"].includes(new URL(value.trim()).protocol) ? "" : "服务地址应以 http:// 或 https:// 开头。"; }
+    catch { return "服务地址应以 http:// 或 https:// 开头。"; }
+  };
+  const { concurrency, requests } = form.value;
+  const result = {
+    name: form.value.name.trim() ? "" : "请填写任务名称。",
+    projectId: form.value.projectId ? "" : "请选择所属项目。",
+    plan: !editingId.value && !planFile.value ? "请选择测试计划 Word 文件。" : planFile.value && !/\.docx$/i.test(planFile.value.name) ? "测试计划必须是 .docx 文件。" : "",
+    report: reportFile.value && !/\.docx$/i.test(reportFile.value.name) ? "待补充的测试文档必须是 .docx 文件。" : "",
+    frontendUrl: urlError(form.value.frontendUrl),
+    backendUrl: urlError(form.value.backendUrl),
+    concurrency: Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 20 ? "" : "并发数应为 1–20 的整数。",
+    requests: Number.isInteger(requests) && requests >= 1 && requests <= 200 ? "" : "请求总数应为 1–200 的整数。",
+  };
+  if ((result.concurrency || result.requests) && concurrencyDetails.value) concurrencyDetails.value.open = true;
+  if (await fields.report(result)) return;
   submitting.value = true;
   try {
     const editId = editingId.value;
@@ -587,21 +601,21 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
       <form novalidate @submit.prevent="submitCreate">
         <div class="dialog-head"><h2 id="create-test-title">{{ editingId ? "编辑测试配置" : "新建测试任务" }}</h2><button type="button" class="subtle icon-close" :disabled="submitting" :aria-label="editingId ? '关闭编辑测试配置' : '关闭新建测试任务'" @click="closeCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <fieldset :disabled="submitting" class="dialog-fields">
-          <label>任务名称<input ref="nameInput" v-model="form.name" class="control" required maxlength="120" /></label>
-          <label>所属项目<select v-model="form.projectId" class="control" aria-label="所属项目" :disabled="Boolean(editingId) || projectsLoading || !projects.length" required><option value="">{{ projectsLoading ? "正在读取项目…" : "请选择项目" }}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
+          <label><span class="required">任务名称</span><input id="task-name" ref="nameInput" v-model="form.name" class="control" v-bind="fields.invalid('name')" required maxlength="120" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></label>
+          <label><span class="required">所属项目</span><select id="task-projectId" v-model="form.projectId" class="control" v-bind="fields.invalid('projectId')" aria-label="所属项目" :disabled="Boolean(editingId) || projectsLoading || !projects.length" required @change="fields.clear('projectId')"><option value="">{{ projectsLoading ? "正在读取项目…" : "请选择项目" }}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select><span v-if="fields.errors.value.projectId" :id="fields.errorId('projectId')" class="field-error" role="alert">{{ fields.errors.value.projectId }}</span></label>
           <p v-if="projectsError" class="field-error full-row" role="alert">项目读取失败：{{ projectsError }} <button type="button" class="ghost" @click="loadProjects">重试</button></p>
           <p v-else-if="!projectsLoading && !projects.length" class="field-error full-row">请先创建项目。</p>
-          <label>{{ editingId ? '替换测试计划 Word（可选）' : '测试计划 Word' }}<input type="file" accept=".docx" class="control" :aria-label="editingId ? '替换测试计划 Word（可选）' : '测试计划 Word'" :required="!editingId" @change="planFile = ($event.target as HTMLInputElement).files?.[0] ?? null" /><span v-if="editingId && !planFile">当前文件：{{ task?.planName }}</span></label>
-          <label>待补充的测试文档 Word（可选）<input type="file" accept=".docx" class="control" aria-label="待补充的测试文档 Word（可选）" @change="reportFile = ($event.target as HTMLInputElement).files?.[0] ?? null" /><span v-if="editingId && !reportFile && task?.reportName">当前文件：{{ task.reportName }}</span></label>
+          <label><span :class="{ required: !editingId }">{{ editingId ? '替换测试计划 Word（可选）' : '测试计划 Word' }}</span><FilePicker id="task-plan" accept=".docx" :file="planFile" :invalid="Boolean(fields.errors.value.plan)" v-bind="fields.invalid('plan')" :aria-label="editingId ? '替换测试计划 Word（可选）' : '测试计划 Word'" :required="!editingId" @change="file => { planFile = file; fields.clear('plan'); }" /><span v-if="editingId && !planFile" class="hint">当前文件：{{ task?.planName }}</span><span v-if="fields.errors.value.plan" :id="fields.errorId('plan')" class="field-error" role="alert">{{ fields.errors.value.plan }}</span></label>
+          <label>待补充的测试文档 Word（可选）<FilePicker id="task-report" accept=".docx" :file="reportFile" :invalid="Boolean(fields.errors.value.report)" v-bind="fields.invalid('report')" aria-label="待补充的测试文档 Word（可选）" @change="file => { reportFile = file; fields.clear('report'); }" /><span v-if="editingId && !reportFile && task?.reportName" class="hint">当前文件：{{ task.reportName }}</span><span v-if="fields.errors.value.report" :id="fields.errorId('report')" class="field-error" role="alert">{{ fields.errors.value.report }}</span></label>
           <label>前端源码目录<input v-model="form.frontendRoot" class="control" /></label>
-          <label>前端服务地址<input v-model="form.frontendUrl" type="url" class="control" /></label>
+          <label>前端服务地址<input id="task-frontendUrl" v-model="form.frontendUrl" type="url" class="control" v-bind="fields.invalid('frontendUrl')" @input="fields.clear('frontendUrl')" /><span v-if="fields.errors.value.frontendUrl" :id="fields.errorId('frontendUrl')" class="field-error" role="alert">{{ fields.errors.value.frontendUrl }}</span></label>
           <label>后端源码目录<input v-model="form.backendRoot" class="control" /></label>
-          <label>后端服务地址<input v-model="form.backendUrl" type="url" class="control" /></label>
+          <label>后端服务地址<input id="task-backendUrl" v-model="form.backendUrl" type="url" class="control" v-bind="fields.invalid('backendUrl')" @input="fields.clear('backendUrl')" /><span v-if="fields.errors.value.backendUrl" :id="fields.errorId('backendUrl')" class="field-error" role="alert">{{ fields.errors.value.backendUrl }}</span></label>
           <label class="full-row">功能测试方式<select v-model="form.executionMode" class="control" aria-label="功能测试方式"><option value="agent">AI 实时操作</option><option value="steps">按固定步骤</option></select></label>
           <label>测试账号<input v-model="form.testUsername" class="control" autocomplete="off" /></label>
           <label>{{ editingId ? "测试密码（留空保留）" : "测试密码" }}<input v-model="form.testPassword" type="password" class="control" autocomplete="new-password" /></label>
           <label class="full-row">允许修改的测试数据范围<textarea v-model="form.dataScope" class="control" rows="2" /></label>
-          <details class="full-row concurrency-fields"><summary>并发测试参数</summary><div><label>并发数<input v-model.number="form.concurrency" type="number" min="1" max="20" class="control" required /></label><label>请求总数<input v-model.number="form.requests" type="number" min="1" max="200" class="control" required /></label></div></details>
+          <details ref="concurrencyDetails" class="full-row concurrency-fields"><summary>并发测试参数</summary><div><label>并发数<input id="task-concurrency" v-model.number="form.concurrency" type="number" min="1" max="20" class="control" v-bind="fields.invalid('concurrency')" required @input="fields.clear('concurrency')" /><span v-if="fields.errors.value.concurrency" :id="fields.errorId('concurrency')" class="field-error" role="alert">{{ fields.errors.value.concurrency }}</span></label><label>请求总数<input id="task-requests" v-model.number="form.requests" type="number" min="1" max="200" class="control" v-bind="fields.invalid('requests')" required @input="fields.clear('requests')" /><span v-if="fields.errors.value.requests" :id="fields.errorId('requests')" class="field-error" role="alert">{{ fields.errors.value.requests }}</span></label></div></details>
         </fieldset>
         <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         <div class="dialog-actions"><button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button><button type="submit" class="primary" :disabled="submitting || projectsLoading || !projects.length">{{ submitting ? editingId ? "正在保存…" : "正在上传并创建…" : editingId ? "保存配置" : "创建测试任务" }}</button></div>
@@ -713,8 +727,8 @@ dd { margin:2px 0 0; color:var(--text-primary); font-size:var(--text-sm); overfl
 .empty { margin:var(--space-5) 0; color:var(--text-tertiary); font-size:var(--text-sm); }
 
 .test-dialog { width:calc(var(--space-7) * 21); }
-.test-dialog .dialog-fields label { display:grid; gap:6px; min-width:0; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
-.test-dialog .dialog-fields label span { overflow-wrap:anywhere; color:var(--text-tertiary); font-size:var(--text-xs); font-weight:var(--weight-regular); }
+.test-dialog .dialog-fields label { display:grid; align-content:start; gap:6px; min-width:0; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
+.test-dialog .dialog-fields label > .hint { overflow-wrap:anywhere; color:var(--text-tertiary); font-size:var(--text-xs); font-weight:var(--weight-regular); }
 .test-dialog .state-panel { min-height:calc(var(--space-7) * 5); }
 .write-cases { display:grid; gap:var(--space-2); min-width:0; margin:0; padding:var(--space-3) var(--space-4) var(--space-4); border:1px solid var(--border-default); border-radius:var(--radius-control); }
 .write-cases legend { padding:0 var(--space-2); color:var(--text-secondary); font-size:var(--text-sm); }

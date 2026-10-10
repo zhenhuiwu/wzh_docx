@@ -15,6 +15,7 @@ import {
 import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { formatDateTime, initialOf } from "../format";
+import { useFieldErrors } from "../fieldErrors";
 
 const page = ref(1);
 const pageSize = 10;
@@ -28,6 +29,7 @@ const errorText = ref("");
 const creating = ref(false);
 const submitting = ref(false);
 const formError = ref("");
+const fields = useFieldErrors<"account" | "name" | "password">("user");
 const notice = ref("");
 const account = ref("");
 const password = ref("");
@@ -122,19 +124,17 @@ function cancelCreate() {
   department.value = "";
   role.value = "";
   formError.value = "";
+  fields.clear();
 }
 
 async function submitCreate() {
   if (submitting.value) return;
   formError.value = "";
-  if (!account.value.trim() || !personName.value.trim()) {
-    formError.value = "请填写账号和姓名";
-    return;
-  }
-  if (password.value.length < 12 || password.value.length > 1024) {
-    formError.value = "密码需为 12 至 1024 个字符。";
-    return;
-  }
+  if (await fields.report({
+    account: account.value.trim() ? "" : "请填写账号。",
+    name: personName.value.trim() ? "" : "请填写姓名。",
+    password: password.value.length < 12 || password.value.length > 1024 ? "密码需为 12 至 1024 个字符。" : "",
+  })) return;
   submitting.value = true;
   try {
     await createAccount({
@@ -326,8 +326,8 @@ onMounted(async () => {
       <form v-if="creating" class="create" novalidate @submit.prevent="submitCreate">
         <div class="dialog-head"><h2 id="create-user-title">新建用户</h2><button type="button" class="subtle icon-close" aria-label="关闭新建用户" :disabled="submitting" @click="dismissCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <div class="dialog-fields">
-          <div class="field"><label for="user-account" class="required">账号</label><input id="user-account" ref="accountInput" v-model="account" class="control" type="text" autocomplete="off" :disabled="submitting" /></div>
-          <div class="field"><label for="user-name" class="required">姓名</label><input id="user-name" v-model="personName" class="control" type="text" autocomplete="off" :disabled="submitting" /></div>
+          <div class="field"><label for="user-account" class="required">账号</label><input id="user-account" ref="accountInput" v-model="account" class="control" v-bind="fields.invalid('account')" type="text" autocomplete="off" :disabled="submitting" @input="fields.clear('account')" /><span v-if="fields.errors.value.account" :id="fields.errorId('account')" class="field-error" role="alert">{{ fields.errors.value.account }}</span></div>
+          <div class="field"><label for="user-name" class="required">姓名</label><input id="user-name" v-model="personName" class="control" v-bind="fields.invalid('name')" type="text" autocomplete="off" :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></div>
           <div class="field"><label for="user-department">部门</label><input id="user-department" v-model="department" class="control" type="text" autocomplete="off" :disabled="submitting" /></div>
           <div class="field">
             <label for="user-role">全局角色</label>
@@ -339,7 +339,8 @@ onMounted(async () => {
           </div>
           <div class="field span-2">
             <label for="user-password" class="required">初始密码</label>
-            <input id="user-password" v-model="password" class="control" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" aria-describedby="user-password-hint" :disabled="submitting" />
+            <input id="user-password" v-model="password" class="control" v-bind="fields.invalid('password', 'user-password-hint')" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" :disabled="submitting" @input="fields.clear('password')" />
+            <span v-if="fields.errors.value.password" :id="fields.errorId('password')" class="field-error" role="alert">{{ fields.errors.value.password }}</span>
             <p id="user-password-hint" class="hint">至少 12 个字符，用户首次登录后须修改。</p>
           </div>
         </div>
