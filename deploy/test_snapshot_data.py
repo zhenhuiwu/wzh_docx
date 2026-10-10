@@ -39,8 +39,10 @@ def check() -> None:
                 CREATE TABLE login_guards(id TEXT); INSERT INTO login_guards VALUES('guard');
                 CREATE TABLE idempotency_keys(id TEXT); INSERT INTO idempotency_keys VALUES('request');
                 CREATE TABLE writing_skill_requests(id TEXT); INSERT INTO writing_skill_requests VALUES('skill-request');
-                CREATE TABLE test_task_runs(id TEXT,status TEXT);
-                INSERT INTO test_task_runs VALUES('run','completed');
+                CREATE TABLE test_tasks(id TEXT PRIMARY KEY,status TEXT,config_json TEXT);
+                INSERT INTO test_tasks VALUES('task','ready','{"frontendUrl":"http://x","testUsername":"tester","testPassword":"tester-secret-123","nested":{"apiKey":"nested-key-456"}}');
+                CREATE TABLE test_task_runs(id TEXT,status TEXT,snapshot_json TEXT,result_json TEXT);
+                INSERT INTO test_task_runs VALUES('run','completed','{"testPassword":"tester-secret-123","cases":[]}','{"log":"typed tester-secret-123 into field"}');
             """)
             connection.execute("INSERT INTO files VALUES(?,?,?,'stored')", ("saved-object", len(content), hashlib.sha256(content).hexdigest()))
             connection.commit()
@@ -68,8 +70,20 @@ def check() -> None:
         assert "sqlite:///./data/app.db" in env_copy and "./data/files" in env_copy
         assert "AI_REASONING_EFFORT='high'" in env_copy and "AI_MODEL='model-x'" in env_copy
         assert "AI_API_KEY=''" in env_copy
-        assert not any("do-not-print-this" in path.read_text(encoding="utf-8", errors="ignore")
-                       for path in output.rglob("*") if path.is_file() and path.suffix != ".db")
+        leaked = [path for path in output.rglob("*") if path.is_file()
+                  for secret in (b"do-not-print-this", "tester-secret-123".encode(), b"nested-key-456")
+                  if secret in path.read_bytes()]
+        assert not leaked, leaked
+        with closing(sqlite3.connect(output / "data/app.db")) as copied:
+            config = json.loads(copied.execute("SELECT config_json FROM test_tasks").fetchone()[0])
+            assert "testPassword" not in config and config["testUsername"] == "tester"
+            assert "apiKey" not in config["nested"]
+            snapshot_json, result_json = copied.execute("SELECT snapshot_json,result_json FROM test_task_runs").fetchone()
+            assert "testPassword" not in json.loads(snapshot_json)
+            assert "******" in result_json
+        assert metadata["scrubbed_credentials"]["credentials_removed"] == 3
+        source_config = json.loads(sqlite3.connect(database).execute("SELECT config_json FROM test_tasks").fetchone()[0])
+        assert source_config["testPassword"] == "tester-secret-123"
         assert "do-not-print-this" not in json.dumps(metadata)
         try:
             snapshot(database, files, env_file, output, execute=True)

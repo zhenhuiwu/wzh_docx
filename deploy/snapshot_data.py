@@ -7,6 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -29,7 +30,10 @@ README = """文档工作室 · 一键启动说明
 
 无需安装 Python、Node.js 或 Docker。请勿只复制 exe：_internal 与 data 必须一起保留。
 当前项目、Word 原稿、编辑内容、历史版本、AI 记忆、Skill、测试记录与截图均已迁移。
-原电脑登录会话不迁移，请重新登录。
+原电脑登录会话不迁移，请重新登录。账号以密码哈希形式迁移，原密码继续有效。
+
+测试任务中保存的被测系统登录密码（testPassword 等凭据）不随包迁移，已在副本数据库中清除。
+部署后请在“测试用例管理”中逐个任务重新填写被测系统密码，再执行测试。
 
 部署包不包含 AI 密钥。需要 AI 编写时：
   把 .env.example 复制为 .env，在 AI_API_KEY= 后填写本机使用的密钥，然后重启程序。
@@ -51,7 +55,7 @@ AI_REASONING_EFFORT 配置思考强度；留空使用模型默认值。可选 no
 修改 .env 后须关闭程序并重新启动。
 精确 Word 版式预览需安装 Microsoft Word；Visio 原生生成需安装 Microsoft Visio。
 
-部署校验.json 记录迁移时间、业务数量和文件校验值，不包含 AI Key。
+部署校验.json 记录迁移时间、业务数量、清除的凭据数量和文件校验值，不包含任何密钥。
 """
 
 # Never ship these from the source environment, whatever the caller passes.
@@ -91,6 +95,78 @@ def business_fingerprint(connection: sqlite3.Connection) -> str:
             result.update(json.dumps(row, ensure_ascii=False, default=str).encode())
             result.update(b"\n")
     return result.hexdigest()
+
+
+# JSON keys whose values are third-party credentials (e.g. test_tasks.config_json
+# and test_task_runs.snapshot_json carry "testPassword" in clear text).
+_SECRET_KEY = re.compile(r"(?i)(password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)$")
+_MASK = "******"
+
+
+def _strip_secret_keys(value, found: list[str]):
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            if isinstance(key, str) and _SECRET_KEY.search(key):
+                if isinstance(item, str) and item:
+                    found.append(item)
+                continue
+            kept[key] = _strip_secret_keys(item, found)
+        return kept
+    if isinstance(value, list):
+        return [_strip_secret_keys(item, found) for item in value]
+    return value
+
+
+def scrub_credentials(connection: sqlite3.Connection) -> dict[str, int]:
+    """Remove stored third-party credentials from the copied database.
+
+    1. Every TEXT cell holding a JSON object/array loses keys that name a
+       credential (testPassword, apiKey, token, ...).
+    2. Any remaining occurrence of a removed value anywhere in a TEXT cell (a log
+       that escaped redaction, for instance) is masked.
+    Account password hashes in ``users.password_hash`` are kept: accounts must
+    still be able to sign in after migration.
+    """
+    removed: list[str] = []
+    counts = {"json_cells": 0, "masked_cells": 0}
+    names = [table for table in tables(connection) if table not in TRANSIENT_TABLES]
+    text_columns: dict[str, list[str]] = {}
+    for table in names:
+        columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
+                   if row[1] != "password_hash"]
+        text_columns[table] = columns
+        for column in columns:
+            rows = connection.execute(
+                f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\' '
+                f'AND (substr(ltrim("{column}"),1,1) IN (\'{{\',\'[\'))'
+            ).fetchall()
+            for rowid, raw in rows:
+                try:
+                    parsed = json.loads(raw)
+                except ValueError:
+                    continue
+                found: list[str] = []
+                cleaned = _strip_secret_keys(parsed, found)
+                if found:
+                    removed.extend(found)
+                    connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?',
+                                       (json.dumps(cleaned, ensure_ascii=False), rowid))
+                    counts["json_cells"] += 1
+    secrets = sorted({value for value in removed if len(value) >= 4}, key=len, reverse=True)
+    if secrets:
+        for table, columns in text_columns.items():
+            for column in columns:
+                for rowid, raw in connection.execute(
+                        f'SELECT rowid, "{column}" FROM "{table}" WHERE typeof("{column}")=\'text\'').fetchall():
+                    masked = raw
+                    for secret in secrets:
+                        masked = masked.replace(secret, _MASK)
+                    if masked != raw:
+                        connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (masked, rowid))
+                        counts["masked_cells"] += 1
+    counts["credentials_removed"] = len(removed)
+    return counts
 
 
 def ensure_idle(connection: sqlite3.Connection) -> None:
@@ -172,17 +248,22 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
                     copied.execute(f'DELETE FROM "{table}"')
                 if business_fingerprint(copied) != before:
                     raise RuntimeError("备份业务数据校验失败。")
+                scrubbed = scrub_credentials(copied)
                 orphan_roles = 0
                 if {"user_roles", "users"}.issubset(tables(copied)):
                     orphan_roles = copied.execute(
                         "DELETE FROM user_roles WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id=user_roles.user_id)"
                     ).rowcount
                 copied.commit()
+                # Rebuild the file so deleted sessions and removed credentials do not
+                # survive in free pages of the shipped database.
+                copied.execute("VACUUM")
                 if copied.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                     raise RuntimeError("备份数据库完整性检查失败。")
                 if copied.execute("PRAGMA foreign_key_check").fetchone():
                     raise RuntimeError("备份数据库关联检查失败。")
                 metadata.update(source_business_counts=counts.copy(), discarded_orphan_user_roles=orphan_roles,
+                                scrubbed_credentials=scrubbed,
                                 source_business_sha256=before, business_sha256=business_fingerprint(copied))
                 metadata["business_counts"] = {table: copied.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
                                                for table in tables(copied) if table not in TRANSIENT_TABLES}
