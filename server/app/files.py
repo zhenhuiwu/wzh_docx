@@ -324,10 +324,18 @@ def _load_visible(file_id: str) -> FileRecord:
 
 @router.post("/files", status_code=201)
 async def upload_file(request: Request) -> dict[str, object]:
-    principal = authorize(request, "files.upload")
+    from app.identity import has_permission, require_csrf, require_session
+
+    principal = require_session(request)
+    require_csrf(request, principal)
     form = await request.form()
     upload = form.get("file")
     purpose = form.get("purpose")
+    # P0-4（决策1）：上传到项目的文件只看项目角色（下方 require_project_editor）；其余仍需全局 files.upload。
+    if not has_permission(principal.roles, "files.upload") and not (
+        form.get("projectId") and purpose not in {"template", "source"}
+    ):
+        raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
     idempotency_key = request.headers.get("idempotency-key", "").strip()
     if not idempotency_key or len(idempotency_key) > 128:
         raise AppError(

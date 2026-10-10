@@ -162,3 +162,22 @@ def test_project_files_need_membership(document_context):  # noqa: F811
     _login(client, "m-file")
     assert client.get(f"/api/v1/files/{stored.id}/content").status_code in {403, 404}
     assert client.get(f"/api/v1/files/{mine.id}/content").status_code == 200
+
+
+def test_member_without_global_role_uploads_to_own_project_only(members):
+    # P0-4（决策1）：新建用户全局角色默认 []，上传项目 Word 只看项目角色。
+    from io import BytesIO
+    from docx import Document as WordDocument
+    client, project, _, _ = members
+    buffer = BytesIO()
+    WordDocument().save(buffer)
+    files = {"file": ("成员上传.docx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    for role, expected in (("editor", 201), ("viewer", 403), ("outsider", 403)):
+        headers = _as(client, role)
+        response = client.post("/api/v1/files", files=files, data={"purpose": "attachment", "projectId": str(project)},
+                               headers={**headers, "Idempotency-Key": f"member-upload-{role}"})
+        assert response.status_code == expected, (role, response.text)
+    headers = _as(client, "editor")
+    unscoped = client.post("/api/v1/files", files=files, data={"purpose": "attachment"},
+                           headers={**headers, "Idempotency-Key": "member-upload-unscoped"})
+    assert unscoped.status_code == 422  # 夹具账号带 template_manager（含 files.upload），未选项目仍被拒
