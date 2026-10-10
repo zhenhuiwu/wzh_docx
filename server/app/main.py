@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -30,6 +32,8 @@ from app.users import router as users_router
 from app.workbench import router as workbench_router
 from app.writing_skills import router as writing_skills_router, seed_writing_skills
 from app.models import format_timestamp
+
+logger = logging.getLogger(__name__)
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
@@ -83,6 +87,7 @@ def create_app() -> FastAPI:
         except StarletteHTTPException:
             raise
         except Exception:
+            logger.exception("unhandled error, request %s", request.state.request_id)
             response = JSONResponse(
                 status_code=500,
                 content=error_content(

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import base64
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from docx import Document
@@ -501,4 +505,4 @@ def _apply_paragraph_style(paragraph: Paragraph, style_info: dict[str, Any]) -> 
                 run.font.italic = style_info['italic']
     except Exception:
         # 样式应用失败不影响内容生成
-        pass
+        logger.warning("applying run style failed; content kept without style", exc_info=True)

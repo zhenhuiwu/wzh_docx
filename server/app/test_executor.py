@@ -1,6 +1,8 @@
 """Execute concrete test plans; reports contain observations, never AI pass guesses."""
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import ast
 import base64
@@ -18,7 +20,7 @@ import time
 from html import escape
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 import httpx
 from docx import Document
@@ -30,6 +32,8 @@ from app.db import connect
 from app.files import resolve_object
 from app.docx_export import crop_picture as _crop_report_picture
 from app.docx_parser import _markdown_text
+
+logger = logging.getLogger(__name__)
 
 
 class MissingInput(ValueError):
@@ -294,7 +298,8 @@ def _functional(task: dict, case: dict, folder: Path, cancelled, progress) -> di
                             locator.scroll_into_view_if_needed(timeout=1000)
                             focus_rect = _focus_rect(locator.bounding_box(timeout=1000))
                     except Exception:
-                        pass  # Optional display metadata must not lose the full evidence.
+                        # Optional display metadata must not lose the full evidence.
+                        logger.debug("focus metadata unavailable for screenshot", exc_info=True)
                 try:
                     mask = [page.locator('input[type="password"],input[autocomplete="current-password"],input[autocomplete="new-password"]')]
                     page.screenshot(path=str(folder / image_name), full_page=False, animations="disabled", mask=mask, mask_color="gray")
@@ -390,7 +395,7 @@ def _unit(task: dict, case: dict, folder: Path, cancelled, progress) -> dict:
                                 except MissingInput:
                                     continue
                                 aliases.update(names)
-                def called_import(call):
+                def called_import(call, aliases=aliases):
                     target = call.func
                     while isinstance(target, ast.Attribute):
                         target = target.value
@@ -565,7 +570,7 @@ def execute_run(task: dict, cases: list[dict], run_id: str, cancelled_callback) 
     result = initial_run_result(cases)
     save_run_progress(run_id, result)
     for case, current in zip(cases, result["cases"]):
-        def progress(observed):
+        def progress(observed, current=current):
             current.update(deepcopy(observed))
             save_run_progress(run_id, result)
         try:
