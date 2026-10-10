@@ -28,7 +28,7 @@ jobs:
       - name: 安装依赖
         run: uv sync --frozen
       - name: ruff
-        run: uvx ruff check . ../deploy ../test_csrf.py ../start_enhanced.py --config pyproject.toml
+        run: uvx ruff check . ../deploy ../test_csrf.py --config pyproject.toml
       - name: 安装 Playwright Chromium
         run: uv run playwright install --with-deps chromium
       - name: pytest
