@@ -50,7 +50,7 @@ def test_legacy_109_database_upgrades_and_backfills_lazily(tmp_path, monkeypatch
                            "VALUES (%s,%s,'旧文档',%s,%s,3)", (document, project, owner, text))
         connection.commit()
     assert migrate() == ["110_project_member_owner_backfill.sql", "111_document_objects.sql",
-                         "112_document_changes.sql", "113_document_conflicts.sql"]
+                         "112_document_changes.sql", "113_document_conflicts.sql", "114_document_objects_deleted_after.sql"]
     with connect() as connection:
         assert connection.execute("SELECT role FROM project_members WHERE project_id=%s", (project,)).fetchone()["role"] == "owner"
         row = connection.execute("SELECT objects_revision, updated_by, revision FROM documents WHERE id=%s", (document,)).fetchone()
@@ -139,11 +139,12 @@ def test_down_script_restores_110_schema(tmp_path, monkeypatch):
     _migrate_until(tmp_path, monkeypatch, 110)
     with connect() as connection:
         expected = _schema(connection)
-    assert migrate() == ["111_document_objects.sql", "112_document_changes.sql", "113_document_conflicts.sql"]
+    assert migrate() == ["111_document_objects.sql", "112_document_changes.sql", "113_document_conflicts.sql",
+                         "114_document_objects_deleted_after.sql"]
     with connect() as connection:
         connection._conn.executescript(DOWN.read_text(encoding="utf-8"))
         assert _schema(connection) == expected
-    assert len(migrate()) == 3
+    assert len(migrate()) == 4
 
 
 def test_down_script_keeps_legacy_document_tests_green(document_context):  # noqa: F811

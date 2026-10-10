@@ -527,17 +527,62 @@ def _apply_actions(connection, did: UUID, payload: dict, request_items: list[Res
     def position_of(object_id: str | None) -> int | None:
         return ids.index(object_id) if object_id in ids else None
 
-    def nearest_live(object_id: str | None) -> int:
-        """删除前位置之前最近的存活对象之后（返回插入下标）。"""
-        if object_id is None:
-            return 0
-        row = connection.execute("SELECT position FROM document_objects WHERE id=%s", (object_id,)).fetchone()
-        if row is None:
-            return 0
-        before = [index for index, live_row in enumerate(live) if live_row["position"] < row["position"]]
-        target = before[-1] if before else -1
-        current = position_of(str(live[target]["id"])) if target >= 0 else -1
-        return (current if current is not None else -1) + 1
+    def by_location(location: dict | None) -> tuple[int, bool]:
+        """按章节路径 + 同类第 N 块定位（返回插入下标, 是否只能放到章节/文档末尾）。"""
+        location = location or {}
+        path = [str(value) for value in (location.get("headingPath") or [])]
+        kind, ordinal = location.get("kind"), location.get("ordinal")
+        stack: list[tuple[int, str]] = []
+        start: int | None = 0 if not path else None
+        for index, entry in enumerate(entries):
+            if entry.block.kind == "heading" and entry.block.heading_level:
+                level = entry.block.heading_level
+                stack = [item for item in stack if item[0] < level]
+                stack.append((level, heading_text(entry.block.body).strip()))
+                if start is None and [text for _, text in stack] == path:
+                    start = index + 1
+        if start is None and path:
+            # 路径对不上（上级标题改名等）时按最后一级标题名找
+            start = next((index + 1 for index, entry in enumerate(entries) if entry.block.kind == "heading"
+                          and heading_text(entry.block.body).strip() == path[-1]), None)
+        if start is None:
+            return len(entries), True
+        end = start
+        while end < len(entries) and entries[end].block.kind != "heading":
+            end += 1
+        if isinstance(ordinal, int) and ordinal >= 1 and kind and kind != "heading":
+            if ordinal == 1:
+                return start, False
+            seen = 0
+            for index in range(start, end):
+                if entries[index].block.kind == kind:
+                    seen += 1
+                    if seen == ordinal - 1:
+                        return index + 1, False
+        # 本节内容比原来少：放到所属章节末尾（含下级小节之前的正文末尾），提示用户检查
+        return end, True
+
+    def nearest_live(object_id: str | None, location: dict | None = None) -> tuple[int, bool]:
+        """复审 M3：按删除时记下的前驱对象定位；前驱也被删了就沿着它的前驱继续找。
+        找不到（本功能上线前删除的对象等）时回退到章节路径 + 序号，再不行放到章节末尾并标记 placementFallback。"""
+        current = object_id
+        seen: set[str] = set()
+        while current and current not in seen:
+            seen.add(current)
+            row = connection.execute("SELECT deleted_at, deleted_after_ref FROM document_objects WHERE id=%s",
+                                     (current,)).fetchone()
+            if row is None:
+                break
+            if row["deleted_at"] is None and current != object_id:
+                index = position_of(current)
+                if index is not None:
+                    return index + 1, False
+                break
+            after = row["deleted_after_ref"]
+            if after is not None and str(after) == "^":
+                return 0, False
+            current = str(after) if after is not None else None
+        return by_location(location)
 
     def insert_at(index: int, markdown: str) -> None:
         _, blocks = split(markdown)
@@ -606,7 +651,13 @@ def _apply_actions(connection, did: UUID, payload: dict, request_items: list[Res
             continue
         if action == "keep_both":
             index = position_of(ref)
-            insert_at(index + 1 if index is not None else nearest_live(ref), mine)
+            if index is not None:
+                insert_at(index + 1, mine)
+            else:
+                target, fallback = nearest_live(ref, item.get("location"))
+                if fallback:
+                    result["placementFallback"] = True
+                insert_at(target, mine)
             writes = True
             results.append(result)
             continue
@@ -633,9 +684,11 @@ def _apply_actions(connection, did: UUID, payload: dict, request_items: list[Res
                         break
             if target is None:
                 result["placementFallback"] = True
-                target = nearest_live(ref)
+                target, _ = nearest_live(ref, item.get("location"))
         else:
-            target = nearest_live(ref)
+            target, fallback = nearest_live(ref, item.get("location"))
+            if fallback:
+                result["placementFallback"] = True
         insert_at(target, mine)
         writes = True
         results.append(result)

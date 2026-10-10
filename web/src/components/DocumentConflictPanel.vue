@@ -84,7 +84,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     keys.done();
     const fallback = result.items.some(entry => entry.placementFallback);
     emit("resolved", result);
-    if (fallback) cardNotice.value = { ...cardNotice.value, [id(item)]: "原章节已不存在，已放在最近的位置。" };
+    if (fallback) cardNotice.value = { ...cardNotice.value, [id(item)]: "位置已变化，请检查恢复的段落。" };
     delete manualOpen.value[id(item)];
     await load();
   } catch (error) {

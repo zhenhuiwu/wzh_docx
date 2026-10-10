@@ -1491,6 +1491,8 @@ async function acceptResolution(result: ResolveResult) {
   const record = document.value;
   if (!record) return;
   conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: result.mineOpen, mineHandled: (conflictSummary.value?.mineHandled || 0) + result.items.length };
+  // 复审 M3：原位置附近已找不到时放到了章节末尾，提醒用户检查
+  if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
   if (result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
   mergeBase = null;
   await acceptContent({ ...record, revision: result.documentRevision, markdownContent: result.markdownContent } as unknown as DocumentContentResult);

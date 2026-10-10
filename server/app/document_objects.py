@@ -146,10 +146,13 @@ def _sync(connection, document_id: UUID, blocks: list[Block], doc_revision: int,
         records.append(("insert", object_id, None, 0, None, block.body, index, None))
         order.append(object_id)
 
+    deleted_rows: list[tuple[object, int]] = []
+
     def delete(row, old_index: int) -> None:
         connection.execute(
             "UPDATE document_objects SET deleted_at=now(), deleted_doc_revision=%s WHERE id=%s", (doc_revision, row["id"]),
         )
+        deleted_rows.append((row["id"], old_index))
         records.append(("delete", row["id"], row["revision"], None, row["body"], None, old_index, 1))
 
     by_id = {str(row["id"]): (index, row) for index, row in enumerate(live)}
@@ -191,6 +194,12 @@ def _sync(connection, document_id: UUID, blocks: list[Block], doc_revision: int,
             for offset in range(b1, b2):
                 insert(blocks[j1 + offset], j1 + offset)
 
+    # 复审 M3：记下删除时紧挨在前面、本次仍存活的对象（'^' = 文档开头），恢复时按它定位
+    survivors = {str(value) for value in order}
+    for object_id, old_index in deleted_rows:
+        before = next((str(live[index]["id"]) for index in range(old_index - 1, -1, -1)
+                       if str(live[index]["id"]) in survivors), "^")
+        connection.execute("UPDATE document_objects SET deleted_after_ref=%s WHERE id=%s", (before, object_id))
     positions = {row["id"]: row["position"] for row in live}
     for index, object_id in enumerate(order):
         wanted = (index + 1) * POSITION_STEP
