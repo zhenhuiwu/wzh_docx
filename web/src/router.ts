@@ -12,20 +12,23 @@ import TemplatesView from "./views/TemplatesView.vue";
 import SignIn from "./views/SignIn.vue";
 import ChangePasswordView from "./views/ChangePasswordView.vue";
 import UsersView from "./views/UsersView.vue";
+import KnowledgeView from "./views/KnowledgeView.vue";
+import KnowledgeDetailView from "./views/KnowledgeDetailView.vue";
+import NotFoundView from "./views/NotFoundView.vue";
 import WritingSkillsView from "./views/WritingSkillsView.vue";
 
 const TestCasesView = defineAsyncComponent({
   loader: () => import("./views/TestCasesView.vue"),
   delay: 0,
-  loadingComponent: { render: () => h("section", { class: "card" }, [
-    h("header", { class: "head" }, h("h1", "测试用例管理")),
-    h("p", { class: "empty", role: "status" }, "正在加载…"),
+  loadingComponent: { render: () => h("section", { class: "view fill" }, [
+    h("header", { class: "page-head" }, h("div", h("h1", "测试用例管理"))),
+    h("div", { class: "card" }, h("div", { class: "state-panel", role: "status" }, [h("span", { class: "spinner", "aria-hidden": "true" }), "正在加载…"])),
   ]) },
-  errorComponent: { render: () => h("section", { class: "card" }, [
-    h("header", { class: "head" }, h("h1", "测试用例管理")),
-    h("div", { class: "empty", role: "alert" }, ["页面加载失败。",
+  errorComponent: { render: () => h("section", { class: "view fill" }, [
+    h("header", { class: "page-head" }, h("div", h("h1", "测试用例管理"))),
+    h("div", { class: "card" }, h("div", { class: "state-panel", role: "alert" }, [h("strong", "页面加载失败"),
       h("button", { type: "button", class: "ghost", onClick: () => window.location.reload() }, "重新加载"),
-    ]),
+    ])),
   ]) },
 });
 
@@ -84,7 +87,19 @@ export const router = createRouter({
           name: "project-reviews",
           redirect: (to) => ({ name: "project", params: { id: to.params.id } }),
         },
-        { path: "knowledge/:id?", redirect: { name: "projects" } },
+        // 知识库：页面与接口均已实现（DEV-09），此前路由被整体重定向到项目列表，导致入口不可达（02 评审 P1-6）。
+        {
+          path: "knowledge",
+          name: "knowledge",
+          component: KnowledgeView,
+          meta: { title: "知识库", permission: "knowledge.read" },
+        },
+        {
+          path: "knowledge/:id",
+          name: "knowledge-base",
+          component: KnowledgeDetailView,
+          meta: { title: "知识库详情", permission: "knowledge.read" },
+        },
         { path: "assistant", redirect: { name: "projects" } },
         {
           path: "test-cases",
@@ -108,7 +123,7 @@ export const router = createRouter({
           path: "system/users",
           name: "users",
           component: UsersView,
-          meta: { title: "用户管理" },
+          meta: { title: "用户管理", permission: "users.read" },
         },
         {
           path: "system/skills",
@@ -117,9 +132,10 @@ export const router = createRouter({
           meta: { title: "Skill 管理" },
         },
         { path: "users", redirect: { name: "users" } },
+        // 未知地址显示 404，不再静默跳回项目列表（02 评审 P1-6）。
+        { path: ":pathMatch(.*)*", name: "not-found", component: NotFoundView, meta: { title: "页面不存在" } },
       ],
     },
-    { path: "/:pathMatch(.*)*", redirect: { name: "projects" } },
   ],
 });
 

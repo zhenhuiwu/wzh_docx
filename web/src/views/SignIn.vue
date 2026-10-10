@@ -76,6 +76,8 @@ async function onSubmit() {
       staffId: session.user.account,
       name: session.user.name,
       mustChangePassword: Boolean(session.user.requiresFirstLoginChange),
+      department: session.user.department,
+      permissions: session.permissions,
     });
     password.value = "";
     showPassword.value = false;

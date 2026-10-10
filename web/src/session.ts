@@ -6,6 +6,13 @@ export interface Session {
   staffId: string;
   name: string;
   mustChangePassword: boolean;
+  /** 仅用于界面展示与导航显隐；真正的权限由服务端校验。 */
+  department?: string;
+  permissions?: string[];
+}
+
+export function hasPermission(session: Session | null, permission: string): boolean {
+  return Boolean(session?.permissions?.includes(permission));
 }
 
 let cache: Session | null = null;
@@ -68,6 +75,8 @@ export async function ensureSession(): Promise<Session | null> {
       staffId: current.user.account,
       name: current.user.name,
       mustChangePassword: Boolean(current.user.requiresFirstLoginChange),
+      department: current.user.department,
+      permissions: current.permissions,
     };
     return cache;
   } catch {
