@@ -127,7 +127,7 @@ cd deploy
 - 数据迁移由 `deploy/snapshot_data.py` 完成：只读校验源数据，清空会话等临时表，拒绝覆盖已有部署目录。
 - 部署包在 `deploy/.build/package` 中**按允许清单**重新组装（程序、`_internal`、迁移的 `data`、`.env.example`、`使用说明.txt`、`部署校验.json`），每次先清空；`release/` 中本机试用留下的 `.env`、数据、日志、密码文件不会进入 zip。出现清单外的文件时打包直接失败。`-NoZip` 只刷新 `release/文档工作室` 中的程序文件，保留其旁边的数据和 `.env`。
 - **部署包不含 `.env` 和 AI 密钥**，只生成 `.env.example`（带原环境的 AI 地址、模型等非敏感配置，值按 python-dotenv 规则转义）。目标电脑需要 AI 功能时，复制为 `.env` 并填写 `AI_API_KEY`。
-- **部署包不含被测系统的登录密码**：测试任务里保存的 `testPassword`（以及 JSON 中其他名为 password、secret、apiKey、token 的字段）在复制出的数据库中被清除，残留的明文也会被遮盖，数据库随后 VACUUM 重建。**部署后请在“测试用例管理”中逐个任务重新填写被测系统密码再执行测试。** 账号密码以哈希形式迁移，原密码继续有效。
+- **部署包不含被测系统的登录密码**：只在测试执行相关的列（`test_tasks.config_json/cases_json/error`、`test_task_runs.snapshot_json/result_json`）中删除 `testPassword` 等凭据键（password、secret、apiKey、token），并把这些列里残留的明文替换为 `******`，按“表.列”记入 `部署校验.json`；其他列保证原样，迁移时会校验。若被删除的密码作为完整词还出现在其他表（例如弱密码 `123456` 出现在正文、或与某个账号同名），迁移会停止并指出表和列，不会替换，请先在原系统中修改该测试任务的被测系统密码后重试。数据库随后 VACUUM 重建。**部署后请在“测试用例管理”中逐个任务重新填写被测系统密码再执行测试。** 账号密码以哈希形式迁移，原密码继续有效。
 
 ## 目录
 

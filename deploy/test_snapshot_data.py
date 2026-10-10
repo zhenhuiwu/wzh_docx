@@ -109,7 +109,11 @@ def check() -> None:
             snapshot_json, result_json = copied.execute("SELECT snapshot_json,result_json FROM test_task_runs").fetchone()
             assert "testPassword" not in json.loads(snapshot_json)
             assert "******" in result_json
-        assert metadata["scrubbed_credentials"]["credentials_removed"] == 3
+        assert metadata["scrubbed_credentials"] == {
+            "credentials_removed": 3,
+            "keys_removed": {"test_task_runs.snapshot_json": 1, "test_tasks.config_json": 2},
+            "masked_occurrences": {"test_task_runs.result_json": 1},
+        }
         source_config = json.loads(sqlite3.connect(database).execute("SELECT config_json FROM test_tasks").fetchone()[0])
         assert source_config["testPassword"] == "tester-secret-123"
         assert "do-not-print-this" not in json.dumps(metadata)
@@ -148,6 +152,86 @@ def check() -> None:
     print("snapshot check passed: preserved data/evidence, shipped .env.example without secrets, cleared copied sessions, refused overwrite/concurrent writes/running tasks")
 
 
+def _weak_source(root: Path, password: str, document: str, account: str) -> tuple[Path, Path, Path]:
+    source = root / "source"
+    (source / "files" / "objects").mkdir(parents=True)
+    env_file = source / ".env"
+    env_file.write_text("", encoding="utf-8")
+    database = source / "app.db"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.executescript("""
+            CREATE TABLE documents(id TEXT PRIMARY KEY, markdown_content TEXT);
+            CREATE TABLE users(id TEXT PRIMARY KEY, account TEXT, account_key TEXT, password_hash TEXT);
+            CREATE TABLE files(storage_key TEXT,size_bytes INTEGER,sha256 TEXT,status TEXT);
+            CREATE TABLE test_tasks(id TEXT PRIMARY KEY,status TEXT,config_json TEXT,cases_json TEXT,error TEXT);
+            CREATE TABLE test_task_runs(id TEXT,status TEXT,snapshot_json TEXT,result_json TEXT);
+        """)
+        config = json.dumps({"testUsername": "tester", "testPassword": password})
+        connection.execute("INSERT INTO documents VALUES('doc',?)", (document,))
+        connection.execute("INSERT INTO users VALUES('u1',?,?,?)", (account, account.lower(), f"pbkdf2$x{password}y$z"))
+        connection.execute("INSERT INTO test_tasks VALUES('task','ready',?,'[]','')", (config,))
+        connection.execute("INSERT INTO test_task_runs VALUES('run','completed',?,?)",
+                           (config, json.dumps({"log": f"fill {password}"})))
+        connection.commit()
+    return database, source / "files", env_file
+
+
+def check_weak_passwords() -> None:
+    import snapshot_data
+    from snapshot_data import CredentialLeftError
+
+    cases = [
+        ("123456", "产品编号 123456", "writer", "documents.markdown_content"),
+        ("zhangsan", "普通正文", "zhangsan", "users.account"),
+    ]
+    for password, document, account, where in cases:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database, files, env_file = _weak_source(root, password, document, account)
+            original = database.read_bytes()
+            try:
+                snapshot(database, files, env_file, root / "package", execute=True)
+            except CredentialLeftError as error:
+                assert where in str(error), str(error)
+            else:
+                raise AssertionError(f"{where} must stop the migration")
+            assert database.read_bytes() == original
+            assert not (root / "package" / "data").exists()
+
+    # Not a whole token, or only inside a hash: business data is shipped unchanged.
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        database, files, env_file = _weak_source(root, "123456", "订单 A1234567 与 1234567", "writer")
+        metadata = snapshot(database, files, env_file, root / "package", execute=True)
+        with closing(sqlite3.connect(root / "package/data/app.db")) as copied, closing(sqlite3.connect(database)) as source:
+            for query in ("SELECT * FROM documents", "SELECT * FROM users"):
+                assert copied.execute(query).fetchall() == source.execute(query).fetchall()
+            assert "123456" not in copied.execute("SELECT result_json FROM test_task_runs").fetchone()[0]
+        assert metadata["scrubbed_credentials"]["masked_occurrences"] == {"test_task_runs.result_json": 1}
+
+    # A scrub that touched another table is caught by the integrity check.
+    original_scrub = snapshot_data.scrub_credentials
+
+    def overreaching(connection):
+        result = original_scrub(connection)
+        connection.execute("UPDATE documents SET markdown_content='changed'")
+        return result
+
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        database, files, env_file = _weak_source(root, "strong-pass-123", "正文", "writer")
+        with patch.object(snapshot_data, "scrub_credentials", overreaching):
+            try:
+                snapshot(database, files, env_file, root / "package", execute=True)
+            except RuntimeError as error:
+                assert "测试执行记录以外" in str(error), str(error)
+            else:
+                raise AssertionError("integrity check must catch collateral changes")
+        assert not (root / "package" / "data").exists()
+    print("weak password check passed: leftovers outside test tables stop the migration, business tables unchanged")
+
+
 if __name__ == "__main__":
     check_env_quoting()
+    check_weak_passwords()
     check()
