@@ -140,3 +140,21 @@ def test_m3_deleted_after_ref_recorded(team):
                                    (did,)).fetchone()["id"]
     assert str(rows["# 1 范围"]) == "^"
     assert str(rows["第二段。"]) == str(first)
+
+
+def test_preview_keeps_existing_noncharacter_apart_from_tabs(tmp_path):
+    """复审：正文原有的 U+FDEF 不能被预览当成 tab 还原；行内 tab 仍保留。"""
+    from docx import Document as WordDocument
+
+    from app.docx_parser import parse_docx
+    from app.docx_preview import render_document_html
+
+    source = tmp_path / "mark.docx"
+    doc = WordDocument()
+    doc.add_paragraph("甲\ufdef乙\t丙\ufdee丁")
+    doc.save(source)
+    markdown = parse_docx(str(source)).markdown
+    assert "\ufdef" in markdown and "\t" in markdown
+    html_text = render_document_html(source, markdown)
+    assert html_text.count("\t") == 1
+    assert html_text.count("\ufdef") == 1 and html_text.count("\ufdee") == 1

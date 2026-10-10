@@ -39,24 +39,37 @@ _FIELD_LIKE = (
 )
 # 测试 L4：Python-Markdown 会把制表符展开成空格，编辑区再存回去时 \t 就变成了空格。
 # 行内（行首非空白之后）的制表符先换成非字符占位，渲染后在文本里还原成 \t（行首缩进不动）。
-_TAB_MARK = "\ufdef"
+# 复审：正文里本来就有的非字符不能被当成 tab 还原——每次从候选里挑一个正文没出现过的；
+# 候选全被占用（几乎不可能）时干脆不替换，退回旧行为（tab 展开为空格），不会改动正文原有字符。
+_TAB_MARK_CANDIDATES = tuple(chr(code) for code in range(0xFDEF, 0xFDCF, -1)) + tuple(
+    chr(plane * 0x10000 + 0xFFFE + low) for plane in range(1, 17) for low in (0, 1)
+)
 
 
-def _hide_inline_tabs(markdown_text: str) -> str:
+def _pick_tab_mark(markdown_text: str) -> str | None:
+    return next((mark for mark in _TAB_MARK_CANDIDATES if mark not in markdown_text), None)
+
+
+def _hide_inline_tabs(markdown_text: str, mark: str | None) -> str:
+    if mark is None:
+        return markdown_text
+
     def line(text: str) -> str:
         stripped = text.lstrip(" \t")
         lead = text[:len(text) - len(stripped)]
-        return lead + stripped.replace("\t", _TAB_MARK)
+        return lead + stripped.replace("\t", mark)
     return "".join(line(part) for part in markdown_text.splitlines(keepends=True))
 
 
-def _restore_inline_tabs(root) -> None:
+def _restore_inline_tabs(root, mark: str | None) -> None:
+    if mark is None:
+        return
     for node in root.iter():
         if isinstance(node.tag, str):
-            if node.text and _TAB_MARK in node.text:
-                node.text = node.text.replace(_TAB_MARK, "\t")
-            if node.tail and _TAB_MARK in node.tail:
-                node.tail = node.tail.replace(_TAB_MARK, "\t")
+            if node.text and mark in node.text:
+                node.text = node.text.replace(mark, "\t")
+            if node.tail and mark in node.tail:
+                node.tail = node.tail.replace(mark, "\t")
 
 
 _DROP_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math", "form", "input", "button"}
@@ -508,9 +521,10 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied), outline_headings=outline_headings)
         doc = Document(edited)
         root = html.Element("div")
-        for block in _html_blocks(_hide_inline_tabs(current_markdown)):
+        tab_mark = _pick_tab_mark(current_markdown)
+        for block in _html_blocks(_hide_inline_tabs(current_markdown, tab_mark)):
             root.append(block)
-        _restore_inline_tabs(root)
+        _restore_inline_tabs(root, tab_mark)
         _sanitize(root)
         target = list(root)
         flat = any((_list_info(paragraph) or ("", 0))[1] for paragraph in doc.paragraphs) and not any(
