@@ -7,6 +7,7 @@ import { hasPermission, readSession } from "../session";
 import { ApiError } from "../api/client";
 import { getProject } from "../api/projects";
 import { projectCrumb, rememberProject } from "../crumbs";
+import { flashMessage } from "../flash";
 
 const route = useRoute();
 const router = useRouter();
@@ -197,6 +198,7 @@ async function logout() {
           <span v-if="!collapsed" class="nav-label">收起导航</span>
         </button>
       </aside>
+      <div class="toast-region" role="status" aria-live="polite"><p v-if="flashMessage" class="toast"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" /></svg>{{ flashMessage }}</p></div>
       <main class="content" :class="{ 'is-document': isWorkbench }">
         <section v-if="denied" class="view fill">
           <header class="page-head"><div><h1>{{ pageTitle }}</h1></div></header>
@@ -257,6 +259,9 @@ a.crumb:hover { color:var(--text-primary); text-decoration:underline; text-under
 .collapsed .collapse { justify-content:center; padding:0; }
 .collapse:hover:not(:disabled) { background:var(--bg-hover); color:var(--text-primary); }
 .collapse:disabled { cursor:default; opacity:.6; }
+.toast-region { position:fixed; top:calc(var(--topbar-h) + var(--space-3)); left:50%; z-index:30; transform:translateX(-50%); }
+.toast { display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-2) var(--space-4); border:1px solid var(--success-200); border-radius:var(--radius-sheet); background:var(--success-50); color:var(--success-600); box-shadow:var(--shadow-2); font-size:var(--text-sm); }
+.toast svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .content { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; padding:var(--content-pad); }
 /* 工作台高度按旧框架（顶栏 60 + 上下内边距 24）计算，这里补齐 12px，避免底部留白；阶段2 合并后改用 --content-h。 */
 .content.is-document { padding-block:calc(var(--content-pad) + var(--space-3) / 2); }
