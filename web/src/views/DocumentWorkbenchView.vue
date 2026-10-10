@@ -11,7 +11,7 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { countChars, caretBlockIndex, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
+import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -79,6 +79,16 @@ const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.va
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
+// 测试工程师 F-M3：重绘后光标放不回去（失焦）时，之后敲到页面上的字先记下并提示，不无声丢掉
+let caretLostAt = 0;
+let typedAfterCaretLost = "";
+let caretLostTimer: number | undefined;
+// 测试工程师 F-L1：打开文档检查本机草稿的约 0.25s 内，点在正文上的位置和敲下的字先记下，解锁后在该位置写回
+let loadPoint: { node: Node; offset: number } | null = null;
+let typedDuringLoad = "";
+let imeDuringLoad = false;
+// 测试工程师 F-H4：最近一次保存进入冲突的时间（恢复草稿据此判断“冲突未处理”）
+let lastConflictAt = 0;
 let lockHadFocus = false;
 let lockCaret: { index: number; offset: number }[] = [];
 let lockBlocks: string[] = [];
@@ -121,7 +131,11 @@ let leaveBypass = false;
 let retryTimer: number | undefined;
 let savingTimer: number | undefined;
 let clockTimer: number | undefined;
-let pendingKey: { content: string; key: string } | null = null;
+/**
+ * 上一次提交（同一内容的重试复用同一个键）。增量审查建议：响应丢失/超时后又打了字，先按原内容、原基准、原键重放一次，
+ * 确认上一次是否已提交（已提交则服务器按键返回原结果，基准随之前移），再提交新内容，不会和自己冲突。
+ */
+let pendingKey: { content: string; key: string; base: number; baseMarkdown?: string; dsend: string; gen: number; editor?: EditorAtConflict } | null = null;
 // S5：编辑区正文所基于的修订号。合并保存后编辑区若有更新的输入，编辑区仍基于旧修订，下次保存以它为基准做三方合并。
 let mergeBase: number | null = null;
 /**
@@ -129,7 +143,22 @@ let mergeBase: number | null = null;
  * dom 是那一刻编辑区的文字，value 是对应的“服务器新正文 + 本地未保存修改”。之后每次输入把编辑区相对 dom 的改动
  * 平移到 value 上（rebaseBlocks），正文始终以服务器新版本为基准，不再按旧基准提交、也不会与自己冲突。编辑区重绘后清空。
  */
-let domPair: { dom: string; value: string; baseRevision: number } | null = null;
+let domPair: { dom: string; value: string } | null = null;
+/**
+ * 增量审查 M1：平移不了（rebaseBlocks 返回 null）时不再退回旧修订作基准——那样自己已保存、又接着打字的段落会被当成
+ * 对方的修改而与自己冲突。改为“显式基准”：domBase 是与最近一次成功保存对应的编辑区文字；退回时正文换成编辑区文字，
+ * 以 explicitBase（= 那时的 domBase）为基准、以服务器最新修订为 expectedRevision 提交（baseMarkdown），
+ * 服务器据此三方合并：只有对方真改过、自己又改了的段落才冲突，冲突里的“对方”是别人。
+ */
+let domBase = "";
+let explicitBase: string | null = null;
+// 每次退回显式基准 +1；在途的保存返回时据此知道编辑区已换回编辑区文字
+let fallbackGen = 0;
+/**
+ * 冲突后重交可合并部分时，最初那次提交的正文（content，与编辑区正文同一空间）、对应的编辑区文字（dom）和退回代数（gen）。
+ * 重交本身再冲突时沿用最初这一份（测试工程师 F-H3：否则拿“可合并部分”当基线平移，会把对方刚写进的段落当成我删掉的）。
+ */
+interface EditorAtConflict { content: string; dom: string; gen: number }
 const conflictSummary = ref<ConflictSummary | null>(null);
 // 界面验收 M2/M3：冲突入口按 mineOpen / 成员冲突 / 已处理记录显示；打开时停在对应页签。
 const conflictTab = ref<"mine" | "members">("mine");
@@ -375,6 +404,8 @@ async function load() {
   draftDiffOpen.value = false;
   mergeBase = null;
   domPair = null;
+  explicitBase = null;
+  domBase = "";
   skillOpen.value = false;
   aiUndo.value = null;
   memoryOffset.value = 0;
@@ -478,6 +509,7 @@ function findLocalDrafts(record: DocumentRecord) {
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
   checkingDrafts.value = false;
+  void flushLoadTyping();
   void settlePendingSaves(record);
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
@@ -543,7 +575,7 @@ function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; 
 /** 派生写入 409 OBJECT_CONFLICT：冲突已存为副本，按主动保存处理（打开面板 + 重交可合并部分）。 */
 function derivedConflict(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.code !== "OBJECT_CONFLICT" || !document.value) return false;
-  handleSaveError(error, markdownContent.value, "manual", document.value.revision);
+  handleSaveError(error, markdownContent.value, "manual", editorText());
   return true;
 }
 function dismissedTabs(docId: string): string[] {
@@ -914,6 +946,7 @@ function chooseAiScope(scope: WritingMemory["scope"]) {
 }
 function showEditorHtml(html: string, mapped?: boolean) {
   domPair = null;
+  explicitBase = null;
   if (mapped !== undefined) previewModel.value = mapped;
   layoutNeedsRefresh = false;
   lastCaret = null;
@@ -1002,8 +1035,67 @@ function lockedTarget(event: Event): boolean {
 /** 终审建议：锁定期间的输入法输入（组字）无法缓冲，至少在解锁时提示，不能静默丢掉。 */
 function noteLockedComposition(event: Event) {
   if (lockedTarget(event)) imeDuringLock = true;
+  if (checkingDrafts.value && loadPoint && onBodyTarget(event)) imeDuringLoad = true;
+}
+function noteLoadPointer(event: PointerEvent) {
+  const root = editor.value;
+  if (!checkingDrafts.value || !root || !(event.target instanceof Node) || !root.contains(event.target)) return;
+  // 解锁时提示条收起会让版式上移，按点击当时的文字位置（节点 + 偏移）记，不按坐标
+  const range = (window.document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }).caretRangeFromPoint?.(event.clientX, event.clientY);
+  loadPoint = range && root.contains(range.startContainer) ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+function onEditorFocusIn() { caretLostAt = 0; }
+/** 测试工程师 F-L1：载入锁定结束后，把锁定期间敲下的字写到当时点击的位置；写不进去就提示，不无声丢掉。 */
+async function flushLoadTyping() {
+  const point = loadPoint, typed = typedDuringLoad, ime = imeDuringLoad;
+  loadPoint = null;
+  typedDuringLoad = "";
+  imeDuringLoad = false;
+  if (!typed && !ime) return;
+  await nextTick();
+  const root = editor.value;
+  let placed = false;
+  if (typed && point && root && editable.value && root.contains(point.node)) {
+    root.contentEditable = "true";
+    root.focus({ preventScroll: true });
+    const range = window.document.createRange();
+    try {
+      range.setStart(point.node, Math.min(point.offset, point.node.nodeType === Node.TEXT_NODE ? (point.node.textContent || "").length : point.node.childNodes.length));
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      placed = window.document.execCommand("insertText", false, typed);
+    } catch { placed = false; }
+  }
+  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000);
+  else if (typed && !placed) noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000);
+}
+function onBodyTarget(event: Event): boolean {
+  const target = event.target as Node | null;
+  const root = editor.value;
+  return Boolean(root) && (!target || target === window.document.body || root!.contains(target));
 }
 function bufferLockedTyping(event: KeyboardEvent) {
+  if (checkingDrafts.value && loadPoint && onBodyTarget(event)) {
+    // 测试工程师 F-L1：载入锁定期间点了正文又打字：先记下，解锁后写回
+    if (event.isComposing || event.key === "Process") { imeDuringLoad = true; return; }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key.length === 1) { typedDuringLoad += event.key; event.preventDefault(); }
+    return;
+  }
+  if (!refreshingEditor.value && caretLostAt && Date.now() - caretLostAt < 30000 && event.target === window.document.body) {
+    // 测试工程师 F-M3：重绘后失焦，之后敲下的字不能无声丢失：记下并提示
+    if (event.ctrlKey || event.metaKey || event.altKey || !(event.key.length === 1 || event.key === "Process")) return;
+    if (event.key.length === 1) typedAfterCaretLost += event.key;
+    window.clearTimeout(caretLostTimer);
+    caretLostTimer = window.setTimeout(() => {
+      const typed = typedAfterCaretLost;
+      noteAction(typed ? `编辑区刚刷新，光标不在正文里，输入的“${typed.slice(0, 40)}${typed.length > 40 ? "…" : ""}”没有写入正文。请点击要写的位置后重新输入。`
+        : "编辑区刚刷新，光标不在正文里，刚才的输入没有写入正文。请点击要写的位置后重新输入。", 15000);
+    }, 500);
+    return;
+  }
   if (!lockedTarget(event)) return;
   if (event.isComposing || event.key === "Process") { imeDuringLock = true; return; }
   if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -1015,12 +1107,29 @@ function restoreMappedCaret(root: HTMLElement, before: string[], caret: { index:
   // 对齐不确定（含超大文档）时退一步放到文字在前后两版都唯一的段（最后一审建议 2：尽量不无谓失焦）
   const mapped = caret.map(point => ({ index: caretBlockIndex(before, after, point.index), offset: point.offset }));
   if (mapped.length === 2 && mapped.every((point, n) => point.index >= 0 && after[point.index] === before[caret[n].index]) && restoreCaret(root, mapped)) return true;
+  // 测试工程师 F-M3：光标所在段本身被换掉了（如这段有冲突、编辑区换成了对方的版本），但前后两段都原样、位置确定：
+  // 光标放到这一段末尾并提示，接着打的字写在这段里（对方的版本保留，我之前的版本在冲突副本里），不再失焦让字无声丢失
+  const at = caret.length === 2 && caret[0].index === caret[1].index ? caret[0].index : -1;
+  if (at >= 0) {
+    const left = at > 0 ? caretBlockIndex(before, after, at - 1) : -1;
+    const right = at + 1 < before.length ? caretBlockIndex(before, after, at + 1) : after.length;
+    const target = left + 1;
+    if ((at === 0 || left >= 0) && right === left + 2 && (at === 0 || after[left] === before[at - 1]) && (right === after.length || after[right] === before[at + 1])
+      && after[target] !== undefined && restoreCaret(root, [{ index: target, offset: after[target].length }, { index: target, offset: after[target].length }])) {
+      noteAction("光标所在的段落已更新为合并后的内容（如有冲突，你原来的版本在冲突面板里）。接着输入的字会写在这一段末尾。", 10000);
+      return true;
+    }
+  }
   leaveEditorCaret(root);
   return false;
 }
 function leaveEditorCaret(root: HTMLElement) {
   window.getSelection()?.removeAllRanges();
-  if (window.document.activeElement === root || root.contains(window.document.activeElement)) root.blur();
+  if (window.document.activeElement === root || root.contains(window.document.activeElement)) {
+    root.blur();
+    caretLostAt = Date.now();
+    typedAfterCaretLost = "";
+  }
 }
 function beginEditorLock(reason: string) {
   const root = editor.value;
@@ -1571,13 +1680,12 @@ function onEditorInput(event?: Event) {
   if (domPair) {
     const value = rebaseBlocks(domPair.dom, dom, domPair.value);
     if (value !== null) {
-      domPair = { ...domPair, dom, value };
+      domPair = { dom, value };
       markdownContent.value = value;
     } else {
-      // 改到了编辑区里还是旧内容的段落（对方刚改过的那段）：退回按编辑区原基准提交，由服务器三方合并（同段才会冲突）
-      mergeBase = domPair.baseRevision;
-      domPair = null;
-      markdownContent.value = dom;
+      // 增量审查 M1：平移不了（如改到了对方刚改过、编辑区里还是旧文字的段落）：正文换成编辑区文字，
+      // 以最近一次成功保存对应的编辑区文字为显式基准提交（同段才会冲突，已保存过的内容不会被当成对方的修改）
+      fallbackToExplicit(domBase, dom);
     }
   } else markdownContent.value = dom;
   scheduleDraftWrite();
@@ -1623,6 +1731,7 @@ function currentDraft(): DraftV2 | null {
   if (!record) return null;
   return {
     v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: mergeBase ?? record.revision, savedAt: Date.now(),
+    ...(explicitBase !== null ? { baseMarkdown: explicitBase } : {}),
     wholeDocument: true, markdown: markdownContent.value, blocks: [], changed: pendingCount.value,
     headingPaths: headingPathsOf(markdownContent.value), conflictsEdits: [], pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
     writer: pageInstance,
@@ -1671,12 +1780,22 @@ async function restoreLocalDraft() {
   if (!draft || !record || draftBusy.value || readonly.value || !draft.markdown) return;
   draftBusy.value = true;
   let pending = false;
+  const restoreStarted = Date.now();
   try {
     // 审查 S6：先等在途的保存结束，保持单飞。
     if (savePromise) await savePromise.catch(() => undefined);
     // 最后一审建议 3：上一份恢复的内容还没存上服务器（重试中/冲突未处理）时不恢复下一份，否则会把它覆盖掉
     if (isDirty.value || retrying.value || blocked.value) {
       noteAction("编辑区还有没保存到服务器的内容（可能是刚恢复的那份）。等保存成功或处理完冲突后再恢复下一份，以免覆盖。", 10000);
+      return;
+    }
+    // 测试工程师 F-H4：还有未处理的冲突（如上一份恢复的内容与他人修改冲突）时不恢复下一份——
+    // 同一段再次冲突会作废前一条冲突记录，前一份草稿的内容就找不回来了
+    await refreshConflicts();
+    if (document.value !== record) return;
+    if ((conflictSummary.value?.mineOpen ?? 0) > 0) {
+      noteAction("还有未处理的冲突（可能来自刚恢复的那份草稿）。请先在冲突面板处理完，再恢复下一份草稿，以免覆盖。", 10000);
+      openConflicts("mine");
       return;
     }
     // 终审建议：恢复别的标签的草稿时，本标签的旧草稿先换个键保存——恢复后的编辑会写本标签的键，不能把它覆盖掉
@@ -1686,14 +1805,21 @@ async function restoreLocalDraft() {
     }
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
-    await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
+    // 增量审查 M1：草稿记着显式基准时按它合并（expectedRevision 用当前修订）
+    if (typeof draft.baseMarkdown === "string") await saveContent(draft.markdown, "manual", record.revision, undefined, { baseMarkdown: draft.baseMarkdown });
+    else await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
     if (blocked.value || document.value !== record) return;
+    const conflicted = lastConflictAt >= restoreStarted;
+    if (conflicted) {
+      // 恢复的内容与他人的修改冲突：冲突部分已存为冲突副本，其余已（或正在）保存；不是“重试中”
+      noteAction("恢复的内容有部分与他人的修改冲突，已存为冲突副本（见冲突面板）；其余内容已保存。处理完冲突后再恢复下一份草稿。", 10000);
+    }
     if (retrying.value || saving.value) {
       // 最后一审建议 3：没存上服务器之前不删这份草稿，也不解锁编辑区（编辑区里仍是旧正文，解锁后一输入就会把恢复的内容冲掉）。
       // 重试存上后由下面的 watch 收尾：按服务器正文重绘、删草稿、显示下一份。
       restorePending.value = { draft, record };
       pending = true;
-      noteAction("恢复的内容还没存上服务器，正在自动重试；存上后会显示在编辑区，再处理下一份草稿。", 10000);
+      if (!conflicted) noteAction("恢复的内容还没存上服务器，正在自动重试；存上后会显示在编辑区，再处理下一份草稿。", 10000);
       return;
     }
     await finishRestore(draft, record);
@@ -1722,8 +1848,11 @@ watch([restorePending, isDirty, retrying, saving, blocked], async () => {
     return;
   }
   restorePending.value = null;
-  try { await finishRestore(pending.draft, pending.record); }
-  finally { draftBusy.value = false; }
+  try {
+    await finishRestore(pending.draft, pending.record);
+    // 测试工程师（低）：存上之后撤掉“正在自动重试”的提示
+    if (actionNote.value.startsWith("恢复的内容还没存上服务器")) noteAction("恢复的内容已保存。", 4000);
+  } finally { draftBusy.value = false; }
 });
 /** 本标签的旧草稿改存到 “<tabId>-kept-<时间>” 键下（仍列在恢复条里）；没有这份草稿或改存成功时返回 true。 */
 function keepOwnDraftAside(record: DocumentRecord): boolean {
@@ -1794,15 +1923,24 @@ function save(trigger: "auto" | "manual" = "auto"): Promise<void> {
   if (savePromise) return savePromise.then(() => (isDirty.value && !retrying.value && !blockedFor(markdownContent.value) ? save(trigger) : undefined));
   if (!document.value || !isDirty.value || aiPreviewHost.value || readonly.value) return Promise.resolve();
   if (trigger === "auto" && blockedFor(markdownContent.value)) return Promise.resolve();
-  return saveContent(markdownContent.value, trigger);
+  // 增量审查建议：上一次提交结果不明（响应丢失/超时，正在重试）而之后又打了字：先原样重放上一次，确认后再提交新内容
+  const previous = pendingKey;
+  if (previous && retrying.value && previous.content !== markdownContent.value) {
+    return saveContent(previous.content, trigger, previous.base, previous.editor, { baseMarkdown: previous.baseMarkdown, replay: previous })
+      .then(() => (isDirty.value && !retrying.value && !blocked.value && !savePromise ? save(trigger) : undefined));
+  }
+  return saveContent(markdownContent.value, trigger, undefined, undefined, explicitBase !== null ? { baseMarkdown: explicitBase } : {});
 }
 function blockedFor(content: string) { return Boolean(blocked.value) && blocked.value!.content === content; }
 /** 单飞保存；同一内容的重试复用同一个 clientSaveKey（01 §6.3）。 */
 /**
- * baseRevision：本次提交所基于的修订（缺省为编辑区基准）。
- * editor：冲突后自动重交可合并部分时，编辑区当时的正文和基准——用户之后没再输入才用服务器正文替换编辑区。
+ * baseRevision：本次提交所基于的修订（缺省为编辑区基准；有显式基准时为服务器最新修订）。
+ * editor：冲突后自动重交可合并部分时，编辑区当时的正文（content）及其对应的编辑区文字（dom）——
+ * 用户之后没再输入才用服务器正文替换编辑区，否则把之后的输入平移到服务器正文上。
+ * extra.baseMarkdown：显式基准正文（增量审查 M1）；extra.replay：重放上一次结果不明的提交（同键、同基准）。
  */
-function saveContent(content: string, trigger: "auto" | "manual", baseRevision?: number, editor?: { content: string; base: number }): Promise<void> {
+function saveContent(content: string, trigger: "auto" | "manual", baseRevision?: number, editor?: EditorAtConflict,
+  extra: { baseMarkdown?: string; replay?: NonNullable<typeof pendingKey> } = {}): Promise<void> {
   const record = document.value!;
   const memory = pendingMemory;
   const current = () => document.value === record && documentId.value === record.id;
@@ -1811,37 +1949,50 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   saving.value = true;
   window.clearTimeout(savingTimer);
   savingTimer = window.setTimeout(() => { if (saving.value) showSaving.value = true; }, 400);
-  if (!pendingKey || pendingKey.content !== content) pendingKey = { content, key: crypto.randomUUID() };
+  const explicit = extra.baseMarkdown ?? null;
+  const base = extra.replay ? extra.replay.base : explicit !== null ? (baseRevision ?? record.revision) : (baseRevision ?? mergeBase ?? record.revision);
+  // 与本次提交对应的编辑区文字：平移中为 domPair.dom，冲突重交为冲突时的编辑区文字，其余就是提交的正文
+  const dsend = extra.replay ? extra.replay.dsend : editor ? editor.dom : explicit === null && domPair && content === domPair.value ? domPair.dom : content;
+  const gen = extra.replay ? extra.replay.gen : editor ? editor.gen : fallbackGen;
+  if (!pendingKey || pendingKey.content !== content) {
+    pendingKey = { content, key: crypto.randomUUID(), base, dsend, gen, editor, ...(explicit !== null ? { baseMarkdown: explicit } : {}) };
+  }
   const key = pendingKey.key;
   flushDraft();
   savePromise = (async () => {
     try {
-      const base = baseRevision ?? mergeBase ?? record.revision;
-      const result = await updateDocumentContent(record.id, base, content, memory, undefined, { clientSaveKey: key, allowMerge: true });
+      const result = await updateDocumentContent(record.id, base, content, memory, undefined,
+        { clientSaveKey: key, allowMerge: true, ...(explicit !== null ? { baseMarkdown: explicit } : {}) });
       if (!current()) return;
-      const typedNewer = markdownContent.value !== (editor?.content ?? content);
+      const sent = editor?.content ?? content;
+      const typedNewer = markdownContent.value !== sent;
       const serverText = result.markdownContent ?? content;
-      const changedText = serverText !== (editor?.content ?? content);
+      const changedText = serverText !== sent;
       savedContent.value = serverText;
       record.revision = result.revision;
       record.status = result.status;
       record.markdownContent = serverText;
+      mergeBase = null;
+      domBase = dsend;
       let rerender = false;
-      if (!typedNewer) {
-        mergeBase = null;
+      if (fallbackGen !== gen && explicitBase !== null) {
+        // 增量审查 M1：在途期间编辑区已退回显式基准（正文 = 编辑区文字）：基准前移到本次提交对应的编辑区文字
+        explicitBase = dsend;
+        persistLocalDraft();
+      } else if (!typedNewer) {
+        explicitBase = null;
         markdownContent.value = serverText;
         // 合并带进了别人的修改：编辑区按服务器正文重绘（不受 AI/草稿锁影响，否则编辑区会停在旧内容上）。
-        // 编辑区还缺之前平移进来的对方修改（domPair）时同样要重绘。
-        rerender = changedText || Boolean(domPair);
+        // 编辑区还缺之前平移进来的对方修改（domPair）或按显式基准提交过（编辑区缺对方修改）时同样要重绘。
+        rerender = changedText || Boolean(domPair) || explicit !== null;
       } else if (changedText) {
         // 终验 F-H2：编辑区有更新的输入，不能替换。把未保存的输入平移到服务器新正文上，下次以新版本为基准提交；
-        // 平移不了（对方也改了正在改的段）才按编辑区原基准合并。
-        if (!editor && rebaseOnto(content, serverText, base)) {
-          mergeBase = null;
-          rerender = false;
-        } else mergeBase = editor?.base ?? base;
+        // 平移不了（如对方也改了正在改的段）就以本次提交对应的编辑区文字为显式基准（增量审查 M1），不按旧修订合并。
+        // 冲突后重交可合并部分时同样平移（增量审查建议：否则下次按旧基准提交，同一处冲突会再记一条）。
+        explicitBase = null;
+        if (!rebaseOnto(sent, serverText)) fallbackToExplicit(dsend);
       } else {
-        mergeBase = null;
+        explicitBase = null;
       }
       // 审查员第 2 条：提示条显示期间（含点了“立即刷新”的这次保存）不再补发“已合并”短提示
       noteMerged(result);
@@ -1864,14 +2015,15 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         const started = Date.now();
         let shown = await acceptContent(merged, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
         if (!shown && current()) {
-          // 终验 F-H2：重绘期间用户在打字而放弃重绘：同样把这些输入平移到服务器新正文上，不按旧基准提交
-          if (lastInputAt >= started) { if (!rebaseOnto(content, serverText, base)) mergeBase = base; }
+          // 终验 F-H2：重绘期间用户在打字而放弃重绘：同样把这些输入平移到服务器新正文上，不按旧基准提交；
+          // 平移不了就以本次提交对应的编辑区文字为显式基准（增量审查 M1）。期间已退回显式基准的保持不变。
+          if (lastInputAt >= started) { if (explicitBase === null && !rebaseOnto(sent, serverText)) fallbackToExplicit(dsend); }
           else shown = await acceptContent(merged, { reason });
         }
         if (shown && mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
       } else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
-      if (current()) handleSaveError(error, content, trigger, baseRevision ?? mergeBase ?? record.revision);
+      if (current()) handleSaveError(error, content, trigger, editor ? editor.dom : dsend, gen, editor?.content);
     } finally {
       saving.value = false;
       showSaving.value = false;
@@ -1883,29 +2035,48 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   return savePromise;
 }
 /**
- * 终验 F-H2：保存（提交 sent、基准 base）返回服务器正文 serverText 时编辑区里已有更新的输入：
- * 正文改为“serverText + 本地未保存修改”，并记下编辑区文字与之的对应（domPair），之后的输入照此平移。成功返回 true。
+ * 终验 F-H2：保存（提交 sent）返回服务器正文 serverText 时编辑区里已有更新的输入：
+ * 正文改为“serverText + 本地未保存修改”，并记下编辑区文字与之的对应（domPair），之后的输入照此平移。成功返回 true；
+ * 平移不了返回 false，由调用方退回显式基准（fallbackToExplicit）。
  */
-function rebaseOnto(sent: string, serverText: string, base: number): boolean {
+function rebaseOnto(sent: string, serverText: string): boolean {
   const value = rebaseBlocks(sent, markdownContent.value, serverText);
   if (value === null || !editor.value) return false;
+  // 测试工程师 F-H3 的硬性不变量：基准只在“正文 = 服务器新版本 + 我未保存的修改”时前移。
+  // 服务器新版本里相对 sent 新出现的段落（对方写进来的）必须原样留在平移结果里，否则不前移，交给显式基准由服务器合并。
+  if (!keepsServerChanges(sent, serverText, value)) return false;
+  domPair = { dom: editorText(), value };
+  markdownContent.value = value;
+  persistLocalDraft();
+  return true;
+}
+function editorText(): string {
+  if (!editor.value) return markdownContent.value;
   const copy = editor.value.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
   copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
     node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
     if (!node.classList.length) node.removeAttribute("class");
   });
-  const dom = editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
-  domPair = { dom, value, baseRevision: domPair?.baseRevision ?? base };
-  markdownContent.value = value;
-  persistLocalDraft();
-  return true;
+  return editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
 }
-function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", base?: number) {
+/** 增量审查 M1：正文换回编辑区文字，以 base（与最近一次成功保存对应的编辑区文字）为显式基准，下次保存带 baseMarkdown。 */
+function fallbackToExplicit(base: string, dom?: string) {
+  explicitBase = base;
+  mergeBase = null;
+  domPair = null;
+  fallbackGen += 1;
+  markdownContent.value = dom ?? editorText();
+  persistLocalDraft();
+}
+function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", dom: string, gen = fallbackGen, origin = content) {
   const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", messageOf(error));
   switch (classifySaveError(apiError)) {
     case "conflict": {
       // 01 §5.4/§6.4：冲突部分已存为冲突副本；其余可合并的部分用新键重新提交。
+      lastConflictAt = Date.now();
+      conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: Math.max(1, conflictSummary.value?.mineOpen ?? 0) };
+      if (actionNote.value.startsWith("恢复的内容还没存上服务器")) actionNote.value = "";
       retrying.value = false;
       pendingKey = null;
       const details = apiError.details || {};
@@ -1916,8 +2087,7 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       if (conflictOpensPanel(trigger)) openConflicts("mine");
       else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : "其他成员" };
       if (appliable !== null && appliableBase !== null && document.value) {
-        const editorBase = base ?? mergeBase ?? document.value.revision;
-        queueMicrotask(() => void saveContent(appliable, "auto", appliableBase, { content, base: editorBase }));
+        queueMicrotask(() => void saveContent(appliable, "auto", appliableBase, { content: origin, dom, gen }));
       }
       return;
     }
@@ -2020,10 +2190,16 @@ function onPageHide() {
   const record = document.value;
   if (!record || !isDirty.value || readonly.value || aiPreviewHost.value || blockedFor(markdownContent.value)) return;
   const content = markdownContent.value;
-  if (new Blob([content]).size > 60000) return; // keepalive 正文上限 64KB；超出时只留本机草稿。
-  if (!pendingKey || pendingKey.content !== content) pendingKey = { content, key: crypto.randomUUID() };
+  const explicit = explicitBase;
+  if (new Blob([content + (explicit ?? "")]).size > 60000) return; // keepalive 正文上限 64KB；超出时只留本机草稿。
+  const base = explicit !== null ? record.revision : mergeBase ?? record.revision;
+  if (!pendingKey || pendingKey.content !== content) {
+    pendingKey = { content, key: crypto.randomUUID(), base, dsend: explicit !== null ? content : domPair?.dom ?? content, gen: fallbackGen,
+      ...(explicit !== null ? { baseMarkdown: explicit } : {}) };
+  }
   persistLocalDraft();
-  void updateDocumentContent(record.id, mergeBase ?? record.revision, content, undefined, undefined, { clientSaveKey: pendingKey.key, allowMerge: true, keepalive: true }).catch(() => undefined);
+  void updateDocumentContent(record.id, pendingKey.base, content, undefined, undefined,
+    { clientSaveKey: pendingKey.key, allowMerge: true, keepalive: true, ...(pendingKey.baseMarkdown !== undefined ? { baseMarkdown: pendingKey.baseMarkdown } : {}) }).catch(() => undefined);
 }
 /** 02 P1-3：编辑区内部拖拽会把段落整块搬走（产生移动/冲突），默认禁止；外部拖入仍走粘贴清洗。 */
 function blockInternalDrag(event: DragEvent) {
@@ -2348,6 +2524,8 @@ onMounted(() => {
   window.addEventListener("resize", scheduleMarks);
   window.addEventListener("keydown", bufferLockedTyping, true);
   window.addEventListener("compositionstart", noteLockedComposition, true);
+  window.addEventListener("pointerdown", noteLoadPointer, true);
+  window.addEventListener("focusin", onEditorFocusIn);
   void load();
 });
 onUnmounted(() => {
@@ -2364,6 +2542,9 @@ onUnmounted(() => {
   window.removeEventListener("resize", scheduleMarks);
   window.removeEventListener("keydown", bufferLockedTyping, true);
   window.removeEventListener("compositionstart", noteLockedComposition, true);
+  window.removeEventListener("pointerdown", noteLoadPointer, true);
+  window.removeEventListener("focusin", onEditorFocusIn);
+  window.clearTimeout(caretLostTimer);
   window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
   window.cancelAnimationFrame(marksFrame);
   window.clearTimeout(retryTimer);

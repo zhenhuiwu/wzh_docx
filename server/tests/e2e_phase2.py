@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -763,6 +764,110 @@ def main() -> int:
             shot(page, "30-两份草稿依次恢复")
             ctx.close()
         draft_corner_cases()
+
+        @step("冲突未处理时拒绝恢复下一份草稿并提示，前一份的冲突内容不丢（测试工程师 F-H4）")
+        def draft_refused_while_conflict():
+            from e2e_selfconf import make_doc
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            open_pages.append(page)
+            login(page, f"e2e-li-{RUN}")
+            did = make_doc(data, f"草稿冲突-{RUN}", 0)
+            url = f"{WEB}/projects/{data['project']['id']}/documents/{did}"
+            # 先写出一份真实草稿当模板（断网输入），取得账号与格式
+            page.goto(url)
+            expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+            wait_saved(page, 60000)
+            ctx.set_offline(True)
+            type_after(page, "第4段", "（模板）")
+            key = "doc-workbench.draft.v2:"
+            page.wait_for_function(f"() => Object.keys(localStorage).some(k => k.startsWith('{key}') && k.includes('{did}'))", timeout=20000)
+            template = page.evaluate(f"""() => {{ const k = Object.keys(localStorage).find(k => k.startsWith('{key}') && k.includes('{did}'));
+                const v = JSON.parse(localStorage.getItem(k)); return [k, v]; }}""")
+            # 离开时的 keepalive 保存不受断网模拟拦截：让它失败，模板内容不上服务器
+            page.evaluate("""() => { const original = window.fetch;
+                window.fetch = (url, init) => init && init.keepalive ? Promise.reject(new TypeError('offline')) : original(url, init); }""")
+            ctx.set_offline(False)
+            page.goto(f"{WEB}/projects")
+            page.evaluate("localStorage.clear()")
+            account = template[0][len(key):].split(":")[0]
+            record = data["zhang"].call("GET", f"/documents/{did}")
+            base_md, rev = record["markdownContent"], record["revision"]
+            # 两份草稿都改第 2 段；之后张工也改第 2 段
+            data["zhang"].call("PATCH", f"/documents/{did}/content", json={"expectedRevision": rev, "allowMerge": True, "clientSaveKey": str(uuid.uuid4()),
+                               "markdownContent": base_md.replace("第2段：原始内容 2。", "第2段：原始内容 2（对方改）。")})
+            now = int(time.time() * 1000)
+            drafts = []
+            for n, (tag, age) in enumerate((("【A稿】", 60000), ("【B稿】", 30000))):
+                draft = dict(template[1], docId=did, tabId=f"e2e-tab-{n}-{RUN}", docRevision=rev, mergeBase=rev, savedAt=now - age,
+                             markdown=base_md.replace("第2段：原始内容 2。", f"第2段：原始内容 2。{tag}"), pendingSave=None)
+                draft.pop("baseMarkdown", None)
+                drafts.append(draft)
+            page.evaluate("""([account, did, drafts]) => { for (const d of drafts) localStorage.setItem(`doc-workbench.draft.v2:${account}:${did}:${d.tabId}`, JSON.stringify(d));
+                localStorage.setItem(`doc-workbench.draft.v2.index:${account}:${did}`, JSON.stringify(drafts.map(d => ({ tabId: d.tabId, savedAt: d.savedAt })))); }""",
+                          [account, did, drafts])
+            page.goto(url)
+            bar = page.get_by_test_id("draft-recovery")
+            expect(bar).to_be_visible(timeout=60000)
+            bar.get_by_role("button", name="查看差异").click()
+            pick = bar.locator("select")
+            if "【A稿】" not in page.locator(".draft-recovery").inner_text():
+                pick.select_option(index=1 - int(pick.input_value()))
+            expect(page.locator(".draft-recovery")).to_contain_text("【A稿】", timeout=10000)
+            bar.get_by_role("button", name="恢复并保存").click()
+            expect(page.locator(".wb-notice.info")).to_contain_text("冲突", timeout=30000)
+            page.wait_for_timeout(3000)
+            assert "还没存上服务器" not in page.locator("body").inner_text(), "冲突时仍显示“正在自动重试”"
+            # 恢复条换成 B；冲突未处理时恢复 B 被拒绝并提示
+            expect(page.locator(".draft-recovery")).to_contain_text("【B稿】", timeout=20000)
+            bar.get_by_role("button", name="恢复并保存").click()
+            expect(page.locator(".wb-notice.info")).to_contain_text("还有未处理的冲突", timeout=20000)
+            page.wait_for_timeout(2000)
+            from app.db import connect
+            with connect() as connection:
+                rows = connection.execute("SELECT status, payload_json FROM document_conflicts WHERE document_id=%s", (did,)).fetchall()
+            mines = [(row["status"], json.dumps(json.loads(row["payload_json"]).get("conflicts"), ensure_ascii=False)) for row in rows]
+            assert len(mines) == 1 and mines[0][0] == "open" and "【A稿】" in mines[0][1], mines
+            server = data["zhang"].call("GET", f"/documents/{did}")["markdownContent"]
+            assert "（对方改）" in server and "【B稿】" not in server, server[:300]
+            assert page.evaluate("JSON.stringify(localStorage)").count("【B稿】") >= 1, "B 草稿被删"
+            shot(page, "31-冲突未处理时拒绝恢复下一份草稿")
+            ctx.close()
+        draft_refused_while_conflict()
+
+        @step("载入锁定（检查本机草稿）期间点正文打的字，解锁后写回原处（测试工程师 F-L1）")
+        def typing_during_load_lock():
+            from e2e_selfconf import make_doc
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            open_pages.append(page)
+            login(page, f"e2e-li-{RUN}")
+            hits = 0
+            for n in range(3):
+                did = make_doc(data, f"载入锁定-{n}-{RUN}", 0)
+                page.goto(f"{WEB}/projects/{data['project']['id']}/documents/{did}")
+                target = page.locator(".paper-content p", has_text="第2段")
+                try:
+                    page.wait_for_function("""() => { const e = document.querySelector('.paper-content');
+                        return e && e.getAttribute('contenteditable') !== 'true' && [...e.querySelectorAll('p')].some(p => p.textContent.includes('第2段')); }""",
+                                           polling="raf", timeout=60000)
+                except AssertionError:
+                    pass
+                locked = page.locator(".paper-content").get_attribute("contenteditable") != "true"
+                box = target.bounding_box()
+                page.mouse.click(box["x"] + box["width"] - 2, box["y"] + box["height"] / 2)
+                page.keyboard.type(f"LOCKx{n}y", delay=40)  # 逐键输入（中文输入法的 Process 键另有提示）
+                page.wait_for_timeout(1500)
+                wait_saved(page, 30000)
+                server = data["zhang"].call("GET", f"/documents/{did}")["markdownContent"]
+                ok = f"LOCKx{n}y" in server and f"LOCKx{n}y" in page.locator(".paper-content").inner_text()
+                notice = page.locator(".wb-notice").all_inner_texts()
+                assert ok or any("没能写入" in text for text in notice), (locked, server[:200], notice)
+                hits += locked
+                assert ok, (locked, server[:200], notice)
+            assert hits >= 1, "三次都没赶上载入锁定"
+            ctx.close()
+        typing_during_load_lock()
 
         @step("保存后马上继续打字：不与自己冲突、后打的字不丢（终验 F-H2）；打开时有载入提示（F-L1）")
         def save_then_keep_typing():

@@ -25,6 +25,7 @@ export interface DraftV2 {
   tabId: string;
   docRevision: number;
   mergeBase: number;
+  baseMarkdown?: string;      // 增量审查 M1：显式基准正文（编辑区停在旧正文时，与上次保存对应的编辑区文字）
   savedAt: number;
   wholeDocument: boolean;
   markdown?: string;          // 整篇模式

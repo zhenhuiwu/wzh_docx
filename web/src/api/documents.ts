@@ -111,7 +111,7 @@ export async function updateDocumentContent(
   markdownContent: string,
   memory?: WritingMemory,
   retractMemoryRevision?: number,
-  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean } = {}
+  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean; baseMarkdown?: string } = {}
 ): Promise<ContentSaveResult> {
   const { keepalive, ...extra } = options;
   const body = await apiRequest<{ data: any }>(`/documents/${id}/content`, {
