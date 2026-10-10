@@ -65,7 +65,7 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
         <h3>合并结果预览</h3>
         <p data-testid="compare-merged">{{ merged || "（空）" }}</p>
       </section>
-      <p v-else-if="grids" class="compare-note">表格按整张处理：可保留我的、使用对方的版本，或在卡片里选择“两张表都保留”。</p>
+      <p v-else-if="grids" class="compare-note">表格按整张处理：可保留我的、使用对方的版本，或在卡片里选择“两份表格都保留”（正文里会有两张表，需要再手动合并）。</p>
     </div>
     <footer class="dialog-actions">
       <button type="button" class="ghost" @click="emit('close')">取消</button>

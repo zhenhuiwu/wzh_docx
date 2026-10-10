@@ -222,9 +222,10 @@ async function downloadCopy(item: ConflictItem) {
           <div v-else-if="tab === 'mine' && canResolve" class="row choices" :style="{ gridTemplateColumns: `repeat(${ordered(item).length === 4 ? 2 : ordered(item).length}, minmax(0, 1fr))` }">
             <template v-for="choice in ordered(item)" :key="choice.label">
               <button v-if="choice.action === 'manual'" type="button" class="primary sm" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ choice.label }}</button>
-              <button v-else type="button" :class="[!actionsFor(item).some(c => c.action === 'manual') && choice === actionsFor(item)[0] ? 'primary' : 'ghost', 'sm']" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
+              <button v-else type="button" :class="[!actionsFor(item).some(c => c.action === 'manual') && choice === actionsFor(item)[0] ? 'primary' : 'ghost', 'sm']" :title="choice.hint" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
             </template>
           </div>
+          <p v-if="tab === 'mine' && canResolve && ordered(item).some(c => c.hint)" class="choice-hint" data-testid="conflict-table-hint">{{ ordered(item).find(c => c.hint)?.hint }}</p>
           <div class="links">
             <button v-if="item.reason === 'MODIFIED' || item.reason === 'STRUCTURE'" type="button" class="text" data-testid="conflict-compare" @click="comparing = item"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M12 4.5v15" /></svg>并排对比</button>
             <button type="button" class="text" @click="downloadCopy(item)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>{{ tab === 'members' ? "下载提交人的副本" : "下载我的副本" }}</button>
@@ -300,6 +301,7 @@ async function downloadCopy(item: ConflictItem) {
 .cacts .row { display:flex; flex-wrap:wrap; gap:var(--space-2); }
 .cacts .row > * { flex:1; }
 .cacts .row.choices { display:grid; }
+.choice-hint { margin:0; font-size:var(--text-xs); line-height:var(--leading-xs); color:var(--text-secondary); }
 .links { display:flex; gap:var(--space-4); }
 .links .text { display:inline-flex; align-items:center; gap:var(--space-1); font-size:var(--text-xs); }
 .links .ico { width:var(--icon-sm); height:var(--icon-sm); }

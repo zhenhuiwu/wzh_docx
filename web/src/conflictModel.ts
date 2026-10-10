@@ -41,14 +41,20 @@ export const REASON_TEXT: Record<ConflictItem["reason"], string> = {
   FORMAT: "合并后无法保持 Word 格式",
 };
 
-export interface ActionChoice { action: ConflictAction; label: string; placement?: "after_nearest_live" | "section_end" }
+export interface ActionChoice { action: ConflictAction; label: string; placement?: "after_nearest_live" | "section_end"; hint?: string }
+/** 终验回归 I-3：表格冲突按整张表处理，“都保留”会在正文里放两份表格（单元格级合并记入遗留）。 */
+export const TABLE_KEEP_BOTH_HINT = "“两份表格都保留”会在正文里放两张表（我的和对方的各一张），需要你再手动合并成一张。";
 /** 每种原因可用的处理方式（01 §4.4.3 表格）。 */
 export function actionsFor(item: Pick<ConflictItem, "reason" | "mine" | "theirs">): ActionChoice[] {
   switch (item.reason) {
     case "MODIFIED":
-      // 界面复验 N7：表格冲突写“两张表都保留”
+      // 界面复验 N7 / 终验回归 I-3：表格冲突明确写“两份表格都保留”，并在卡片上说明会生成两张表
+      if (isTable(item.theirs?.markdown || "") || isTable(item.mine?.markdown || "")) {
+        return [{ action: "manual", label: "手动合并" }, { action: "keep_mine", label: "保留我的" },
+          { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: "两份表格都保留", hint: TABLE_KEEP_BOTH_HINT }];
+      }
       return [{ action: "manual", label: "手动合并" }, { action: "keep_mine", label: "保留我的" },
-        { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: isTable(item.theirs?.markdown || "") || isTable(item.mine?.markdown || "") ? "两张表都保留" : "两段都保留" }];
+        { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: "两段都保留" }];
     case "STRUCTURE":
       return [{ action: "keep_mine", label: "保留我的" }, { action: "use_theirs", label: "使用对方的版本" }];
     case "FORMAT":
