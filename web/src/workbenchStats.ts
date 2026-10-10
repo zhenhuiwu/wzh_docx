@@ -153,3 +153,40 @@ export function caretBlockIndex(before: string[], after: string[], index: number
   const at = after.indexOf(text);
   return at >= 0 && at === after.lastIndexOf(text) ? at : -1;
 }
+
+/**
+ * 终验 F-H2：把“本地未保存的修改”平移到服务器新正文上。
+ * sent：这次保存提交的正文（或编辑区与 value 对应时的编辑区文字）；mine：编辑区现在的正文；server：服务器返回的新正文。
+ * 按空行分块，取 sent→mine 去掉前后相同块后的一段改动，要求这段被改的块在 server 中原样存在且位置确定、连续，
+ * 才把它替换成 mine 的对应块；对不上（别人也改了这些块或位置不确定）返回 null，由调用方按旧基准合并。
+ */
+export function rebaseBlocks(sent: string, mine: string, server: string): string | null {
+  if (sent === mine) return server;
+  if (sent === server) return mine;
+  const s = sent.split("\n\n"), m = mine.split("\n\n"), t = server.split("\n\n");
+  let head = 0;
+  while (head < s.length && head < m.length && s[head] === m[head]) head++;
+  let tail = 0;
+  while (tail < s.length - head && tail < m.length - head && s[s.length - 1 - tail] === m[m.length - 1 - tail]) tail++;
+  const from = head, to = s.length - tail;
+  const replacement = m.slice(head, m.length - tail);
+  let start: number, end: number;
+  if (to - from > 200) return null; // 大段改动不逐块换算，按旧基准合并
+  if (from < to) {
+    start = mapBlockIndex(s, t, from);
+    if (start < 0) return null;
+    for (let k = from; k < to; k++) if (mapBlockIndex(s, t, k) !== start + (k - from)) return null;
+    end = start + (to - from);
+  } else {
+    // 纯插入：插入点前后的块都得能确定位置且在 server 里相邻
+    const before = from > 0 ? mapBlockIndex(s, t, from - 1) : -1;
+    const after = from < s.length ? mapBlockIndex(s, t, from) : t.length;
+    if (from > 0 && before < 0) return null;
+    if (from < s.length && after < 0) return null;
+    const at = from > 0 ? before + 1 : 0;
+    if (from < s.length && after !== at) return null;
+    if (from === 0 && after !== 0) return null;
+    start = end = at;
+  }
+  return [...t.slice(0, start), ...replacement, ...t.slice(end)].join("\n\n");
+}

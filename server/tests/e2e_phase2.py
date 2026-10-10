@@ -764,6 +764,45 @@ def main() -> int:
             ctx.close()
         draft_corner_cases()
 
+        @step("保存后马上继续打字：不与自己冲突、后打的字不丢（终验 F-H2）；打开时有载入提示（F-L1）")
+        def save_then_keep_typing():
+            from e2e_selfconf import MARK, make_doc
+            ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            page = ctx.new_page()
+            open_pages.append(page)
+            # 终验 F-L1：打开文档后检查本机草稿的约 0.25 秒内正文不可编辑，要有载入提示
+            page.add_init_script("""window.__notices = []; new MutationObserver(() => {
+                const node = document.querySelector('[data-testid=editor-refreshing]');
+                if (node && !window.__notices.includes(node.textContent)) window.__notices.push(node.textContent);
+            }).observe(document, { childList: true, subtree: true, characterData: true });""")
+            login(page, f"e2e-li-{RUN}")
+            for big, gap in ((0, 0), (1508, 500)):
+                fh_doc = make_doc(data, f"F-H2-{big}-{RUN}", big)
+                page.goto(f"{WEB}/projects/{data['project']['id']}/documents/{fh_doc}")
+                expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
+                expect(page.get_by_test_id("save-status")).to_contain_text("保存", timeout=60000)
+                type_after(page, "第3段", MARK[:5])
+                notices = page.evaluate("window.__notices")
+                assert any("正在检查本机草稿" in text for text in notices), notices
+                record = data["zhang"].call("GET", f"/documents/{fh_doc}")
+                data["zhang"].call("PATCH", f"/documents/{fh_doc}/content", json={
+                    "expectedRevision": record["revision"], "allowMerge": True, "clientSaveKey": str(uuid.uuid4()),
+                    "markdownContent": record["markdownContent"].replace("第7段：原始内容 7。", "第7段：原始内容 7（对方改）。")})
+                page.keyboard.press("Control+s")
+                page.wait_for_timeout(gap)
+                page.keyboard.type(MARK[5:], delay=60)
+                page.wait_for_timeout(5000)
+                wait_saved(page, 60000)
+                server = data["zhang"].call("GET", f"/documents/{fh_doc}")["markdownContent"]
+                assert MARK in server and "（对方改）" in server, (big, server[:400])
+                expect(page.locator(".paper-content")).to_contain_text(MARK, timeout=20000)
+                expect(page.locator(".paper-content")).to_contain_text("（对方改）", timeout=30000)
+                assert page.locator("text=已单独保存").count() == 0, "与自己冲突"
+                assert data["zhang"].call("GET", f"/documents/{fh_doc}/conflicts/summary").get("allOpen") in (0, None)
+            shot(page, "31-保存后马上继续打字")
+            ctx.close()
+        save_then_keep_typing()
+
         @step("同一账号多标签提示（非阻断，可关闭）")
         def multi_tab():
             open_doc(a, data)

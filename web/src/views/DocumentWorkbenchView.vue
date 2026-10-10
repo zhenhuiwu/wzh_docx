@@ -11,7 +11,7 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { countChars, caretBlockIndex, mapBlockIndex, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
+import { countChars, caretBlockIndex, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -74,7 +74,8 @@ const skillBusy = ref(false);
 const refreshingEditor = ref(false);
 /** 终验 F-M1：编辑区正在重绘或载入时的说明（“正在载入 张工 的更新…”等），显示在提示区。 */
 const refreshReason = ref("");
-const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : ""));
+// 终验 F-L1：打开文档后约 0.25 秒在确认其他标签与本机草稿，期间正文不可编辑——显示载入状态，不再无声丢键
+const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "") || (checkingDrafts.value && phase.value === "ready" ? "正在检查本机草稿，马上就能编辑…" : ""));
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
@@ -123,6 +124,12 @@ let clockTimer: number | undefined;
 let pendingKey: { content: string; key: string } | null = null;
 // S5：编辑区正文所基于的修订号。合并保存后编辑区若有更新的输入，编辑区仍基于旧修订，下次保存以它为基准做三方合并。
 let mergeBase: number | null = null;
+/**
+ * 终验 F-H2：合并保存返回时用户还在打字、放弃了重绘，编辑区显示的仍是旧正文（缺对方的修改）。
+ * dom 是那一刻编辑区的文字，value 是对应的“服务器新正文 + 本地未保存修改”。之后每次输入把编辑区相对 dom 的改动
+ * 平移到 value 上（rebaseBlocks），正文始终以服务器新版本为基准，不再按旧基准提交、也不会与自己冲突。编辑区重绘后清空。
+ */
+let domPair: { dom: string; value: string; baseRevision: number } | null = null;
 const conflictSummary = ref<ConflictSummary | null>(null);
 // 界面验收 M2/M3：冲突入口按 mineOpen / 成员冲突 / 已处理记录显示；打开时停在对应页签。
 const conflictTab = ref<"mine" | "members">("mine");
@@ -367,6 +374,7 @@ async function load() {
   draftConfirmDiscard.value = false;
   draftDiffOpen.value = false;
   mergeBase = null;
+  domPair = null;
   skillOpen.value = false;
   aiUndo.value = null;
   memoryOffset.value = 0;
@@ -905,6 +913,7 @@ function chooseAiScope(scope: WritingMemory["scope"]) {
   aiOpen.value = true;
 }
 function showEditorHtml(html: string, mapped?: boolean) {
+  domPair = null;
   if (mapped !== undefined) previewModel.value = mapped;
   layoutNeedsRefresh = false;
   lastCaret = null;
@@ -1558,7 +1567,19 @@ function onEditorInput(event?: Event) {
     if (!node.classList.length) node.removeAttribute("class");
   });
   const html = copy.innerHTML;
-  markdownContent.value = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
+  const dom = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
+  if (domPair) {
+    const value = rebaseBlocks(domPair.dom, dom, domPair.value);
+    if (value !== null) {
+      domPair = { ...domPair, dom, value };
+      markdownContent.value = value;
+    } else {
+      // 改到了编辑区里还是旧内容的段落（对方刚改过的那段）：退回按编辑区原基准提交，由服务器三方合并（同段才会冲突）
+      mergeBase = domPair.baseRevision;
+      domPair = null;
+      markdownContent.value = dom;
+    }
+  } else markdownContent.value = dom;
   scheduleDraftWrite();
   scheduleMarks();
   if (event) clearUpdatedAt(event.target instanceof Node && editor.value?.contains(event.target) ? window.getSelection()?.anchorNode ?? null : null);
@@ -1810,10 +1831,15 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         mergeBase = null;
         markdownContent.value = serverText;
         // 合并带进了别人的修改：编辑区按服务器正文重绘（不受 AI/草稿锁影响，否则编辑区会停在旧内容上）。
-        rerender = changedText;
+        // 编辑区还缺之前平移进来的对方修改（domPair）时同样要重绘。
+        rerender = changedText || Boolean(domPair);
       } else if (changedText) {
-        // 编辑区有更新的输入，不能替换；下次保存仍以编辑区原基准合并（同段落会再次冲突，新冲突取代旧的）。
-        mergeBase = editor?.base ?? base;
+        // 终验 F-H2：编辑区有更新的输入，不能替换。把未保存的输入平移到服务器新正文上，下次以新版本为基准提交；
+        // 平移不了（对方也改了正在改的段）才按编辑区原基准合并。
+        if (!editor && rebaseOnto(content, serverText, base)) {
+          mergeBase = null;
+          rerender = false;
+        } else mergeBase = editor?.base ?? base;
       } else {
         mergeBase = null;
       }
@@ -1838,7 +1864,8 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         const started = Date.now();
         let shown = await acceptContent(merged, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
         if (!shown && current()) {
-          if (lastInputAt >= started) mergeBase = base;
+          // 终验 F-H2：重绘期间用户在打字而放弃重绘：同样把这些输入平移到服务器新正文上，不按旧基准提交
+          if (lastInputAt >= started) { if (!rebaseOnto(content, serverText, base)) mergeBase = base; }
           else shown = await acceptContent(merged, { reason });
         }
         if (shown && mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
@@ -1854,6 +1881,25 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
     }
   })();
   return savePromise;
+}
+/**
+ * 终验 F-H2：保存（提交 sent、基准 base）返回服务器正文 serverText 时编辑区里已有更新的输入：
+ * 正文改为“serverText + 本地未保存修改”，并记下编辑区文字与之的对应（domPair），之后的输入照此平移。成功返回 true。
+ */
+function rebaseOnto(sent: string, serverText: string, base: number): boolean {
+  const value = rebaseBlocks(sent, markdownContent.value, serverText);
+  if (value === null || !editor.value) return false;
+  const copy = editor.value.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
+  copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
+    node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
+    if (!node.classList.length) node.removeAttribute("class");
+  });
+  const dom = editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+  domPair = { dom, value, baseRevision: domPair?.baseRevision ?? base };
+  markdownContent.value = value;
+  persistLocalDraft();
+  return true;
 }
 function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", base?: number) {
   const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", messageOf(error));
