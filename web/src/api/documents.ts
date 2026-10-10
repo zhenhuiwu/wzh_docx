@@ -253,18 +253,21 @@ export async function insertDocumentSection(id: string, expectedRevision: number
 
 // ---- 阶段2 S5：合并保存与冲突（01 §4.3、§4.4） ----
 export interface Person { id: string; name: string }
-export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
+export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; frozenByConflict?: string[]; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
 export interface ConflictLocation { headingPath?: string[]; ordinal?: number | null; kind?: string; label?: string | null }
 export interface ConflictSide { markdown?: string | null; revision?: number | null; deleted?: boolean; updatedBy?: Person | null; updatedAt?: string | null; deletedBy?: Person | null; deletedAt?: string | null }
 export interface ConflictItem {
   conflictId: string; itemIndex: number; reason: "MODIFIED" | "DELETED" | "ANCHOR_LOST" | "STRUCTURE" | "FORMAT"; attempt: number;
   location: ConflictLocation; base: ConflictSide; theirs: ConflictSide; mine: ConflictSide; status?: "open" | "resolved" | "discarded";
   action?: string | null; actor?: Person | null; createdAt?: string; resolvedAt?: string | null; objectIds?: string[];
+  /** 方案 C：最新一份“我的版本”快照（含冲突后续写）；没有快照时等于原始 mine，savedAt 为 null。 */
+  mineLatest?: MineLatest;
 }
+export interface MineLatest { markdown: string; savedAt: string | null; tabId: string | null; snapshotId?: string | null }
 export interface ConflictSummary { mineOpen: number; mineHandled?: number; allOpen: number | null }
 export type ConflictAction = "keep_mine" | "use_theirs" | "manual" | "keep_both" | "restore_as_new" | "discard";
 export interface ResolveRequestItem { itemIndex: number; action: ConflictAction; theirsRevision?: number | null; markdown?: string; placement?: { mode: "after_nearest_live" | "section_end" | "after"; afterObjectId?: string } }
-export interface ResolveResult { documentRevision: number; changeId: string | null; items: Array<{ itemIndex: number; status: string; placementFallback?: boolean }>; conflictStatus: string; mineOpen: number; markdownContent: string }
+export interface ResolveResult { documentRevision: number; changeId: string | null; items: Array<{ itemIndex: number; status: string; placementFallback?: boolean; mineSnapshotId?: string }>; conflictStatus: string; mineOpen: number; markdownContent: string; conflictId?: string; action?: ConflictAction; theirsName?: string }
 
 export async function getConflictSummary(id: string): Promise<ConflictSummary> {
   const body = await apiRequest<{ data: ConflictSummary }>(`/documents/${id}/conflicts/summary`);
@@ -279,6 +282,14 @@ export async function listConflicts(id: string, status: "open" | "resolved" | "a
 export async function getConflictCopy(id: string, conflictId: string): Promise<{ mineMarkdown: string; createdAt: string }> {
   const body = await apiRequest<{ data: { mineMarkdown: string; createdAt: string } }>(`/documents/${id}/conflicts/${conflictId}`);
   if (!body?.data) throw new Error("冲突副本响应不完整。");
+  return body.data;
+}
+/** 方案 C：冲突后在冻结段里续写的“我的版本”，只追加快照（同键幂等）。 */
+export async function saveConflictMine(id: string, conflictId: string, itemIndex: number, markdown: string, clientSaveKey: string, tabId?: string): Promise<{ mineLatest: MineLatest }> {
+  const body = await apiRequest<{ data: { mineLatest: MineLatest } }>(`/documents/${id}/conflicts/${conflictId}/mine`, {
+    method: "POST", json: { itemIndex, markdown, clientSaveKey, ...(tabId ? { tabId } : {}) }, timeoutMs: 15000,
+  });
+  if (!body?.data) throw new Error("冲突副本保存响应不完整。");
   return body.data;
 }
 export async function resolveConflict(id: string, conflictId: string, clientSaveKey: string, baseDocumentRevision: number, items: ResolveRequestItem[]): Promise<ResolveResult> {

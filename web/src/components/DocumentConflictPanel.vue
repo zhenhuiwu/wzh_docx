@@ -7,6 +7,7 @@ import { ApiError } from "../api/client";
 import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type ResolveRequestItem, type ResolveResult } from "../api/documents";
 import { ACTION_DONE_TEXT, REASON_TEXT, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
 import { locationText, shortTime } from "../saveModel";
+import { continuedChars, type LiveMine } from "../frozenConflict";
 
 const props = defineProps<{
   documentId: string; documentName: string; revision: number; canViewMembers: boolean; canResolve: boolean;
@@ -16,6 +17,8 @@ const props = defineProps<{
   approxKeys?: string[];
   /** 处理前由工作台先保存正文；返回 false 表示仍有未保存修改，不能处理。 */
   beforeResolve: () => Promise<boolean>;
+  /** 方案 C：冻结区里正在写的“我的版本”。 */
+  liveMine?: Record<string, LiveMine>;
 }>();
 const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number]; locate: [item: ConflictItem] }>();
 
@@ -65,6 +68,35 @@ function whoOf(item: ConflictItem) {
   return (item.theirs?.deleted ? item.theirs?.deletedBy?.name : item.theirs?.updatedBy?.name) || "其他成员";
 }
 
+// —— 方案 C：我的版本以最新快照为准（编辑区里正在写的优先）——
+const live = (item: ConflictItem) => tab.value === "mine" ? props.liveMine?.[id(item)] : undefined;
+const frozenHere = (item: ConflictItem) => Boolean(live(item));
+function mineText(item: ConflictItem): string {
+  if (item.mine?.deleted) return "";
+  return live(item)?.markdown ?? item.mineLatest?.markdown ?? item.mine?.markdown ?? "";
+}
+/** 我在编辑区把这一段的文字删光了（不是删除段落）：只能用对方的或手动合并。 */
+const mineEmptied = (item: ConflictItem) => !item.mine?.deleted && Boolean(item.mine?.markdown?.trim()) && !mineText(item).trim();
+const continued = (item: ConflictItem) => item.mine?.deleted ? 0 : continuedChars(item.mine?.markdown || "", mineText(item));
+function hm(at: string | null | undefined) {
+  if (!at) return "";
+  const date = new Date(at);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+}
+/** “含冲突后续写的 N 字 · 已存为冲突副本 HH:mm / 仅在本机 · 联网后自动保存” */
+function mineStatus(item: ConflictItem): string {
+  const n = continued(item);
+  const state = live(item);
+  if (state && !state.saved) return `${n ? `含冲突后续写的 ${n} 字 · ` : ""}仅在本机 · 联网后自动保存`;
+  if (!n) return "";
+  const at = state?.savedAt || item.mineLatest?.savedAt;
+  return `含冲突后续写的 ${n} 字${at ? ` · 已存为冲突副本 ${hm(at)}` : ""}`;
+}
+const withLatest = (item: ConflictItem): ConflictItem => tab.value === "mine" && !item.mine?.deleted ? { ...item, mine: { ...item.mine, markdown: mineText(item) } } : item;
+const theirsConfirm = (item: ConflictItem) => frozenHere(item)
+  ? `编辑区里这一段会换成 ${whoOf(item)} 的版本。你的版本（含后来续写的内容）仍保存在冲突记录中，可在「已处理」里查看和下载。`
+  : USE_THEIRS_CONFIRM;
+
 async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string) {
   if (!props.canResolve || busyKey.value) return;
   if (choice.action === "use_theirs" && confirmTheirs.value !== item) { confirmTheirs.value = item; return; }
@@ -85,7 +117,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     const result = await resolveConflict(props.documentId, item.conflictId, key, props.revision, [request]);
     keys.done();
     const fallback = result.items.some(entry => entry.placementFallback);
-    emit("resolved", result);
+    emit("resolved", { ...result, conflictId: result.conflictId ?? item.conflictId, action: result.action ?? choice.action, theirsName: result.theirsName ?? whoOf(item) });
     if (fallback) cardNotice.value = { ...cardNotice.value, [id(item)]: "位置已变化，请检查恢复的段落。" };
     delete manualOpen.value[id(item)];
     await load();
@@ -124,7 +156,8 @@ const tableOf = (item: ConflictItem) => isTable(item.theirs?.markdown || "") || 
 const cellDiffs = (item: ConflictItem, side: "theirs" | "mine") => tableCellDiffs(item.base?.markdown || "", (side === "theirs" ? item.theirs?.markdown : item.mine?.markdown) || "");
 const initial = (name: string | undefined) => (name || "?").slice(0, 1);
 /** 对照稿：按钮行“保留我的 / 使用对方的 / 手动合并（主按钮）”，主操作放最后。 */
-const ordered = (item: ConflictItem) => { const all = actionsFor(item); return [...all.filter(c => c.action !== "manual"), ...all.filter(c => c.action === "manual")]; };
+const allowed = (item: ConflictItem) => actionsFor(item).filter(c => !mineEmptied(item) || c.action === "use_theirs" || c.action === "manual");
+const ordered = (item: ConflictItem) => { const all = allowed(item); return [...all.filter(c => c.action !== "manual"), ...all.filter(c => c.action === "manual")]; };
 const theirName = (item: ConflictItem) => whoOf(item);
 async function compareMerge(item: ConflictItem, markdown: string) {
   await apply(item, { action: "manual", label: "采用合并结果" }, markdown);
@@ -143,12 +176,15 @@ function openManual(item: ConflictItem) {
   manualOpen.value = { ...manualOpen.value, [id(item)]: item.theirs?.markdown || item.mine?.markdown || "" };
 }
 function insertMine(item: ConflictItem) {
-  manualOpen.value = { ...manualOpen.value, [id(item)]: `${manualOpen.value[id(item)] || ""}\n\n${item.mine?.markdown || ""}`.trim() };
+  manualOpen.value = { ...manualOpen.value, [id(item)]: `${manualOpen.value[id(item)] || ""}\n\n${mineText(item)}`.trim() };
 }
 async function downloadCopy(item: ConflictItem) {
   try {
     const copy = await getConflictCopy(props.documentId, item.conflictId);
-    const url = URL.createObjectURL(new Blob([copy.mineMarkdown], { type: "text/markdown;charset=utf-8" }));
+    // 方案 C：下载的是最新的我的版本（含冲突后续写）
+    const original = item.mine?.markdown || "", latest = mineText(item);
+    const text = tab.value === "mine" && original && latest !== original && copy.mineMarkdown.includes(original) ? copy.mineMarkdown.replace(original, () => latest) : copy.mineMarkdown;
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
     const link = window.document.createElement("a");
     link.href = url;
     link.download = `${props.documentName}-冲突副本-${shortTime(copy.createdAt).replace(/[: ]/g, "")}.md`;
@@ -187,20 +223,24 @@ async function downloadCopy(item: ConflictItem) {
           <p v-if="item.reason === 'DELETED' && item.theirs?.deleted" class="cdesc">{{ whoOf(item) }} 于 {{ whenOf(item) }} 删除了这一段，但你修改过它。</p>
           <p v-else-if="item.reason === 'DELETED'" class="cdesc">你删除了这一段，但 {{ whoOf(item) }} 修改过它。</p>
           <p v-else-if="item.reason === 'FORMAT'" class="cdesc">合并后的内容无法写回原 Word，正文保持对方的版本。你可以下载自己的副本后手动处理。</p>
+          <p v-else-if="item.reason === 'MODIFIED' && frozenHere(item)" class="cdesc" data-testid="conflict-frozen-desc">{{ whoOf(item) }} 在你编辑期间保存了这一段。你的版本还在编辑区（红框内），可以继续写；处理前不会写入正文。</p>
           <p v-else-if="item.reason === 'MODIFIED'" class="cdesc">{{ whoOf(item) }} 在你编辑期间保存了这一段，两处修改无法自动合并。</p>
           <p v-else-if="item.reason === 'STRUCTURE'" class="cdesc">{{ whoOf(item) }} 拆分或合并了这里的段落，与你的修改重叠。</p>
+          <p v-if="tab === 'mine' && !frozenHere(item) && item.mineLatest?.savedAt" class="cdesc" data-testid="conflict-reopen-note">重新打开后，编辑区显示的是正文里的版本；你的版本在这张卡片里。</p>
         </div>
         <section class="cver ccard-side theirs">
-          <h4><span class="avatar alt" aria-hidden="true">{{ initial(whoOf(item)) }}</span>{{ item.theirs?.deleted ? `删除前的内容 · ${whoOf(item)} 已删除` : `${whoOf(item)} 的版本 · 已在正文中` }}</h4>
+          <h4><span class="avatar alt" aria-hidden="true">{{ initial(whoOf(item)) }}</span>{{ item.theirs?.deleted ? `删除前的内容 · ${whoOf(item)} 已删除` : `${whoOf(item)} 的版本 · 已在正文中（其他人看到的是这一版）` }}</h4>
           <p v-if="tableOf(item) && !item.theirs?.deleted" class="ctable">表格 · {{ cellDiffs(item, 'theirs') }} 处单元格不同（相对修改前）<span class="hint">表格差异请用“并排对比”查看。</span></p>
           <pre v-else-if="item.theirs?.deleted || !item.base?.markdown" :class="{ gone: item.theirs?.deleted }">{{ item.theirs?.markdown || "（无）" }}</pre>
           <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.theirs?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
         </section>
         <section class="cver ccard-side mine">
-          <h4><span class="avatar" aria-hidden="true">{{ tab === 'members' ? initial(item.actor?.name) : '我' }}</span>{{ tab === 'members' ? `${item.actor?.name || "提交人"} 的版本 · 未写入正文` : "我的版本 · 未写入正文" }}</h4>
-          <p v-if="tableOf(item) && !item.mine?.deleted" class="ctable">表格 · {{ cellDiffs(item, 'mine') }} 处单元格不同（相对修改前）</p>
-          <pre v-else-if="item.mine?.deleted || !item.base?.markdown">{{ item.mine?.deleted ? "（我删除了这一段）" : item.mine?.markdown }}</pre>
-          <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.mine?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
+          <h4><span class="avatar" aria-hidden="true">{{ tab === 'members' ? initial(item.actor?.name) : '我' }}</span>{{ tab === 'members' ? `${item.actor?.name || "提交人"} 的版本 · 未写入正文` : frozenHere(item) ? "我的版本 · 在你的编辑区，未写入正文" : "我的版本 · 未写入正文" }}</h4>
+          <p v-if="tab === 'mine' && mineStatus(item)" class="mine-status" :class="{ local: live(item) && !live(item)!.saved }" data-testid="conflict-mine-status">{{ mineStatus(item) }}</p>
+          <pre v-if="mineEmptied(item)" class="emptied">（你在编辑区删除了这一段的全部文字）</pre>
+          <p v-else-if="tableOf(item) && !item.mine?.deleted" class="ctable">表格 · {{ cellDiffs(item, 'mine') }} 处单元格不同（相对修改前）</p>
+          <pre v-else-if="item.mine?.deleted || !item.base?.markdown">{{ item.mine?.deleted ? "（我删除了这一段）" : mineText(item) }}</pre>
+          <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, mineText(item))" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
         </section>
         <details class="cbase ccard-base"><summary><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>查看修改前的原内容</summary><pre>{{ item.base?.markdown || "（无）" }}</pre></details>
 
@@ -216,13 +256,13 @@ async function downloadCopy(item: ConflictItem) {
             </div>
           </div>
           <div v-else-if="confirmTheirs === item" class="ccard-confirm" role="alertdialog" aria-label="使用对方的版本">
-            <p>{{ USE_THEIRS_CONFIRM }}</p>
+            <p>{{ theirsConfirm(item) }}</p>
             <div class="row"><button type="button" class="ghost sm" @click="confirmTheirs = null">返回</button><button type="button" class="primary danger sm" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">使用对方的版本</button></div>
           </div>
           <div v-else-if="tab === 'mine' && canResolve" class="row choices" :style="{ gridTemplateColumns: `repeat(${ordered(item).length === 4 ? 2 : ordered(item).length}, minmax(0, 1fr))` }">
             <template v-for="choice in ordered(item)" :key="choice.label">
               <button v-if="choice.action === 'manual'" type="button" class="primary sm" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ choice.label }}</button>
-              <button v-else type="button" :class="[!actionsFor(item).some(c => c.action === 'manual') && choice === actionsFor(item)[0] ? 'primary' : 'ghost', 'sm']" :title="choice.hint" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
+              <button v-else type="button" :class="[!allowed(item).some(c => c.action === 'manual') && choice === allowed(item)[0] ? 'primary' : 'ghost', 'sm']" :title="choice.hint" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
             </template>
           </div>
           <p v-if="tab === 'mine' && canResolve && ordered(item).some(c => c.hint)" class="choice-hint" data-testid="conflict-table-hint">{{ ordered(item).find(c => c.hint)?.hint }}</p>
@@ -245,7 +285,7 @@ async function downloadCopy(item: ConflictItem) {
       </details>
       <p v-if="items.length" class="hint">处理后正文立即更新，并记录到版本记录中。不处理也可以离开文档，冲突会一直保留，下次打开时继续处理。</p>
     </div>
-    <ConflictCompareDialog v-if="comparing" :item="comparing" :theirs-name="theirName(comparing)" :mine-label="tab === 'members' ? `${comparing.actor?.name || '提交人'} 的版本` : undefined" :can-resolve="tab === 'mine' && canResolve" :busy="Boolean(busyKey)"
+    <ConflictCompareDialog v-if="comparing" :item="withLatest(comparing)" :theirs-name="theirName(comparing)" :mine-label="tab === 'members' ? `${comparing.actor?.name || '提交人'} 的版本` : undefined" :can-resolve="tab === 'mine' && canResolve" :busy="Boolean(busyKey)"
       @close="comparing = null" @merge="compareMerge(comparing!, $event)" @edit="compareEdit(comparing!, $event)" @keep-mine="compareAction(comparing!, 'keep_mine')" @use-theirs="compareAction(comparing!, 'use_theirs')" />
   </aside>
 </template>
@@ -287,6 +327,9 @@ async function downloadCopy(item: ConflictItem) {
 .cver .avatar.alt { background:var(--gray-150); color:var(--gray-700); }
 .cver pre { margin:0; max-height:calc(var(--space-7) * 5); overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-doc); font-size:var(--text-sm); line-height:1.7; color:var(--text-primary); }
 .cver pre.gone { text-decoration:line-through; color:var(--text-tertiary); }
+.cver pre.emptied { color:var(--text-tertiary); font-style:italic; }
+.mine-status { margin:0 0 var(--space-1); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.mine-status.local { color:var(--warning-700, var(--text-secondary)); }
 .cver ins { background:var(--diff-ins-bg); text-decoration:none; border-radius:2px; padding:0 1px; }
 .cver del { background:var(--diff-del-bg); color:var(--danger-700); border-radius:2px; padding:0 1px; }
 .ctable { display:grid; gap:2px; margin:0; color:var(--text-primary); }

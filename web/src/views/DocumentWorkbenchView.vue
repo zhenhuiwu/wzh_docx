@@ -15,12 +15,14 @@ import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedI
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
+import { frozenMark, looksLikePinyin, noteYields, substituteFrozen, type NoteKind } from "../frozenConflict";
+import { flash } from "../flash";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, type Capabilities, type ConflictItem, type ConflictSummary, type ResolveResult } from "../api/documents";
+import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
@@ -76,12 +78,22 @@ const refreshingEditor = ref(false);
 const refreshReason = ref("");
 // 终验 F-L1：打开文档后约 0.25 秒在确认其他标签与本机草稿，期间正文不可编辑——显示载入状态，不再无声丢键
 const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "") || (checkingDrafts.value && phase.value === "ready" ? "正在检查本机草稿，马上就能编辑…" : ""));
+// T-S2：加载提示延迟 350ms 出现（短刷新不闪一下）；消失时立即消失
+const refreshNoticeShown = ref("");
+let refreshNoticeTimer: number | undefined;
+watch(refreshNotice, (value) => {
+  window.clearTimeout(refreshNoticeTimer);
+  if (!value) { refreshNoticeShown.value = ""; return; }
+  if (refreshNoticeShown.value) { refreshNoticeShown.value = value; return; }
+  refreshNoticeTimer = window.setTimeout(() => { refreshNoticeShown.value = refreshNotice.value; }, 350);
+});
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
 // 测试工程师 F-M3：重绘后光标放不回去（失焦）时，之后敲到页面上的字先记下并提示，不无声丢掉
 let caretLostAt = 0;
 let typedAfterCaretLost = "";
+let imeAfterCaretLost = false;
 let caretLostTimer: number | undefined;
 // 测试工程师 F-L1：打开文档检查本机草稿的约 0.25s 内，点在正文上的位置和敲下的字先记下，解锁后在该位置写回
 let loadPoint: { node: Node; offset: number } | null = null;
@@ -109,8 +121,10 @@ const exporting = ref(false);
 const exportMenu = ref(false);
 const exportError = ref("");
 const actionNote = ref("");
-/** 审查员第 2 条：“他人更新”类短提示（已显示/已合并）与常驻提示条互斥，提示条优先。 */
-let actionNoteKind: "others" | "" = "";
+/** 审查员第 2 条：“他人更新”类短提示（已显示/已合并）与常驻提示条互斥，提示条优先。T-M2：按优先级，“他人更新”类不覆盖光标/失焦类。 */
+let actionNoteKind: NoteKind = "";
+// T-S2：“他人更新”类短提示用浮层显示，不推挤编辑区
+const actionNoteOthers = ref(false);
 let actionNoteTimer: number | undefined;
 // 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
 const readonly = ref(false);
@@ -159,6 +173,37 @@ let fallbackGen = 0;
  * 重交本身再冲突时沿用最初这一份（测试工程师 F-H3：否则拿“可合并部分”当基线平移，会把对方刚写进的段落当成我删掉的）。
  */
 interface EditorAtConflict { content: string; dom: string; gen: number }
+/**
+ * 方案 C（14-最终界面验收 §三）：冲突段在编辑区里“冻结”。冻结区 = 冲突段在编辑区里对应的连续顶层块，带 data-frozen="冲突:条目"。
+ * 冲突返回时不重绘这一段；转正文（markdownContent）时冻结区一律换成 theirs（服务器上这一段的版本），所以在冻结区里打字不改正文、
+ * 不会被自动保存写进正文；冻结区里的文字（mine）在自动保存节拍上追加为冲突副本快照（POST …/conflicts/{cid}/mine）。
+ */
+interface Frozen {
+  key: string; conflictId: string; itemIndex: number; name: string; objectIds: string[]; deleted: boolean;
+  /** 服务器正文里这一段的版本（提交时代替冻结区）；对方删段时为空 */
+  theirs: string;
+  /** 冲突时最初的“我的版本”（不变） */
+  original: string;
+  /** 编辑区冻结区当前的文字 */
+  mine: string;
+  /** 服务器上最新一份快照的内容与时间 */
+  saved: string; savedAt: string | null; savedTab: string | null;
+  failing: boolean;
+  /** 冻结区第一块在编辑区顶层块里的位置（冻结区被整段删掉时据此放回占位） */
+  index: number;
+  /** 已处理，等下一次重绘时撤掉 */
+  resolved: boolean;
+}
+const frozen = ref<Record<string, Frozen>>({});
+const frozenOpen = computed(() => Object.values(frozen.value).filter(item => !item.resolved));
+const frozenUnsaved = computed(() => frozenOpen.value.filter(item => item.mine !== item.saved).length);
+let snapshotTimer: number | undefined;
+const snapshotKeys = new Map<string, { markdown: string; key: string }>();
+let snapshotFlight: Promise<void> | undefined;
+// 恢复本机草稿时编辑区显示的不是提交的内容，冲突不能冻结编辑区（按原流程重交可合并部分）
+let draftRestoring = false;
+// T-M1：本次会话恢复草稿时产生的冲突
+const restoreConflictIds = ref<string[]>([]);
 const conflictSummary = ref<ConflictSummary | null>(null);
 // 界面验收 M2/M3：冲突入口按 mineOpen / 成员冲突 / 已处理记录显示；打开时停在对应页签。
 const conflictTab = ref<"mine" | "members">("mine");
@@ -166,12 +211,36 @@ const conflictEntry = computed(() => conflictToggle(conflictSummary.value));
 const memberConflicts = computed(() => conflictSummary.value?.allOpen != null ? Math.max(0, conflictSummary.value.allOpen - conflictSummary.value.mineOpen) : 0);
 // 界面验收 M5：本人待处理冲突在正文和目录上的标记
 const openConflictItems = ref<ConflictItem[]>([]);
-const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem; approx?: boolean; gap?: boolean }>>([]);
+const conflictMarks = ref<Array<{ key: string; top: number; label: string; item?: ConflictItem; approx?: boolean; gap?: boolean; tip?: string; frozen?: boolean }>>([]);
 const conflictHeadings = computed(() => new Set(openConflictItems.value.map(item => item.location?.headingPath?.at(-1)).filter(Boolean) as string[]));
+/** T-M1：草稿是否改到了这处冲突的段落（草稿里既没有原文也没有对方的版本，说明这一段被草稿改过）。 */
+function draftTouches(draft: DraftV2, item: ConflictItem): boolean {
+  const text = draft.markdown ?? "";
+  const base = (item.base?.markdown ?? "").trim(), theirs = (item.theirs?.markdown ?? "").trim();
+  if (!base && !theirs) return false;
+  return !(base && text.includes(base)) && !(theirs && text.includes(theirs));
+}
+// T-M1 / T-S1：恢复被拒的原因——常驻在恢复条里，冲突处理完自动解除
+const restoreRefusal = computed<{ text: string; conflictIds: string[] } | null>(() => {
+  const draft = localDraft.value;
+  if (!draft) return null;
+  const open = openConflictItems.value.filter(item => (item.status ?? "open") === "open");
+  const fromRestore = [...new Set(open.filter(item => restoreConflictIds.value.includes(item.conflictId)).map(item => item.conflictId))];
+  if (fromRestore.length) return { text: `刚恢复的那份草稿有 ${fromRestore.length} 处冲突还没处理。处理完再恢复下一份，以免覆盖。`, conflictIds: fromRestore };
+  const touched = [...new Set(open.filter(item => draftTouches(draft, item)).map(item => item.conflictId))];
+  if (touched.length) return { text: touched.length > 1 ? `这份草稿改到的段落还有 ${touched.length} 处未处理的冲突，请先处理这些冲突再恢复。` : "这份草稿改到的段落还有未处理的冲突，请先处理这处冲突再恢复。", conflictIds: touched };
+  return null;
+});
+function showRefusedConflicts() {
+  const id = restoreRefusal.value?.conflictIds[0];
+  const item = openConflictItems.value.find(entry => entry.conflictId === id);
+  if (item) openConflictCard(`${item.conflictId}:${item.itemIndex}`);
+  else openConflicts("mine");
+}
 // 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
-const autoConflict = ref<{ count: number; name: string } | null>(null);
+const autoConflict = ref<{ count: number; name: string; frozen?: boolean } | null>(null);
 // 界面验收 M6 / 审查 S3：他人更新
-const othersUpdated = ref<{ names: string[]; objects: number } | null>(null);
+const othersUpdated = ref<{ names: string[]; objects: number; here?: boolean } | null>(null);
 const updatedHeadings = ref<Set<string>>(new Set());
 let updateTimer: number | undefined;
 let checkingUpdates = false;
@@ -252,11 +321,13 @@ let layoutNeedsRefresh = false;
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
-const pendingCount = computed(() => isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0);
+// 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
+const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value);
+const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
-const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: offline.value && isDirty.value,
-  retrying: retrying.value && isDirty.value, saving: showSaving.value || revertingBlock.value, dirty: isDirty.value }));
+const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: (offline.value || (!online.value && frozenUnsaved.value > 0)) && hasUnsaved.value,
+  retrying: retrying.value && isDirty.value, saving: showSaving.value || revertingBlock.value, dirty: hasUnsaved.value }));
 const capsuleText = computed(() => capsuleLabel(capsule.value, { savedAt: savedAt.value, now: now.value, pending: pendingCount.value }));
 const capsuleDetail = computed(() => {
   switch (capsule.value) {
@@ -406,6 +477,10 @@ async function load() {
   domPair = null;
   explicitBase = null;
   domBase = "";
+  frozen.value = {};
+  snapshotKeys.clear();
+  window.clearTimeout(snapshotTimer);
+  restoreConflictIds.value = [];
   skillOpen.value = false;
   aiUndo.value = null;
   memoryOffset.value = 0;
@@ -500,17 +575,43 @@ function findLocalDrafts(record: DocumentRecord) {
   // 终验回归 H1：本页面自己写的草稿也要列出——load() 总是把编辑区换成服务器正文，
   // 同一页面内重新打开文档（如会话过期重新登录后回到文档）时，这份草稿已不在编辑区里。
   const drafts = listDrafts(window.localStorage, account(), record.id)
-    .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent))
+    .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent && !draft.conflictsEdits?.length))
     .filter(draft => !liveTabs.has(draft.tabId));
   for (const draft of listDrafts(window.localStorage, account(), record.id)) {
     // 与服务器正文相同的草稿没有恢复价值；按读到的版本删除（期间被别的标签改写就不删）。
-    if (draft.wholeDocument && draft.markdown === record.markdownContent) removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
+    if (draft.wholeDocument && draft.markdown === record.markdownContent && !draft.conflictsEdits?.length) removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
   }
+  // 方案 C（14 §3.5 第 6 条）：草稿里记着冲突段的续写——冲突仍未处理就追加为快照（不重新提交正文），之后草稿不再带这部分
+  void settleDraftConflicts(record, drafts.filter(draft => draft.conflictsEdits?.length));
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
   checkingDrafts.value = false;
   void flushLoadTyping();
   void settlePendingSaves(record);
+}
+async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
+  for (const draft of drafts) {
+    let all = true;
+    for (const [n, edit] of draft.conflictsEdits.entries()) {
+      try {
+        await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `draft-${draft.savedAt}-${n}-${draft.tabId}`.slice(0, 80), draft.tabId);
+      } catch (error) {
+        if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED"].includes(error.code))) all = false;
+      }
+    }
+    if (!all || document.value !== record) continue;
+    const rest: DraftV2 = { ...draft, conflictsEdits: [] };
+    if (draft.wholeDocument && draft.markdown === record.markdownContent) {
+      removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
+      localDrafts.value = localDrafts.value.filter(item => item !== draft);
+      localDraft.value = localDrafts.value[0] ?? null;
+      noteAction("上次关闭页面前在冲突段里写的内容已存为冲突副本（见冲突面板）。", 6000);
+    } else if (writeDraft(window.localStorage, account(), rest) === "ok") {
+      localDrafts.value = localDrafts.value.map(item => item === draft ? rest : item);
+      if (localDraft.value === draft) localDraft.value = rest;
+    }
+  }
+  if (drafts.length) void refreshConflicts();
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
 async function settlePendingSaves(record: DocumentRecord, retried = false) {
@@ -540,10 +641,10 @@ async function settlePendingSaves(record: DocumentRecord, retried = false) {
 async function refreshFromServer(options: AcceptOptions = {}): Promise<boolean> {
   const record = document.value;
   if (!record || isDirty.value || saving.value) return false;
-  if (options.yieldToTyping) refreshReason.value = options.reason || "正在载入最新内容…";
+  const stopReason = options.yieldToTyping ? reasonLater(options.reason || "正在载入最新内容…") : () => undefined;
   let latest: Awaited<ReturnType<typeof getDocument>>;
   try { latest = await getDocument(record.id); }
-  finally { if (options.yieldToTyping) refreshReason.value = ""; }
+  finally { stopReason(); }
   if (document.value !== record) return false;
   if (latest.revision === record.revision) return true;
   if (options.yieldToTyping && (isDirty.value || saving.value)) return false;
@@ -758,7 +859,16 @@ function applyConflictMarks() {
   const marks: typeof conflictMarks.value = [];
   const approx: string[] = [];
   if (mode.value === "edit") {
+    // 方案 C：冻结区（编辑区里仍是我的版本）——红框跟着冻结区，标签“未保存 · 与 张工 的修改冲突”
+    for (const entry of frozenOpen.value) {
+      const blocks = frozenEls(root, entry.key);
+      blocks.forEach(block => block.classList.add("blk-conflict"));
+      if (!blocks.length) continue;
+      marks.push({ key: entry.key, top: blocks[0].offsetTop, label: entry.deleted ? `该段已被 ${entry.name} 删除 · 未保存` : `未保存 · 与 ${entry.name} 的修改冲突`, frozen: true,
+        tip: `这一段和 ${entry.name} 的修改冲突。你在这里写的内容先存为冲突副本，不会丢失，也暂不写入正文；在冲突面板处理后才写入。` });
+    }
     for (const item of openConflictItems.value) {
+      if (frozen.value[`${item.conflictId}:${item.itemIndex}`] && !frozen.value[`${item.conflictId}:${item.itemIndex}`].resolved) continue;
       const { block, exact, anchor } = findConflictBlock(item);
       const deleted = Boolean(item.theirs?.deleted);
       const key = `${item.conflictId}:${item.itemIndex}`;
@@ -785,7 +895,7 @@ function applyConflictMarks() {
 }
 let marksFrame = 0;
 function scheduleMarks() {
-  if (!openConflictItems.value.length) return;
+  if (!openConflictItems.value.length && !frozenOpen.value.length) return;
   window.cancelAnimationFrame(marksFrame);
   marksFrame = window.requestAnimationFrame(() => applyConflictMarks());
 }
@@ -798,6 +908,16 @@ function locateConflict(item: ConflictItem) {
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   target.classList.add("blk-flash");
   window.setTimeout(() => target.classList.remove("blk-flash"), 1600);
+}
+/** 主动保存遇到冲突：面板滚到卡片，焦点留在编辑区（14 §3.4）。 */
+function scrollToCard(key: string) {
+  let tries = 0;
+  const find = () => {
+    const card = window.document.querySelector<HTMLElement>(`.conflict-panel [data-conflict="${CSS.escape(key)}"]`);
+    if (card) { card.scrollIntoView({ behavior: "smooth", block: "nearest" }); return; }
+    if (++tries < 20) window.setTimeout(find, 150);
+  };
+  window.setTimeout(find, 0);
 }
 function openConflictCard(key: string) {
   autoConflict.value = null;
@@ -826,7 +946,12 @@ async function checkOthersUpdated() {
     const objects = since.changedBy.reduce((sum, person) => sum + person.objects, 0);
     const changed = since.objects.filter(item => !item.deleted);
     // 终验 F-M1：用户正在输入（2 秒内有输入，或在编辑区里选中了文字）时推迟自动刷新，按“本地有修改”显示提示条
-    const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value && !typingRecently();
+    const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value && !typingRecently() && !frozenOpen.value.length;
+    // T-M2：焦点在编辑区、光标所在段（或前后段）被别人改了：不自动刷新（不挪光标、不失焦），改为提示条
+    if (quiet && caretTouched(since.objects)) {
+      othersUpdated.value = { names, objects, here: true };
+      return;
+    }
     if (quiet || (readonly.value && !isDirty.value)) {
       const scroll = editor.value?.closest(".desk");
       const top = scroll?.scrollTop || 0;
@@ -845,6 +970,20 @@ async function checkOthersUpdated() {
   } finally {
     checkingUpdates = false;
   }
+}
+/** T-M2：光标所在顶层块及前后各一块是否在服务器上被改（按对象 ID）。 */
+function caretTouched(objects: Array<{ id: string; deleted?: boolean }>): boolean {
+  const root = editor.value;
+  if (!root || !(window.document.activeElement === root || root.contains(window.document.activeElement))) return false;
+  const selection = window.getSelection();
+  const node = selection?.rangeCount ? selection.getRangeAt(0).startContainer : null;
+  if (!node || !root.contains(node)) return false;
+  let block = (node instanceof Element ? node : node.parentElement) as HTMLElement | null;
+  while (block && block.parentElement !== root) block = block.parentElement;
+  if (!block) return false;
+  const near = [block.previousElementSibling, block, block.nextElementSibling].filter(Boolean) as Element[];
+  const changed = new Set(objects.map(item => String(item.id)));
+  return near.some(element => [element, ...element.querySelectorAll("[data-object-id]")].some(item => changed.has(item.getAttribute("data-object-id") || "")));
 }
 /** 被他人更新、尚未看过的块：左侧蓝色竖线，目录标题右侧蓝点；点击或编辑该块后消失。 */
 function markUpdated(objects: Array<{ id: string; markdown?: string }>, keep = false) {
@@ -959,8 +1098,11 @@ function showEditorHtml(html: string, mapped?: boolean) {
     html = html.replaceAll(`src="${image.ref}"`, `src="data:${image.content_type};base64,${image.data}"`);
   }
   if (editor.value) {
+    // 方案 C：冻结区节点不随重绘替换（光标、组字、撤销栈都在这些节点上），重绘后放回服务器上这一段的位置
+    const kept = detachFrozen(editor.value);
     // 测试 L3：服务端把目录/域段落标成 contenteditable=false（data-word-protected）。
     editor.value.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["contenteditable"] });
+    reattachFrozen(editor.value, kept);
     paperStyle.value = {};
     try {
       const page = JSON.parse(editor.value.firstElementChild?.getAttribute("data-word-page") || "{}");
@@ -974,6 +1116,12 @@ function showEditorHtml(html: string, mapped?: boolean) {
 }
 /** yieldToTyping：不锁编辑区，先在后台取版式，期间用户一输入就放弃重绘（返回 false）；
  *  stateApplied：调用方已把正文/修订号写好（保存合并路径），这里只负责重绘。 */
+/** T-S2：不锁编辑区的载入说明延迟 350ms 再出现（正常速度下不闪），以浮层显示，不推动编辑区。 */
+const floatingReason = ref("");
+function reasonLater(reason: string): () => void {
+  const timer = window.setTimeout(() => { floatingReason.value = reason; }, 350);
+  return () => { window.clearTimeout(timer); if (floatingReason.value === reason) floatingReason.value = ""; };
+}
 type AcceptOptions = { reason?: string; yieldToTyping?: boolean; stateApplied?: boolean; carryTyping?: boolean };
 let composing = false;
 function setComposing(value: boolean) { composing = value; }
@@ -1035,6 +1183,7 @@ function lockedTarget(event: Event): boolean {
 /** 终审建议：锁定期间的输入法输入（组字）无法缓冲，至少在解锁时提示，不能静默丢掉。 */
 function noteLockedComposition(event: Event) {
   if (lockedTarget(event)) imeDuringLock = true;
+  if (caretLostAt && Date.now() - caretLostAt < 30000) imeAfterCaretLost = true;
   if (checkingDrafts.value && loadPoint && onBodyTarget(event)) imeDuringLoad = true;
 }
 function noteLoadPointer(event: PointerEvent) {
@@ -1068,8 +1217,8 @@ async function flushLoadTyping() {
       placed = window.document.execCommand("insertText", false, typed);
     } catch { placed = false; }
   }
-  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000);
-  else if (typed && !placed) noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000);
+  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000, "caret");
+  else if (typed && !placed) noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
 }
 function onBodyTarget(event: Event): boolean {
   const target = event.target as Node | null;
@@ -1087,12 +1236,15 @@ function bufferLockedTyping(event: KeyboardEvent) {
   if (!refreshingEditor.value && caretLostAt && Date.now() - caretLostAt < 30000 && event.target === window.document.body) {
     // 测试工程师 F-M3：重绘后失焦，之后敲下的字不能无声丢失：记下并提示
     if (event.ctrlKey || event.metaKey || event.altKey || !(event.key.length === 1 || event.key === "Process")) return;
+    if (event.key === "Process" || event.isComposing) imeAfterCaretLost = true;
     if (event.key.length === 1) typedAfterCaretLost += event.key;
     window.clearTimeout(caretLostTimer);
     caretLostTimer = window.setTimeout(() => {
       const typed = typedAfterCaretLost;
-      noteAction(typed ? `编辑区刚刷新，光标不在正文里，输入的“${typed.slice(0, 40)}${typed.length > 40 ? "…" : ""}”没有写入正文。请点击要写的位置后重新输入。`
-        : "编辑区刚刷新，光标不在正文里，刚才的输入没有写入正文。请点击要写的位置后重新输入。", 15000);
+      // T-S4：用输入法时敲下的是拼音字母，不引用原文
+      const quote = typed && !looksLikePinyin(typed, imeAfterCaretLost);
+      noteAction(quote ? `编辑区刚刷新，光标不在正文里，输入的“${typed.slice(0, 40)}${typed.length > 40 ? "…" : ""}”没有写入正文。请点击要写的位置后重新输入。`
+        : "编辑区刚刷新，光标不在正文里，刚才的输入没有写入正文。请点击要写的位置后重新输入。", 15000, "caret");
     }, 500);
     return;
   }
@@ -1103,23 +1255,13 @@ function bufferLockedTyping(event: KeyboardEvent) {
 }
 /** 重绘后按段落序列对齐恢复光标；对不上（或光标所在段被改了）就不放光标，免得接着打的字落进别的段。 */
 function restoreMappedCaret(root: HTMLElement, before: string[], caret: { index: number; offset: number }[]): boolean {
+  // 方案 C：光标在冻结区里（重绘没有换掉这些节点）：原样保留
+  if (keepFrozenCaret(root)) return true;
   const after = blockTexts(root);
   // 对齐不确定（含超大文档）时退一步放到文字在前后两版都唯一的段（最后一审建议 2：尽量不无谓失焦）
   const mapped = caret.map(point => ({ index: caretBlockIndex(before, after, point.index), offset: point.offset }));
   if (mapped.length === 2 && mapped.every((point, n) => point.index >= 0 && after[point.index] === before[caret[n].index]) && restoreCaret(root, mapped)) return true;
-  // 测试工程师 F-M3：光标所在段本身被换掉了（如这段有冲突、编辑区换成了对方的版本），但前后两段都原样、位置确定：
-  // 光标放到这一段末尾并提示，接着打的字写在这段里（对方的版本保留，我之前的版本在冲突副本里），不再失焦让字无声丢失
-  const at = caret.length === 2 && caret[0].index === caret[1].index ? caret[0].index : -1;
-  if (at >= 0) {
-    const left = at > 0 ? caretBlockIndex(before, after, at - 1) : -1;
-    const right = at + 1 < before.length ? caretBlockIndex(before, after, at + 1) : after.length;
-    const target = left + 1;
-    if ((at === 0 || left >= 0) && right === left + 2 && (at === 0 || after[left] === before[at - 1]) && (right === after.length || after[right] === before[at + 1])
-      && after[target] !== undefined && restoreCaret(root, [{ index: target, offset: after[target].length }, { index: target, offset: after[target].length }])) {
-      noteAction("光标所在的段落已更新为合并后的内容（如有冲突，你原来的版本在冲突面板里）。接着输入的字会写在这一段末尾。", 10000);
-      return true;
-    }
-  }
+  // 方案 C：撤掉 F-M3 的“光标放到对方段末”——冲突段不再被换掉（冻结），他人更新改到光标所在段时不自动刷新（T-M2）
   leaveEditorCaret(root);
   return false;
 }
@@ -1129,6 +1271,7 @@ function leaveEditorCaret(root: HTMLElement) {
     root.blur();
     caretLostAt = Date.now();
     typedAfterCaretLost = "";
+    imeAfterCaretLost = false;
   }
 }
 function beginEditorLock(reason: string) {
@@ -1162,10 +1305,10 @@ function endEditorLock() {
   lockHadFocus = false;
   // 终审必改：按重绘前后段落序列对齐换算光标所在段；对不上就不写入，只提示
   const placed = editable.value && restoreMappedCaret(root, before, caret);
-  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000);
+  if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000, "caret");
   if (!typed) return;
   if (placed && window.document.execCommand("insertText", false, typed)) return;
-  noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000);
+  noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
 }
 async function acceptContent(result: DocumentContentResult, options: AcceptOptions = {}): Promise<boolean> {
   const record = document.value;
@@ -1174,11 +1317,11 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
     // 终验 F-M1：他人更新的自动刷新不锁编辑区——先在后台取好版式，期间用户一输入就放弃这次刷新（改为显示提示条）
     const started = Date.now();
     const before = options.carryTyping && editor.value ? blockTexts(editor.value) : null;
-    refreshReason.value = options.reason || "正在载入最新内容…";
+    const stopReason = reasonLater(options.reason || "正在载入最新内容…");
     let preview: Awaited<ReturnType<typeof previewDocument>>;
     try { preview = await previewDocument(record.id); }
     catch { return false; }
-    finally { refreshReason.value = ""; }
+    finally { stopReason(); }
     if (document.value !== record || documentId.value !== record.id) return false;
     if (refreshingEditor.value) return false;
     if (!options.stateApplied && (isDirty.value || saving.value)) return false;
@@ -1216,7 +1359,7 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
       if (!placed) {
         // 极少见：实际版式与预取的不一致。不猜位置，把字留在提示里
         leaveEditorCaret(root);
-        noteAction(`载入期间输入的“${carry.insert.slice(0, 40)}”没能写入正文，请在需要的位置重新输入。`, 15000);
+        noteAction(`载入期间输入的“${carry.insert.slice(0, 40)}”没能写入正文，请在需要的位置重新输入。`, 15000, "caret");
       }
     } else if (root && caret.length) restoreMappedCaret(root, shownBefore, caret);
     return true;
@@ -1438,8 +1581,28 @@ function showAiProgress(stage: string, message: string) {
   if (last?.stage === stage) last.message = message;
   else aiProgress.value.push({ stage, message });
 }
+/** 方案 C：AI 改写的范围里有冻结区（冲突未处理）时不让 AI 改写。 */
+function aiTouchesFrozen(): boolean {
+  const root = editor.value;
+  if (!root || !frozenOpen.value.length) return false;
+  const blocks = frozenOpen.value.flatMap(entry => frozenEls(root, entry.key));
+  if (!blocks.length) return false;
+  if (aiScope.value === "document") return true;
+  if (aiScope.value === "selection") return Boolean(selectedRange && blocks.some(block => selectedRange!.intersectsNode(block)));
+  const heading = root.querySelectorAll("h1,h2,h3,h4,h5,h6")[selectedHeading.value ?? -1] as HTMLElement | undefined;
+  if (!heading) return false;
+  const level = Number(heading.tagName.slice(1));
+  let top: Element | null = heading;
+  while (top && top.parentElement !== root) top = top.parentElement;
+  for (let next = top?.nextElementSibling; next; next = next.nextElementSibling) {
+    if (/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level) break;
+    if (next.hasAttribute("data-frozen")) return true;
+  }
+  return false;
+}
 async function generateSection() {
   if (!document.value || !canGenerate.value || !canStartAi.value) return;
+  if (aiTouchesFrozen()) { aiError.value = "本节有未处理的冲突，请先处理冲突再让 AI 改写。"; return; }
   clearAiDraft();
   const id = document.value.id;
   const index = aiScope.value === "document" ? null : selectedHeading.value;
@@ -1664,19 +1827,9 @@ async function switchMode(next: "original" | "edit" | "layout") {
   clearAiDraft();
   if (next !== "edit") await loadOriginal();
 }
-function onEditorInput(event?: Event) {
-  if (!editor.value) return;
-  lastInputAt = Date.now();
-  aiUndo.value = null;
-  const copy = editor.value.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
-  // 冲突/他人更新标记只用于显示，不进入正文
-  copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
-    node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
-    if (!node.classList.length) node.removeAttribute("class");
-  });
-  const html = copy.innerHTML;
-  const dom = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
+/** 按编辑区文字更新正文（冻结区已换成正文版本）；有平移关系时把编辑区的改动平移到正文上。 */
+function syncValueFromEditor() {
+  const dom = editorText();
   if (domPair) {
     const value = rebaseBlocks(domPair.dom, dom, domPair.value);
     if (value !== null) {
@@ -1688,6 +1841,13 @@ function onEditorInput(event?: Event) {
       fallbackToExplicit(domBase, dom);
     }
   } else markdownContent.value = dom;
+}
+function onEditorInput(event?: Event) {
+  if (!editor.value) return;
+  lastInputAt = Date.now();
+  aiUndo.value = null;
+  syncValueFromEditor();
+  if (frozenUnsaved.value) scheduleSnapshot();
   scheduleDraftWrite();
   scheduleMarks();
   if (event) clearUpdatedAt(event.target instanceof Node && editor.value?.contains(event.target) ? window.getSelection()?.anchorNode ?? null : null);
@@ -1733,7 +1893,10 @@ function currentDraft(): DraftV2 | null {
     v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: mergeBase ?? record.revision, savedAt: Date.now(),
     ...(explicitBase !== null ? { baseMarkdown: explicitBase } : {}),
     wholeDocument: true, markdown: markdownContent.value, blocks: [], changed: pendingCount.value,
-    headingPaths: headingPathsOf(markdownContent.value), conflictsEdits: [], pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
+    headingPaths: headingPathsOf(markdownContent.value),
+    // 方案 C（14 §3.5 第 6 条）：冻结区里还没存成快照的续写
+    conflictsEdits: frozenOpen.value.filter(entry => entry.mine !== entry.saved).map(entry => ({ conflictId: entry.conflictId, itemIndex: entry.itemIndex, markdown: entry.mine })),
+    pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
     writer: pageInstance,
   };
 }
@@ -1743,7 +1906,7 @@ function persistLocalDraft(): boolean {
   if (!record || !browserTab) return false;
   window.clearTimeout(draftTimer);
   draftTimer = undefined;
-  if (!isDirty.value) {
+  if (!isDirty.value && !frozenUnsaved.value) {
     // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
     // 终验回归 H1：恢复条正列着本标签的旧草稿时不删（由“恢复/舍弃”处理）
     if (!localDrafts.value.some(draft => draft.tabId === browserTab)) removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
@@ -1773,7 +1936,13 @@ function download(name: string, text: string, type = "text/markdown;charset=utf-
 }
 function downloadMyChanges() {
   if (!document.value) return;
-  download(myChangesFileName(document.value.name), markdownContent.value);
+  // 方案 C：正文里冻结区是服务器版本；“我的修改”要带上冻结区里我的版本
+  let text = markdownContent.value;
+  for (const entry of frozenOpen.value) {
+    if (entry.theirs && text.includes(entry.theirs)) text = text.replace(entry.theirs, () => entry.mine);
+    else if (entry.mine) text = `${text}\n\n${entry.mine}`;
+  }
+  download(myChangesFileName(document.value.name), text);
 }
 async function restoreLocalDraft() {
   const draft = localDraft.value, record = document.value;
@@ -1789,15 +1958,11 @@ async function restoreLocalDraft() {
       noteAction("编辑区还有没保存到服务器的内容（可能是刚恢复的那份）。等保存成功或处理完冲突后再恢复下一份，以免覆盖。", 10000);
       return;
     }
-    // 测试工程师 F-H4：还有未处理的冲突（如上一份恢复的内容与他人修改冲突）时不恢复下一份——
-    // 同一段再次冲突会作废前一条冲突记录，前一份草稿的内容就找不回来了
+    // T-M1（替代 F-H4 的“有任何未处理冲突就拒绝”）：只在本次恢复产生的冲突未处理、
+    // 或这份草稿改到的段落有未处理冲突时拒绝——原因常驻在恢复条里（T-S1），处理完自动解除
     await refreshConflicts();
     if (document.value !== record) return;
-    if ((conflictSummary.value?.mineOpen ?? 0) > 0) {
-      noteAction("还有未处理的冲突（可能来自刚恢复的那份草稿）。请先在冲突面板处理完，再恢复下一份草稿，以免覆盖。", 10000);
-      openConflicts("mine");
-      return;
-    }
+    if (restoreRefusal.value) return;
     // 终审建议：恢复别的标签的草稿时，本标签的旧草稿先换个键保存——恢复后的编辑会写本标签的键，不能把它覆盖掉
     if (draft.tabId !== browserTab && !keepOwnDraftAside(record)) {
       noteAction("本机存储写入失败，请先处理本标签的草稿（恢复、下载或舍弃）再恢复这一份。", 10000);
@@ -1805,9 +1970,14 @@ async function restoreLocalDraft() {
     }
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
-    // 增量审查 M1：草稿记着显式基准时按它合并（expectedRevision 用当前修订）
-    if (typeof draft.baseMarkdown === "string") await saveContent(draft.markdown, "manual", record.revision, undefined, { baseMarkdown: draft.baseMarkdown });
-    else await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
+    draftRestoring = true;
+    try {
+      // 增量审查 M1：草稿记着显式基准时按它合并（expectedRevision 用当前修订）
+      if (typeof draft.baseMarkdown === "string") await saveContent(draft.markdown, "manual", record.revision, undefined, { baseMarkdown: draft.baseMarkdown });
+      else await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
+    } finally {
+      draftRestoring = false;
+    }
     if (blocked.value || document.value !== record) return;
     const conflicted = lastConflictAt >= restoreStarted;
     if (conflicted) {
@@ -1895,9 +2065,12 @@ function downloadLocalDraft() {
   if (!localDraft.value?.markdown || !document.value) return;
   download(myChangesFileName(document.value.name, new Date(localDraft.value.savedAt || Date.now())), localDraft.value.markdown);
 }
-function noteAction(message: string, ms = 4000, kind: "others" | "" = "") {
+function noteAction(message: string, ms = 4000, kind: NoteKind = "") {
+  // T-M2：“他人更新”类提示不覆盖光标/失焦类提示
+  if (noteYields(actionNoteKind, Boolean(actionNote.value), kind)) return;
   actionNote.value = message;
   actionNoteKind = kind;
+  actionNoteOthers.value = kind === "others";
   window.clearTimeout(actionNoteTimer);
   actionNoteTimer = window.setTimeout(() => { actionNote.value = ""; actionNoteKind = ""; }, ms);
 }
@@ -1979,13 +2152,14 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         // 增量审查 M1：在途期间编辑区已退回显式基准（正文 = 编辑区文字）：基准前移到本次提交对应的编辑区文字
         explicitBase = dsend;
         persistLocalDraft();
-      } else if (!typedNewer) {
+      } else if (!typedNewer && !frozenOpen.value.length) {
         explicitBase = null;
         markdownContent.value = serverText;
         // 合并带进了别人的修改：编辑区按服务器正文重绘（不受 AI/草稿锁影响，否则编辑区会停在旧内容上）。
         // 编辑区还缺之前平移进来的对方修改（domPair）或按显式基准提交过（编辑区缺对方修改）时同样要重绘。
         rerender = changedText || Boolean(domPair) || explicit !== null;
       } else if (changedText) {
+        // 方案 C：有冻结区时不重绘（冻结区节点、光标、组字都不动），同样按平移处理。
         // 终验 F-H2：编辑区有更新的输入，不能替换。把未保存的输入平移到服务器新正文上，下次以新版本为基准提交；
         // 平移不了（如对方也改了正在改的段）就以本次提交对应的编辑区文字为显式基准（增量审查 M1），不按旧修订合并。
         // 冲突后重交可合并部分时同样平移（增量审查建议：否则下次按旧基准提交，同一处冲突会再记一条）。
@@ -1998,7 +2172,11 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       noteMerged(result);
       // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
       const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
-      if (!typedNewer) othersUpdated.value = null;
+      if (!typedNewer && !frozenOpen.value.length) othersUpdated.value = null;
+      // 方案 C：有冻结区时不重绘，合并进来的他人修改先不显示在编辑区，给出“立即刷新”（刷新时冻结区保留）
+      if (frozenOpen.value.length && changedText && result.changedBy?.length) {
+        othersUpdated.value = { names: result.changedBy.map(person => person.name), objects: result.changedBy.reduce((sum, person) => sum + person.objects, 0) };
+      }
       pendingKey = null;
       blocked.value = null;
       retrying.value = false;
@@ -2023,7 +2201,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         if (shown && mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
       } else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
-      if (current()) handleSaveError(error, content, trigger, editor ? editor.dom : dsend, gen, editor?.content);
+      if (current()) handleSaveError(error, content, trigger, editor ? editor.dom : dsend, gen, editor?.content, !editor && !draftRestoring);
     } finally {
       saving.value = false;
       showSaving.value = false;
@@ -2050,15 +2228,203 @@ function rebaseOnto(sent: string, serverText: string): boolean {
   persistLocalDraft();
   return true;
 }
+/** 编辑区文字（Markdown）。冲突/他人更新标记只用于显示，不进入正文；方案 C：冻结区换成服务器上这一段的版本，冻结区文字记进 mine。 */
 function editorText(): string {
   if (!editor.value) return markdownContent.value;
-  const copy = editor.value.cloneNode(true) as HTMLElement;
+  const root = editor.value;
+  const copy = root.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
   copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
     node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
     if (!node.classList.length) node.removeAttribute("class");
   });
-  return editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+  const entries = Object.values(frozen.value);
+  if (!entries.length) return editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+  const marks: Array<{ mark: string; theirs: string }> = [];
+  const tops = topLevel(root);
+  entries.forEach((entry, n) => {
+    const holder = window.document.createElement("p");
+    holder.textContent = frozenMark(n);
+    const blocks = frozenEls(copy, entry.key);
+    if (blocks.length) {
+      const live = frozenEls(root, entry.key)[0];
+      if (live) entry.index = Math.max(0, tops.indexOf(live));
+      blocks[0].before(holder);
+      const wrap = window.document.createElement("div");
+      for (const block of blocks) wrap.appendChild(block);
+      const mine = editorMarkdown(turndown, DOMPurify.sanitize(wrap.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+      if (!entry.resolved && mine !== entry.mine) entry.mine = mine;
+    } else {
+      // 冻结区被整段删掉：占位放回原位置，“我的版本”为空（卡片写“你在编辑区删除了这一段的全部文字”）
+      const kids = topLevel(copy);
+      const at = kids[Math.min(entry.index, kids.length)];
+      if (at) at.before(holder); else copy.appendChild(holder);
+      if (!entry.resolved && entry.mine !== "") entry.mine = "";
+    }
+    marks.push({ mark: frozenMark(n), theirs: entry.theirs });
+  });
+  return substituteFrozen(editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement), marks);
+}
+function topLevel(root: HTMLElement): HTMLElement[] {
+  return ([...root.children] as HTMLElement[]).filter(block => !block.hasAttribute("data-ai-preview"));
+}
+function frozenEls(root: HTMLElement, key: string): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(`:scope > [data-frozen="${CSS.escape(key)}"]`)];
+}
+function blocksMarkdown(blocks: HTMLElement[]): string {
+  const wrap = window.document.createElement("div");
+  for (const block of blocks) wrap.appendChild(block.cloneNode(true));
+  wrap.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach(node => node.classList.remove("blk-conflict", "blk-updated", "blk-flash"));
+  return editorMarkdown(turndown, DOMPurify.sanitize(wrap.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+}
+/**
+ * 冲突段在编辑区里对应的连续顶层块：按冲突对象 ID（预览给每个顶层块标了 data-object-id，回车分出的段会带上同一个 ID）。
+ * 对象 ID 在列表项等嵌套块上、或对不上连续块时返回 null（不冻结，按原流程处理）。
+ */
+function regionFor(root: HTMLElement, item: ConflictItem): HTMLElement[] | null {
+  const ids = new Set((item.objectIds || []).map(String));
+  if (!ids.size) return null;
+  for (const id of ids) {
+    const node = root.querySelector(`[data-object-id="${CSS.escape(id)}"]`);
+    if (node && node.parentElement !== root) return null;
+  }
+  const tops = topLevel(root);
+  const hits = tops.map((block, index) => (ids.has(block.getAttribute("data-object-id") || "") ? index : -1)).filter(index => index >= 0);
+  if (!hits.length || hits[hits.length - 1] - hits[0] + 1 !== hits.length) return null;
+  let region = tops.slice(hits[0], hits[hits.length - 1] + 1);
+  if (region.some(block => block.hasAttribute("data-frozen") || /^(UL|OL)$/.test(block.tagName))) return null;
+  // 粘贴/回车分出的、不带对象 ID 的紧随段：正好补齐冲突里“我的版本”时一并纳入
+  const want = item.mine?.markdown || "";
+  if (want && blocksMarkdown(region) !== want) {
+    let extended = region;
+    for (let next = hits[hits.length - 1] + 1; next < tops.length && next <= hits[hits.length - 1] + 20 && !tops[next].hasAttribute("data-object-id"); next += 1) {
+      extended = [...extended, tops[next]];
+      if (blocksMarkdown(extended) === want) { region = extended; break; }
+    }
+  }
+  return region;
+}
+/** 方案 C：409 冲突返回时把冲突段冻结在编辑区（不重绘、不动光标与组字）。返回已冻结的条目键。 */
+function freezeConflicts(items: ConflictItem[]): string[] {
+  const root = editor.value;
+  if (!root) return [];
+  const keys: string[] = [];
+  for (const item of items) {
+    const key = `${item.conflictId}:${item.itemIndex}`;
+    if (frozen.value[key] && !frozen.value[key].resolved) { keys.push(key); continue; }
+    const theirsDeleted = Boolean(item.theirs?.deleted);
+    if (!(item.reason === "MODIFIED" || (item.reason === "DELETED" && theirsDeleted && !item.mine?.deleted))) continue;
+    const region = regionFor(root, item);
+    if (!region) continue;
+    region.forEach(block => block.setAttribute("data-frozen", key));
+    const original = item.mine?.markdown || "";
+    const latest = item.mineLatest?.markdown ?? original;
+    frozen.value[key] = {
+      key, conflictId: item.conflictId, itemIndex: item.itemIndex, name: conflictName(item), objectIds: (item.objectIds || []).map(String),
+      deleted: theirsDeleted, theirs: theirsDeleted ? "" : item.theirs?.markdown || "", original, mine: blocksMarkdown(region), saved: latest,
+      savedAt: item.mineLatest?.savedAt ?? item.createdAt ?? null, savedTab: item.mineLatest?.tabId ?? null, failing: false,
+      index: Math.max(0, topLevel(root).indexOf(region[0])), resolved: false,
+    };
+    keys.push(key);
+  }
+  if (keys.length && frozenUnsaved.value) scheduleSnapshot(0);
+  return keys;
+}
+/** 冻结区续写的快照：与自动保存同一节拍（停手 3 秒）；同一份内容重发用同一个键。 */
+function scheduleSnapshot(delay = 3000) {
+  window.clearTimeout(snapshotTimer);
+  snapshotTimer = window.setTimeout(() => void flushSnapshots(), delay);
+}
+async function flushSnapshots(): Promise<void> {
+  window.clearTimeout(snapshotTimer);
+  if (snapshotFlight) { await snapshotFlight.catch(() => undefined); if (!frozenUnsaved.value) return; }
+  const record = document.value;
+  if (!record || readonly.value) return;
+  if (editor.value) editorText();
+  const work = frozenOpen.value.filter(entry => entry.mine !== entry.saved);
+  if (!work.length) return;
+  snapshotFlight = (async () => {
+    let failed = false;
+    for (const entry of work) {
+      const markdown = entry.mine;
+      let sending = snapshotKeys.get(entry.key);
+      if (!sending || sending.markdown !== markdown) { sending = { markdown, key: crypto.randomUUID() }; snapshotKeys.set(entry.key, sending); }
+      try {
+        const result = await saveConflictMine(record.id, entry.conflictId, entry.itemIndex, markdown, sending.key, browserTab || undefined);
+        if (document.value !== record) return;
+        entry.saved = result.mineLatest.markdown;
+        entry.savedAt = result.mineLatest.savedAt;
+        entry.savedTab = result.mineLatest.tabId;
+        entry.failing = false;
+        snapshotKeys.delete(entry.key);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "CONFLICT_ALREADY_RESOLVED") {
+          // 在别的标签页处理掉了：撤掉冻结，按服务器正文刷新
+          entry.resolved = true;
+          entry.saved = entry.mine;
+          void refreshConflicts();
+          continue;
+        }
+        entry.failing = true;
+        failed = true;
+      }
+    }
+    persistLocalDraft();
+    if (failed) scheduleSnapshot(Math.min(30000, backoffMs(Math.max(1, failures.value + 1))));
+  })();
+  try { await snapshotFlight; } finally { snapshotFlight = undefined; }
+}
+/** 重绘前取下冻结区节点（连同光标），重绘后放回服务器上这一段的位置（按对象 ID，找不到时放回原位置）。 */
+function detachFrozen(root: HTMLElement) {
+  frozenCaret = null;
+  const kept: Array<{ entry: Frozen; blocks: HTMLElement[] }> = [];
+  for (const entry of Object.values(frozen.value)) {
+    if (entry.resolved) { delete frozen.value[entry.key]; snapshotKeys.delete(entry.key); continue; }
+    const blocks = frozenEls(root, entry.key);
+    blocks.forEach(block => block.classList.remove("blk-conflict"));
+    kept.push({ entry, blocks });
+  }
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const inside = range && kept.some(({ blocks }) => blocks.some(block => block.contains(range.startContainer)) && blocks.some(block => block.contains(range.endContainer)));
+  const caret = inside && range ? { sc: range.startContainer, so: range.startOffset, ec: range.endContainer, eo: range.endOffset } : null;
+  return { kept, caret };
+}
+function reattachFrozen(root: HTMLElement, state: ReturnType<typeof detachFrozen>) {
+  for (const { entry, blocks } of state.kept) {
+    const ids = new Set(entry.objectIds);
+    const tops = topLevel(root);
+    const target = tops.filter(block => ids.has(block.getAttribute("data-object-id") || ""));
+    if (target.length) entry.theirs = blocksMarkdown(target);
+    if (!blocks.length) { target.forEach(block => block.remove()); continue; }
+    const anchor = target[0] || tops[Math.min(entry.index, tops.length)] || null;
+    for (const block of blocks) root.insertBefore(block, anchor);
+    target.forEach(block => block.remove());
+  }
+  if (state.caret) {
+    try {
+      const range = window.document.createRange();
+      range.setStart(state.caret.sc, state.caret.so);
+      range.setEnd(state.caret.ec, state.caret.eo);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      frozenCaret = range;
+    } catch { frozenCaret = null; }
+  }
+}
+// 重绘后光标仍在冻结区里（节点没换）：之后的“按段落对齐恢复光标”不再挪它
+let frozenCaret: Range | null = null;
+function keepFrozenCaret(root: HTMLElement): boolean {
+  const range = frozenCaret;
+  frozenCaret = null;
+  if (!range || !root.contains(range.startContainer)) return false;
+  root.contentEditable = String(editable.value);
+  root.focus({ preventScroll: true });
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  return true;
 }
 /** 增量审查 M1：正文换回编辑区文字，以 base（与最近一次成功保存对应的编辑区文字）为显式基准，下次保存带 baseMarkdown。 */
 function fallbackToExplicit(base: string, dom?: string) {
@@ -2069,7 +2435,7 @@ function fallbackToExplicit(base: string, dom?: string) {
   markdownContent.value = dom ?? editorText();
   persistLocalDraft();
 }
-function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", dom: string, gen = fallbackGen, origin = content) {
+function handleSaveError(error: unknown, content: string, trigger: "auto" | "manual", dom: string, gen = fallbackGen, origin = content, fromEditor = false) {
   const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", messageOf(error));
   switch (classifySaveError(apiError)) {
     case "conflict": {
@@ -2082,10 +2448,24 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const details = apiError.details || {};
       const appliable = typeof details.appliableMarkdown === "string" ? details.appliableMarkdown : null;
       const appliableBase = typeof details.appliableBaseRevision === "number" ? details.appliableBaseRevision : null;
-      void refreshConflicts().then(() => conflictPanel.value?.load());
       const conflicts = Array.isArray(details.conflicts) ? details.conflicts as ConflictItem[] : [];
-      if (conflictOpensPanel(trigger)) openConflicts("mine");
-      else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : "其他成员" };
+      if (draftRestoring && typeof details.conflictId === "string") restoreConflictIds.value = [...new Set([...restoreConflictIds.value, details.conflictId])];
+      // 方案 C：编辑区里的冲突段冻结（不重绘、不动光标与组字），正文这一段用服务器版本代替后按原基准重新提交其余部分
+      const frozenKeys = fromEditor ? freezeConflicts(conflicts) : [];
+      const allFrozen = conflicts.length > 0 && frozenKeys.length === conflicts.length;
+      void refreshConflicts().then(() => conflictPanel.value?.load());
+      if (conflictOpensPanel(trigger)) {
+        openConflicts("mine");
+        // 主动保存遇到冲突：打开面板并定位到卡片，焦点留在编辑区
+        if (conflicts[0]) scrollToCard(`${conflicts[0].conflictId}:${conflicts[0].itemIndex}`);
+      } else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : "其他成员", frozen: frozenKeys.length > 0 };
+      if (allFrozen) {
+        syncValueFromEditor();
+        scheduleDraftWrite();
+        void nextTick(() => applyConflictMarks());
+        queueMicrotask(() => void save("auto"));
+        return;
+      }
       if (appliable !== null && appliableBase !== null && document.value) {
         queueMicrotask(() => void saveContent(appliable, "auto", appliableBase, { content: origin, dom, gen }));
       }
@@ -2267,20 +2647,57 @@ function onConflictCount(mineOpen: number) {
   if (conflictSummary.value) conflictSummary.value = { ...conflictSummary.value, mineOpen };
   void refreshConflicts();
 }
-/** 处理冲突前先保存正文；仍有未保存修改则不处理（避免处理结果覆盖编辑区）。 */
+/** 处理冲突前先保存正文；仍有未保存修改则不处理（避免处理结果覆盖编辑区）。方案 C：先把冻结区的最新版本存成快照（处理用最新快照）。 */
 async function beforeResolve(): Promise<boolean> {
   window.clearTimeout(autoSaveTimer);
   if (isDirty.value) await save("auto");
   if (savePromise) await savePromise;
-  return !isDirty.value;
+  if (editor.value && frozenOpen.value.length) editorText();
+  await flushSnapshots();
+  return !isDirty.value && !frozenUnsaved.value;
 }
+/** 卡片上“我的版本”的实时内容（冻结区里的文字）与快照状态。 */
+const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry => [entry.key, {
+  markdown: entry.mine, saved: entry.mine === entry.saved, savedAt: entry.savedAt, failing: entry.failing, original: entry.original,
+  otherTab: Boolean(entry.savedTab && entry.savedTab !== browserTab && entry.mine === entry.saved),
+}])));
 async function acceptResolution(result: ResolveResult) {
   const record = document.value;
   if (!record) return;
   conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: result.mineOpen, mineHandled: (conflictSummary.value?.mineHandled || 0) + result.items.length };
   // 复审 M3：原位置附近已找不到时放到了章节末尾，提醒用户检查
   if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
-  if (result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
+  else if (result.action === "keep_mine") noteAction("已用你的版本（含续写）更新这一段。", 4000);
+  else if (result.action === "keep_both") noteAction(`已在你的版本前插入 ${result.theirsName || "对方"} 的版本，两段都在正文中。`, 4000);
+  // 方案 C：处理的是冻结区——保留我的：编辑区不变，撤掉红框；其他动作：冻结区换成处理结果（重绘）
+  const key = result.conflictId ? `${result.conflictId}:${result.items[0]?.itemIndex}` : "";
+  const entry = key ? frozen.value[key] : undefined;
+  if (entry) {
+    entry.resolved = true;
+    if (result.action === "keep_mine" && editor.value && markdownContent.value === record.markdownContent) {
+      const root = editor.value;
+      const blocks = frozenEls(root, key);
+      blocks.forEach(block => { block.removeAttribute("data-frozen"); block.classList.remove("blk-conflict"); });
+      delete frozen.value[key];
+      snapshotKeys.delete(key);
+      if (editorText() === result.markdownContent) {
+        record.revision = result.documentRevision;
+        record.markdownContent = result.markdownContent;
+        savedContent.value = result.markdownContent;
+        markdownContent.value = result.markdownContent;
+        mergeBase = null;
+        domPair = null;
+        explicitBase = null;
+        persistLocalDraft();
+        void refreshConflicts();
+        return;
+      }
+      // 编辑区与处理结果不一致（期间别人改过其他段）：放回冻结标记，走下面的重绘
+      blocks.forEach(block => block.setAttribute("data-frozen", key));
+      frozen.value[key] = entry;
+    }
+  }
+  if (!entry && result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
   // 终验回归 I-4：大文档处理冲突后重绘较慢，期间不锁编辑区；用户继续打的字原位写回或保留在编辑区，下次保存按原基准再合并
   const previous = record.revision;
   const typedNewer = markdownContent.value !== record.markdownContent;
@@ -2288,7 +2705,14 @@ async function acceptResolution(result: ResolveResult) {
   record.markdownContent = result.markdownContent;
   savedContent.value = result.markdownContent;
   const content = { markdownContent: result.markdownContent, revision: result.documentRevision, status: record.status } as DocumentContentResult;
-  if (typedNewer) {
+  if (typedNewer && entry) {
+    // 处理期间又在别处输入了：先保存，再按处理结果重绘（冻结区换成处理结果）
+    mergeBase = previous;
+    persistLocalDraft();
+    await save("auto");
+    if (savePromise) await savePromise.catch(() => undefined);
+    if (document.value === record && !isDirty.value) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status }, { reason: "正在载入冲突处理结果…" });
+  } else if (typedNewer) {
     mergeBase = previous;
     persistLocalDraft();
     scheduleAutoSave();
@@ -2300,7 +2724,13 @@ async function acceptResolution(result: ResolveResult) {
     const started = Date.now();
     const shown = await acceptContent(content, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
     if (!shown && document.value === record) {
-      if (lastInputAt >= started) { mergeBase = previous; scheduleAutoSave(); }
+      if (lastInputAt >= started && entry) {
+        // 冻结区已处理、编辑区还没换成处理结果：先保存期间的输入，再锁定重绘（冻结区里后打的字不会被静默丢掉）
+        mergeBase = previous;
+        await save("auto");
+        if (savePromise) await savePromise.catch(() => undefined);
+        if (document.value === record && !isDirty.value) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status }, { reason });
+      } else if (lastInputAt >= started) { mergeBase = previous; scheduleAutoSave(); }
       else await acceptContent(content, { reason });
     }
   }
@@ -2326,7 +2756,7 @@ async function leaveDocument(to?: RouteLocationNormalized) {
     // 校验失败只给“下载后离开 / 留在本页”。
     window.clearTimeout(autoSaveTimer);
     window.clearTimeout(retryTimer);
-    if (!isDirty.value || persistAndVerify()) return true;
+    if (!hasUnsaved.value || persistAndVerify()) return true;
     leaveDialog.value = { mode: "download-only", count: pendingCount.value, target: to.fullPath };
     return false;
   }
@@ -2336,11 +2766,15 @@ async function leaveDocument(to?: RouteLocationNormalized) {
   }
   if (aiDraft.value && !window.confirm("尚未采纳的 AI 草稿会丢失，是否离开？")) return false;
   window.clearTimeout(autoSaveTimer);
-  if (isDirty.value && !readonly.value) {
-    // 最多等 5 秒把修改送到服务器（01 §6.3 第3条）。
-    await Promise.race([save("manual"), new Promise(resolve => window.setTimeout(resolve, 5000))]);
+  if (hasUnsaved.value && !readonly.value) {
+    // 最多等 5 秒把修改送到服务器（01 §6.3 第3条）；方案 C：冻结区续写同时存成快照
+    await Promise.race([Promise.all([save("manual"), flushSnapshots()]), new Promise(resolve => window.setTimeout(resolve, 5000))]);
   }
-  if (!isDirty.value) return true;
+  if (!hasUnsaved.value) {
+    const held = frozenOpen.value.length;
+    if (held) flash(`${held} 处冲突已保存在服务器（含你的续写），可稍后在本文档的“冲突”中处理。`, 6000);
+    return true;
+  }
   const decision = leaveDecision(pendingCount.value, persistAndVerify());
   if (decision === "leave") return true;
   leaveDialog.value = { mode: decision, count: pendingCount.value, target: to?.fullPath || router.resolve({ name: "project-documents", params: { id: projectId.value } }).fullPath };
@@ -2364,7 +2798,7 @@ function confirmLeave(downloadFirst: boolean) {
   void router.push(target).finally(() => { leaveBypass = false; });
 }
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (skillBusy.value || isDirty.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
+  if (skillBusy.value || hasUnsaved.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
     persistLocalDraft();
     event.preventDefault();
     event.returnValue = "";
@@ -2448,6 +2882,8 @@ function scrollToHeading(index: number) {
 async function handleExport() {
   exportMenu.value = false;
   if (!document.value || exporting.value || opBusy.value) return;
+  // 方案 C：冻结区里的修改不在正文中
+  if (frozenOpen.value.length) noteAction(`有 ${frozenOpen.value.length} 处冲突未处理，导出的是正文里的版本（不含你在冲突段里的修改）。`, 8000);
   window.clearTimeout(autoSaveTimer);
   if (isDirty.value && !readonly.value) await save("manual");
   if (isDirty.value) {
@@ -2607,7 +3043,7 @@ onUnmounted(() => {
       <!-- 第 2 步：提示条统一放在文档栏下方、三栏上方 -->
       <div class="notices">
         <p v-if="errorText" class="wb-notice danger" role="alert">{{ errorText }}</p>
-        <p v-if="refreshNotice" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNotice }}</span></p>
+        <p v-if="refreshNoticeShown" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNoticeShown }}</span></p>
         <div v-if="blocked" class="wb-notice danger save-blocked" role="alert" data-testid="save-blocked">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
           <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
@@ -2627,19 +3063,26 @@ onUnmounted(() => {
         </div>
         <div v-if="autoConflict && !conflictOpen" class="wb-notice warning" role="status" data-testid="auto-conflict">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
-          <span>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
+          <span v-if="autoConflict.frozen">这一段和 {{ autoConflict.name }} 的修改冲突。你可以继续写，写的内容先存为冲突副本，不会丢失；处理后才写入正文。</span>
+          <span v-else>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
           <span class="acts"><button type="button" class="ghost sm" @click="openConflicts('mine')">查看冲突</button></span>
         </div>
-        <div v-if="othersUpdated" class="wb-notice info" role="status" data-testid="others-updated">
-          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
-          <span>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
-          <span class="acts">
-            <button type="button" class="ghost sm" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
-            <button type="button" class="subtle sm" :disabled="opBusy" @click="openHistory">查看修改记录</button>
-            <button type="button" class="subtle icon-btn" aria-label="关闭提示" @click="othersUpdated = null"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
-          </span>
+        <p v-if="actionNote && !actionNoteOthers" class="wb-notice info" role="status"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ actionNote }}</span></p>
+        <!-- T-S2：他人类短提示与载入提示浮在编辑区上方，不推挤正文 -->
+        <div class="wb-float-stack" aria-live="polite">
+          <div v-if="othersUpdated" class="wb-notice info floating" role="status" data-testid="others-updated">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
+            <span v-if="othersUpdated.here" data-testid="others-here">{{ othersUpdated.names[0] || '其他成员' }} 更新了你正在看的这一段。</span>
+            <span v-else>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
+            <span class="acts">
+              <button type="button" class="ghost sm" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
+              <button type="button" class="subtle sm" :disabled="opBusy" @click="openHistory">查看修改记录</button>
+              <button type="button" class="subtle icon-btn" aria-label="关闭提示" @click="othersUpdated = null"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+            </span>
+          </div>
+          <p v-if="actionNote && actionNoteOthers" class="wb-float-note" role="status" data-testid="float-note">{{ actionNote }}</p>
+          <p v-if="floatingReason" class="wb-float-note" role="status" data-testid="float-reason"><span class="spin" aria-hidden="true"></span>{{ floatingReason }}</p>
         </div>
-        <p v-if="actionNote" class="wb-notice info" role="status"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ actionNote }}</span></p>
         <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
         <!-- S11：草稿恢复条只锁编辑区；顶栏、目录和面板照常可用 -->
         <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
@@ -2659,12 +3102,13 @@ onUnmounted(() => {
               </template>
               <template v-else>
                 <button type="button" class="subtle sm" :aria-expanded="draftDiffOpen" @click="draftDiffOpen = !draftDiffOpen">查看差异</button>
-                <button type="button" class="primary sm" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
+                <button type="button" class="primary sm" :disabled="draftBusy || readonly || Boolean(restoreRefusal)" :title="restoreRefusal ? '请先处理未完成的冲突' : undefined" data-testid="draft-restore" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
                 <button type="button" class="ghost sm" @click="downloadLocalDraft">下载</button>
                 <button type="button" class="ghost sm" :disabled="draftBusy" @click="discardLocalDraft">舍弃</button>
               </template>
             </span>
           </div>
+          <p v-if="restoreRefusal" class="draft-refusal" role="alert" data-testid="restore-refusal"><span>{{ restoreRefusal.text }}</span><button type="button" class="ghost sm" @click="showRefusedConflicts">查看冲突</button></p>
           <p class="draft-hint">处理本机草稿（恢复、下载或舍弃）之前，正文暂时不能编辑，避免两份修改互相覆盖；目录、版本记录和下载照常可用。</p>
           <div v-if="draftDiffOpen" class="draft-diff" aria-label="本机草稿与服务器正文的差异">
             <p v-if="!draftDiff.added.length && !draftDiff.removed.length">与服务器正文相同。</p>
@@ -2756,7 +3200,7 @@ onUnmounted(() => {
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
-                <button type="button" class="conflict-mark" :class="{ approx: mark.approx, gap: mark.gap }" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>{{ mark.label }}</button>
+                <button type="button" class="conflict-mark" :class="{ approx: mark.approx, gap: mark.gap, frozen: mark.frozen }" :title="mark.tip" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>{{ mark.label }}</button>
               </template>
             </div></div></div>
         </section>
@@ -2819,7 +3263,7 @@ onUnmounted(() => {
         <!-- 第 7 步：冲突面板 -->
         <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="`${document.id}:${conflictTab}`" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
-          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts"
+          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts" :live-mine="liveMine"
           @close="conflictOpen = false" @resolved="acceptResolution" @count="onConflictCount" @locate="locateConflict" />
         <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
@@ -2906,6 +3350,15 @@ onUnmounted(() => {
 .wb-notice .spin { width:12px; height:12px; flex:none; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:wb-spin .8s linear infinite; }
 @keyframes wb-spin { to { transform:rotate(360deg); } }
 .paper-content.refreshing { cursor:progress; opacity:.7; transition:opacity var(--duration) var(--ease-out); }
+/* T-S3：锁定刷新时光标显示为“处理中” */
+.paper-content.refreshing[contenteditable="false"] { cursor:progress; }
+/* T-S2：他人类提示浮在编辑区上方，不推挤正文 */
+.wb-float-stack { position:relative; height:0; z-index:6; display:flex; flex-direction:column; align-items:center; gap:var(--space-2); }
+.wb-float-stack > * { position:relative; top:var(--space-2); max-width:min(760px, calc(100% - 2 * var(--space-4))); box-shadow:var(--shadow-md, 0 4px 16px rgba(0,0,0,.12)); }
+.wb-float-note { display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-1) var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-surface); color:var(--text-secondary); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.wb-float-note .spin { width:12px; height:12px; flex:none; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:wb-spin .8s linear infinite; }
+.wb-notice.floating { border:1px solid var(--info-200, var(--border-default)); border-radius:var(--radius-control); }
+.draft-refusal { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-1) 0 0 calc(var(--icon) + var(--space-3)); color:var(--danger-700); font-size:var(--text-sm); line-height:var(--leading-sm); }
 .wb-notice.info > .ico { color:var(--info-600); }
 .wb-notice.danger { background:var(--danger-50); color:var(--danger-700); }
 .wb-notice.warning { background:var(--warning-50); color:var(--gray-800); }
@@ -3000,6 +3453,9 @@ onUnmounted(() => {
 .paper-content :deep(.blk-conflict) { margin-left:-12px; margin-right:-12px; padding:6px 12px; border-radius:2px; background:var(--danger-50); box-shadow:inset 3px 0 0 var(--danger-600); }
 .paper-content :deep(.blk-updated) { margin-left:-12px; margin-right:-12px; padding-left:12px; padding-right:12px; box-shadow:inset 3px 0 0 var(--info-200); }
 .paper-content :deep(.blk-flash) { outline:2px solid var(--brand-200); outline-offset:2px; }
+/* 方案 C：冻结区（冲突未处理，续写只存冲突副本） */
+.paper-content :deep([data-frozen]) { outline:1.5px solid var(--danger-600); outline-offset:3px; border-radius:2px; background:color-mix(in srgb, var(--danger-50) 60%, transparent); }
+.conflict-mark.frozen { background:var(--danger-700); }
 .conflict-marks { position:absolute; inset:0; pointer-events:none; }
 .conflict-gap { position:absolute; left:84px; right:84px; border-top:2px dashed var(--danger-600); }
 .conflict-mark { position:absolute; right:var(--space-2); transform:translateY(-50%); display:inline-flex; align-items:center; gap:var(--space-1); height:22px; padding:0 var(--space-2); border:0; border-radius:var(--radius-control); background:var(--danger-600); color:var(--text-on-brand); font-family:var(--font); font-size:var(--text-xs); line-height:22px; white-space:nowrap; pointer-events:auto; cursor:pointer; }
