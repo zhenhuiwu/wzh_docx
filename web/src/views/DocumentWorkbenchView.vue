@@ -9,10 +9,10 @@ import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
-import { otherTabOpen } from "../documentObjects";
+import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
-import { browserTabId, pageInstance } from "../tabIdentity";
+import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
@@ -127,6 +127,8 @@ const mineConflicts = computed(() => conflictCount(conflictSummary.value));
 const multiTab = ref(false);
 let presence: BroadcastChannel | null = null;
 const lastPresenceTabs = new Set<string>();
+// 复审 M1：仍在线（发过 presence、还没说 bye）的其他标签；它们的草稿不显示为恢复条。
+const liveTabs = new Set<string>();
 const capabilities = ref<Capabilities | null>(null);
 // 打开文档时的账号：会话失效后 readSession() 为空，草稿仍要写到原账号名下（G1）。
 let draftAccount = "";
@@ -246,7 +248,8 @@ async function load() {
   loadErrorStatus.value = 0;
   try {
     draftAccount = readSession()?.staffId || draftAccount;
-    browserTab = await browserTabId();
+    await browserTabId();
+    browserTab = browserTabIdentity().current;
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const record = await getDocument(id);
     const preview = await previewDocument(id);
@@ -267,10 +270,13 @@ async function load() {
     if (id !== documentId.value || version !== loadVersion) return;
     showEditorHtml(preview.html);
     savedAt.value = Date.parse(record.updatedAt) || null;
-    findLocalDrafts(record);
+    // 复审 M1：先上线、等其他标签回答，再列本机草稿，避免另一个仍打开着的标签的草稿短暂闪现为恢复条。
+    openPresence(record.id);
     void refreshMemory();
     void refreshConflicts();
-    openPresence(record.id);
+    await new Promise(resolve => window.setTimeout(resolve, PRESENCE_WAIT_MS));
+    if (id !== documentId.value || version !== loadVersion) return;
+    findLocalDrafts(record);
   } catch (error) {
     if (id !== documentId.value || version !== loadVersion) return;
     phase.value = "error";
@@ -295,9 +301,12 @@ function resetSaveState() {
   pendingKey = null;
 }
 function account() { return draftAccount || readSession()?.staffId || "user"; }
+const PRESENCE_WAIT_MS = 250;
 function findLocalDrafts(record: DocumentRecord) {
   const drafts = listDrafts(window.localStorage, account(), record.id)
-    .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent));
+    .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent))
+    .filter(draft => draft.tabId !== browserTab || draft.writer !== pageInstance)
+    .filter(draft => !liveTabs.has(draft.tabId));
   for (const draft of listDrafts(window.localStorage, account(), record.id)) {
     // 与服务器正文相同的草稿没有恢复价值；按读到的版本删除（期间被别的标签改写就不删）。
     if (draft.wholeDocument && draft.markdown === record.markdownContent) removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
@@ -367,12 +376,21 @@ function openPresence(docId: string) {
   closePresence();
   multiTab.value = false;
   if (typeof BroadcastChannel === "undefined") return;
-  const self = { tabId: browserTab, userId: account() };
+  liveTabs.clear();
+  const self = { tabId: browserTab, userId: account(), pageId: pageInstance };
   presence = new BroadcastChannel(`doc-workbench:${docId}`);
   presence.onmessage = (event: MessageEvent) => {
-    const message = event.data as { type?: string; tabId?: string };
+    const message = event.data as { type?: string; tabId?: string; userId?: string };
+    if (message?.type === "bye" && message.userId === self.userId) liveTabs.delete(String(message.tabId));
+    // 复审 M1：同一 tabId 来自另一个页面（复制标签页的声明回答晚到/丢失）——pageId 大的一方换新并迁移草稿
+    const otherPage = sameTabOtherPage(message, self);
+    if (otherPage && message.userId === self.userId) {
+      if (!browserTabIdentity().resolveCollision(otherPage)) presence?.postMessage({ type: "presence-reply", ...self });
+      return;
+    }
     if (!otherTabOpen(message, self)) return;
     lastPresenceTabs.add(String(message.tabId));
+    if (message.type !== "bye") liveTabs.add(String(message.tabId));
     // 审查 M1：仍打开着的其他标签的草稿由它自己管理，本标签不显示为“恢复条”，也就不会被这里舍弃。
     if (message.type !== "bye" && localDrafts.value.some(draft => draft.tabId === message.tabId)) {
       localDrafts.value = localDrafts.value.filter(draft => draft.tabId !== message.tabId);
@@ -383,6 +401,37 @@ function openPresence(docId: string) {
     if (!dismissedTabs(docId).includes(String(message.tabId))) multiTab.value = true;
   };
   presence.postMessage({ type: "presence", ...self });
+}
+/** 复审 M1：tabId 被换新（晚到的撞号回答、在线消息发现撞号、往返缓存恢复后重新声明）时迁移本页草稿键并重新上线。 */
+function onTabRenamed(previous: string, next: string) {
+  if (browserTab !== previous) return;
+  const record = document.value;
+  const old = record ? readDraft(window.localStorage, account(), record.id, previous) : null;
+  if (presence) {
+    presence.postMessage({ type: "bye", tabId: previous, userId: account() });
+    presence.close();
+    presence = null;
+  }
+  browserTab = next;
+  if (record) {
+    // 先按新键写，写成功才删旧键（只删本页面写的那份）
+    if (old && old.writer === pageInstance && !isDirty.value) {
+      if (writeDraft(window.localStorage, account(), { ...old, tabId: next }) === "ok") removeDraft(window.localStorage, account(), record.id, previous, { writer: pageInstance, savedAt: old.savedAt });
+    } else if (persistLocalDraft() && old?.writer === pageInstance) {
+      removeDraft(window.localStorage, account(), record.id, previous, { writer: pageInstance, savedAt: old.savedAt });
+    }
+    openPresence(record.id);
+  }
+}
+const stopTabWatch = browserTabIdentity().onChange(onTabRenamed);
+function onPageShow(event: PageTransitionEvent) {
+  // 复审 M1：从往返缓存恢复的页面可能与期间新开的复制标签同号，重新声明一次
+  if (!event.persisted) return;
+  void browserTabIdentity().claim().then(() => {
+    if (!document.value) return;
+    if (!presence) openPresence(document.value.id);
+    else presence.postMessage({ type: "presence", tabId: browserTab, userId: account(), pageId: pageInstance });
+  });
 }
 function closePresence() {
   if (!presence) return;
@@ -1133,7 +1182,8 @@ function exportAndClearOtherDrafts() {
   if (!items.length) return;
   const bundle = items.map(item => readDraft(window.localStorage, account(), item.docId, item.tabId)).filter(Boolean);
   download(`本机草稿备份-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.json`, JSON.stringify(bundle, null, 2), "application/json;charset=utf-8");
-  for (const item of items) removeDraft(window.localStorage, account(), item.docId, item.tabId);
+  // 复审：按下载时读到的那份删除（写入页面与保存时间都要对得上），期间被其他标签改写过的保留
+  for (const draft of bundle) removeDraft(window.localStorage, account(), draft!.docId, draft!.tabId, { writer: draft!.writer, savedAt: draft!.savedAt });
   persistLocalDraft();
 }
 function currentDraft(): DraftV2 | null {
@@ -1704,6 +1754,7 @@ onBeforeRouteUpdate(leaveDocument);
 onMounted(() => {
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
   window.document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
@@ -1713,9 +1764,11 @@ onMounted(() => {
   void load();
 });
 onUnmounted(() => {
+  stopTabWatch();
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener("pagehide", onPageHide);
+  window.removeEventListener("pageshow", onPageShow);
   window.document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("online", onOnline);
   window.removeEventListener("offline", onOffline);

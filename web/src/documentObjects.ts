@@ -94,7 +94,16 @@ export function changedPlaces(ops: PatchOp[]): number {
 }
 
 // ---- 多标签提示（决策4：提示，不阻止；01 §6.5）
-export interface PresenceMessage { type: "presence" | "presence-reply" | "bye"; tabId: string; userId: string }
+export interface PresenceMessage { type: "presence" | "presence-reply" | "bye"; tabId: string; userId: string; pageId?: string }
+
+/** 复审 M1：在线消息带 pageId，同一 tabId 却来自另一个页面 → 撞号（事后发现）。 */
+export function sameTabOtherPage(message: unknown, self: { tabId: string; pageId: string }): string | null {
+  if (!message || typeof message !== "object") return null;
+  const value = message as Partial<PresenceMessage>;
+  if (value.type !== "presence" && value.type !== "presence-reply") return null;
+  if (value.tabId !== self.tabId || typeof value.pageId !== "string" || value.pageId === self.pageId) return null;
+  return value.pageId;
+}
 
 /** 处理 presence 消息：同一账号的另一个标签打开同一文档 → 返回 true（显示提示）。 */
 export function otherTabOpen(message: unknown, self: { tabId: string; userId: string }): boolean {
