@@ -378,6 +378,66 @@ def main() -> int:
             assert "（李工未保存）" in server and "（张工再次更新）" in server
         others_updated()
 
+        @step("他人更新时正在打字：一个字都不丢（终验 F-M1）")
+        def typing_while_others_update():
+            open_doc(b, data)
+            # 1) 正在输入时到来的更新：推迟自动刷新（显示提示条），已打的字照常保存
+            target = paragraph(b, p_upd2)
+            target.scroll_into_view_if_needed()
+            target.click()
+            b.keyboard.press("End")
+            b.keyboard.type("（打字甲", delay=60)
+            api_append(p_upd, "（张工第三次）")
+            b.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            b.keyboard.type("乙丙丁戊己）", delay=150)
+            wait_saved(b, 40000)
+            expect(paragraph(b, "（打字甲乙丙丁戊己）")).to_be_visible(timeout=15000)
+            expect(paragraph(b, "（张工第三次）")).to_be_visible(timeout=40000)
+            server = server_markdown()
+            assert "（打字甲乙丙丁戊己）" in server and "（张工第三次）" in server, server[-400:]
+            # 2) 本地干净、自动刷新刚开始时马上输入：放弃这次刷新或刷新后再输入，字都在
+            wait_saved(b)
+            b.wait_for_timeout(2500)  # 超过“最近 2 秒在输入”的窗口，让自动刷新真的开始
+            api_append(p_upd, "（张工第四次）")
+            b.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            b.wait_for_timeout(300)
+            target = paragraph(b, p_upd2)
+            target.click()
+            b.keyboard.press("End")
+            b.keyboard.type("（紧接着输入）", delay=80)
+            wait_saved(b, 40000)
+            expect(paragraph(b, "（紧接着输入）")).to_be_visible(timeout=15000)
+            server = server_markdown()
+            assert "（紧接着输入）" in server and "（张工第四次）" in server, server[-400:]
+            # 3) 自动保存合并了他人修改、载入重绘期间继续打字：有“正在合并…”提示（aria-busy），
+            #    编辑区不锁、不重绘，字留在编辑区；下次保存按原基准再合并，停手后再显示他人修改
+            b.evaluate("""() => { window.__sawRefresh = false; new MutationObserver(() => {
+                if (document.querySelector('[data-testid=editor-refreshing]')) window.__sawRefresh = true;
+            }).observe(document.body, { childList: true, subtree: true }); }""")
+            api_append(p_upd, "（张工第五次）")
+            target = paragraph(b, p_upd2)
+            target.click()
+            b.keyboard.press("End")
+            b.keyboard.type("（锁前）", delay=40)
+            # 停止输入 3 秒触发自动保存，服务器合并张工的修改后重绘编辑区；重绘一开始就继续打字
+            expect(b.get_by_test_id("editor-refreshing")).to_be_visible(timeout=20000)
+            expect(b.locator(".paper-content")).to_have_attribute("aria-busy", "true")
+            b.keyboard.type("（锁定中输入）", delay=60)
+            wait_saved(b, 40000)
+            b.wait_for_timeout(3500)
+            wait_saved(b, 40000)
+            server = server_markdown()
+            def around(word: str) -> str:
+                at = server.find(word)
+                return server[max(0, at - 120):at + 160] if at >= 0 else f"缺少 {word}"
+            assert "（锁前）" in server and "（张工第五次）" in server, (around("（锁前）"), around("（张工第五次）"), around(p_upd2[:8]))
+            assert "锁定中输入" in server, around("（锁前）")
+            assert b.evaluate("window.__sawRefresh"), "重绘期间没有出现“正在载入/合并”提示"
+            expect(b.locator(".paper-content")).to_contain_text("（张工第五次）", timeout=20000)
+            expect(b.locator(".paper-content")).to_contain_text("（锁定中输入）")
+            shot(b, "28-他人更新时打字不丢字")
+        typing_while_others_update()
+
         @step("同段冲突保留草稿，面板可处理")
         def same_paragraph_conflict():
             open_doc(a, data)

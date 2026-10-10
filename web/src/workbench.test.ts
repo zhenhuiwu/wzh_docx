@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { countChars, mergedInBlocks, outlineEntries } from "./workbenchStats";
-import { alignRows, blockDiff, mergeRows, tableCellDiffs } from "./textDiff";
+import { alignRows, blockDiff, mergeRows, structureRows, tableCellDiffs } from "./textDiff";
 import { draftSizeText } from "./saveModel";
 import { actionsFor, conflictToggle } from "./conflictModel";
 
@@ -53,5 +53,28 @@ describe("工作台重塑：文案", () => {
   it("冲突按钮拆出名称和计数（docbar 用 .count 徽标）", () => {
     expect(conflictToggle({ mineOpen: 2, mineHandled: 0, allOpen: null })).toMatchObject({ name: "冲突", count: 2, label: "冲突 2" });
     expect(conflictToggle({ mineOpen: 0, mineHandled: 3, allOpen: null })).toMatchObject({ name: "冲突", count: 0 });
+  });
+});
+
+describe("终验 S-6：STRUCTURE 整块对比", () => {
+  it("拆分段落时不按段配对，只给一行整块", () => {
+    const rows = structureRows("原来一段，前半。后半。", "原来一段，前半。\n\n后半。", "原来一段，前半改。后半。");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].theirs).toBe("原来一段，前半。\n\n后半。");
+    expect(mergeRows(rows, ["mine"], false, true)).toBe("原来一段，前半改。后半。");
+    expect(mergeRows(rows, ["theirs"], false, true)).toBe("原来一段，前半。\n\n后半。");
+  });
+});
+
+describe("终验 F-M1：载入期间打的字写回", () => {
+  it("只认一段里的连续插入，并在新版式里找原段", async () => {
+    const { typedInsertion, matchBlock } = await import("./workbenchStats");
+    const carry = typedInsertion(["甲", "乙段", "丙"], ["甲", "乙（新字）段", "丙"]);
+    expect(carry).toEqual({ index: 1, text: "乙段", offset: 1, insert: "（新字）" });
+    expect(matchBlock(["标题", "甲", "乙段", "丙", "乙段"], carry!)).toBe(2);
+    expect(matchBlock(["甲", "乙段已被他人改", "丙"], carry!)).toBe(-1);
+    expect(typedInsertion(["甲", "乙"], ["甲改", "乙改"])).toBeNull();
+    expect(typedInsertion(["甲", "乙段"], ["甲", "乙"])).toBeNull();
+    expect(typedInsertion(["甲"], ["甲", ""])).toBeNull();
   });
 });

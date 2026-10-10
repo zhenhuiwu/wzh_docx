@@ -11,7 +11,7 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { countChars, mergedInBlocks, outlineEntries } from "../workbenchStats";
+import { countChars, matchBlock, mergedInBlocks, outlineEntries, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -72,6 +72,19 @@ const conflictOpen = panelFlag("conflict");
 const skillOpen = ref(false);
 const skillBusy = ref(false);
 const refreshingEditor = ref(false);
+/** 终验 F-M1：编辑区正在重绘或载入时的说明（“正在载入 张工 的更新…”等），显示在提示区。 */
+const refreshReason = ref("");
+const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : ""));
+/** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
+let lastInputAt = 0;
+let typedDuringLock = "";
+let lockHadFocus = false;
+let lockCaret: { index: number; offset: number }[] = [];
+function typingRecently(): boolean {
+  if (Date.now() - lastInputAt < 2000) return true;
+  const root = editor.value, selection = window.getSelection();
+  return Boolean(root && window.document.activeElement === root && selection && !selection.isCollapsed && root.contains(selection.anchorNode));
+}
 const undoingAi = ref(false);
 const aiUndo = ref<{ id: string; content: string; revision: number } | null>(null);
 const localDraft = ref<DraftV2 | null>(null);
@@ -98,6 +111,7 @@ const showSaving = ref(false);
 const now = ref(Date.now());
 const storageFailed = ref(false);
 const leaveDialog = ref<{ mode: Exclude<LeaveDecision, "leave">; count: number; target: string } | null>(null);
+watch(leaveDialog, (value) => { if (value) exportMenu.value = false; });
 let leaveBypass = false;
 let retryTimer: number | undefined;
 let savingTimer: number | undefined;
@@ -200,8 +214,9 @@ const editable = computed(() => !aiLocked.value && !addingHeading.value && !read
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 const pendingCount = computed(() => isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
+// 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: offline.value && isDirty.value,
-  retrying: retrying.value && isDirty.value, saving: showSaving.value, dirty: isDirty.value }));
+  retrying: retrying.value && isDirty.value, saving: showSaving.value || revertingBlock.value, dirty: isDirty.value }));
 const capsuleText = computed(() => capsuleLabel(capsule.value, { savedAt: savedAt.value, now: now.value, pending: pendingCount.value }));
 const capsuleDetail = computed(() => {
   switch (capsule.value) {
@@ -238,10 +253,51 @@ const skillLabel = computed(() => {
   const value = document.value?.formatTemplate?.writingSkill as { mode?: string; name?: string } | undefined;
   return value?.mode === "selected" ? value.name || "已指定" : value?.mode === "none" ? "不使用编写规范" : "按文档类型自动选择";
 });
+// 终验 S-4：展开后焦点进搜索框；Esc 收起、清空并把焦点还给搜索按钮
+const outlineSearchInput = ref<HTMLInputElement | null>(null);
+const outlineSearchButton = ref<HTMLButtonElement | null>(null);
 function toggleOutlineSearch() {
   outlineSearchOpen.value = !outlineSearchOpen.value;
   if (!outlineSearchOpen.value) outlineSearch.value = "";
+  else void nextTick(() => outlineSearchInput.value?.focus());
 }
+function closeOutlineSearch() {
+  outlineSearchOpen.value = false;
+  outlineSearch.value = "";
+  void nextTick(() => outlineSearchButton.value?.focus());
+}
+// 终验 S-5：下载菜单——打开时焦点到第一项；Esc / 点外部 / 弹出对话框时关闭；上下方向键切换
+const exportMenuEl = ref<HTMLElement | null>(null);
+const exportMoreButton = ref<HTMLButtonElement | null>(null);
+function menuItems(): HTMLButtonElement[] {
+  return [...(exportMenuEl.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') || [])];
+}
+function closeExportMenu(returnFocus = false) {
+  exportMenu.value = false;
+  if (returnFocus) void nextTick(() => exportMoreButton.value?.focus());
+}
+function onExportMenuKeydown(event: KeyboardEvent) {
+  if (!exportMenu.value) return;
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeExportMenu(true); return; }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const items = menuItems();
+  if (!items.length) return;
+  const index = items.indexOf(window.document.activeElement as HTMLButtonElement);
+  const next = event.key === "ArrowDown" ? (index + 1) % items.length : (index - 1 + items.length) % items.length;
+  items[index < 0 ? 0 : next].focus();
+}
+function onExportMenuOutside(event: PointerEvent) {
+  const target = event.target as Node | null;
+  if (!exportMenu.value || !target) return;
+  if (exportMenuEl.value?.contains(target) || exportMoreButton.value?.contains(target)) return;
+  closeExportMenu();
+}
+watch(exportMenu, (open) => {
+  if (open) void nextTick(() => menuItems()[0]?.focus());
+  window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
+  if (open) window.document.addEventListener("pointerdown", onExportMenuOutside, true);
+});
 // S17：编辑区比纸张窄时（1366 打开右侧面板）按比例缩小纸张，不出现横向滚动
 const desk = ref<HTMLElement | null>(null);
 const paperZoom = ref(1);
@@ -262,7 +318,13 @@ watch(desk, (host) => {
   if (host && typeof ResizeObserver !== "undefined") { deskObserver = new ResizeObserver(() => fitPaper()); deskObserver.observe(host); }
 });
 watch(paperStyle, () => void nextTick(fitPaper), { deep: true });
-const templateTag = computed(() => document.value?.sourceType === "template" ? document.value.templateDocumentName || "" : "");
+// 终验 S-3：显示模板组名（标准号，如“GJB 438C-2021”）；取不到或与标题相同就不显示
+const templateTag = computed(() => {
+  const record = document.value;
+  if (record?.sourceType !== "template") return "";
+  const tag = (record.templateName || "").trim();
+  return tag && tag !== record.name.trim() ? tag : "";
+});
 const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdownContent.value.trim()) : aiScope.value === "selection" ? Boolean(selectedText.value) : selectedHeading.value !== null);
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
 const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
@@ -338,7 +400,10 @@ async function load() {
     if (record.permissions && !record.permissions.canEdit) {
       // 01 §6.1：canEdit=false 直接只读，不必等第一次 403。
       readonly.value = true;
-      readonlyReason.value = `你在该项目中是${PROJECT_ROLE_TEXT[record.permissions.projectRole || ""] || "成员"}，可以查看和导出，不能修改正文。`;
+      // 终审：非成员 auditor 不是“项目中的某个角色”，写成以审计身份只读查看
+      readonlyReason.value = record.permissions.projectRole === "auditor"
+        ? "你以审计身份只读查看该项目，可以查看和导出，不能修改正文。"
+        : `你在该项目中是${PROJECT_ROLE_TEXT[record.permissions.projectRole || ""] || "成员"}，可以查看和导出，不能修改正文。`;
     }
     markdownContent.value = record.markdownContent;
     savedContent.value = record.markdownContent;
@@ -421,15 +486,20 @@ async function settlePendingSaves(record: DocumentRecord, retried = false) {
   if (waiting && !retried) window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, true); }, 1500);
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
-async function refreshFromServer(): Promise<boolean> {
+async function refreshFromServer(options: AcceptOptions = {}): Promise<boolean> {
   const record = document.value;
   if (!record || isDirty.value || saving.value) return false;
-  const latest = await getDocument(record.id);
+  if (options.yieldToTyping) refreshReason.value = options.reason || "正在载入最新内容…";
+  let latest: Awaited<ReturnType<typeof getDocument>>;
+  try { latest = await getDocument(record.id); }
+  finally { if (options.yieldToTyping) refreshReason.value = ""; }
   if (document.value !== record) return false;
   if (latest.revision === record.revision) return true;
+  if (options.yieldToTyping && (isDirty.value || saving.value)) return false;
   if (latest.formatTemplate) record.formatTemplate = latest.formatTemplate;
+  const accepted = await acceptContent({ markdownContent: latest.markdownContent, revision: latest.revision, status: latest.status }, options);
+  if (!accepted) return false;
   mergeBase = null;
-  await acceptContent({ markdownContent: latest.markdownContent, revision: latest.revision, status: latest.status });
   void refreshConflicts();
   return true;
 }
@@ -438,9 +508,14 @@ function isRevisionConflict(error: unknown): error is ApiError {
 }
 /** S6：AI 采纳、标题、图表插入都带 allowMerge（01 §4.3），每次操作一个新键。 */
 function mergeRequest() { return { allowMerge: true, clientSaveKey: crypto.randomUUID() }; }
-function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }> }): boolean {
+function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }>; whitespaceDropped?: number }): boolean {
   if (!result.merged) return false;
   const text = changedByText(result.changedBy);
+  // 终验 S-1：我方只改了空白、对方同时也改了这一处——保留对方写法，明确告诉用户（不静默丢弃）
+  if (result.whitespaceDropped) {
+    noteAction(`${text}你有 ${result.whitespaceDropped} 处只改了空格，对方同时也改了这里，已保留对方的写法，请核对。`, 10000);
+    return true;
+  }
   // 审查员第 2 条：提示条显示期间不再弹“已合并…”短提示
   if (text && !othersUpdated.value) noteAction(text, 6000, "others");
   return true;
@@ -698,11 +773,13 @@ async function checkOthersUpdated() {
     const names = since.changedBy.map(person => person.name);
     const objects = since.changedBy.reduce((sum, person) => sum + person.objects, 0);
     const changed = since.objects.filter(item => !item.deleted);
-    const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value;
+    // 终验 F-M1：用户正在输入（2 秒内有输入，或在编辑区里选中了文字）时推迟自动刷新，按“本地有修改”显示提示条
+    const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value && !typingRecently();
     if (quiet || (readonly.value && !isDirty.value)) {
       const scroll = editor.value?.closest(".desk");
       const top = scroll?.scrollTop || 0;
-      if (!(await refreshFromServer())) { othersUpdated.value = { names, objects }; return; }
+      const reason = `正在载入 ${names.length ? names.join("、") : "他人"} 的更新…`;
+      if (!(await refreshFromServer({ yieldToTyping: true, reason }))) { othersUpdated.value = { names, objects }; return; }
       if (scroll) scroll.scrollTop = top;
       // 审查员第 2 条：本地干净、自动刷新时，先清掉提示条，再显示 5 秒短提示
       othersUpdated.value = null;
@@ -841,13 +918,149 @@ function showEditorHtml(html: string, mapped?: boolean) {
     void nextTick(() => applyConflictMarks());
   }
 }
-async function acceptContent(result: DocumentContentResult) {
+/** yieldToTyping：不锁编辑区，先在后台取版式，期间用户一输入就放弃重绘（返回 false）；
+ *  stateApplied：调用方已把正文/修订号写好（保存合并路径），这里只负责重绘。 */
+type AcceptOptions = { reason?: string; yieldToTyping?: boolean; stateApplied?: boolean; carryTyping?: boolean };
+let composing = false;
+function setComposing(value: boolean) { composing = value; }
+function blockTexts(root: ParentNode): string[] {
+  return [...root.querySelectorAll(CARET_BLOCKS)].map(block => block.textContent || "");
+}
+/** 编辑区里的光标位置（块序号 + 块内文字偏移），重绘前后用来恢复光标。 */
+const CARET_BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,:scope > div";
+function captureCaret(root: HTMLElement): { index: number; offset: number }[] {
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const positions: { index: number; offset: number }[] = [];
+  if (!range || !root.contains(range.startContainer) || !root.contains(range.endContainer)) return positions;
+  for (const [container, offset] of [[range.startContainer, range.startOffset], [range.endContainer, range.endOffset]] as const) {
+    const element = container instanceof Element ? container : container.parentElement;
+    const block = [...blocks].reverse().find(item => item === element || item.contains(container));
+    if (!block) return [];
+    const before = range.cloneRange();
+    before.selectNodeContents(block);
+    before.setEnd(container, offset);
+    positions.push({ index: blocks.indexOf(block), offset: (before.cloneContents().textContent || "").length });
+  }
+  return positions;
+}
+function restoreCaret(root: HTMLElement, positions: { index: number; offset: number }[]): boolean {
+  if (positions.length !== 2) return false;
+  const restored = window.document.createRange();
+  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  for (const [boundary, position] of positions.entries()) {
+    const block = blocks[position.index];
+    if (!block) return false;
+    const walker = window.document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let remaining = Math.min(position.offset, block.textContent?.length || 0);
+    let node = walker.nextNode();
+    while (node) {
+      const length = node.textContent?.length || 0;
+      if (remaining <= length) break;
+      remaining -= length;
+      node = walker.nextNode();
+    }
+    if (boundary === 0) restored.setStart(node || block, node ? remaining : 0);
+    else restored.setEnd(node || block, node ? remaining : 0);
+  }
+  root.contentEditable = String(editable.value);
+  root.focus({ preventScroll: true });
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(restored);
+  return true;
+}
+/** 终验 F-M1：锁定期间（焦点原在编辑区）敲下的字先记下，不让它们无声消失。 */
+function bufferLockedTyping(event: KeyboardEvent) {
+  if (!refreshingEditor.value || !lockHadFocus || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target as Node | null;
+  const root = editor.value;
+  if (target && root && !(target === window.document.body || root.contains(target))) return;
+  if (event.key.length === 1) { typedDuringLock += event.key; event.preventDefault(); }
+}
+function beginEditorLock(reason: string) {
+  const root = editor.value;
+  // 已在锁定中（撤销 → 重绘接力）时沿用最初的焦点与光标
+  if (!refreshingEditor.value) {
+    lockHadFocus = Boolean(root && (window.document.activeElement === root || root.contains(window.document.activeElement)));
+    lockCaret = root && lockHadFocus ? captureCaret(root) : [];
+  }
+  refreshReason.value = reason;
+  refreshingEditor.value = true;
+  if (root) root.contentEditable = "false";
+}
+/** 解锁；锁定期间敲下的字在恢复的光标处写回（走正常输入流程，会触发自动保存）。 */
+function endEditorLock() {
+  const root = editor.value;
+  const caret = lockCaret;
+  lockCaret = [];
+  refreshingEditor.value = false;
+  refreshReason.value = "";
+  if (root) root.contentEditable = String(editable.value);
+  const typed = typedDuringLock;
+  typedDuringLock = "";
+  if (!root || !lockHadFocus) return;
+  lockHadFocus = false;
+  const placed = editable.value && restoreCaret(root, caret);
+  if (!typed) return;
+  if (placed && window.document.execCommand("insertText", false, typed)) return;
+  noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000);
+}
+async function acceptContent(result: DocumentContentResult, options: AcceptOptions = {}): Promise<boolean> {
   const record = document.value;
-  if (!record) return;
+  if (!record) return false;
+  if (options.yieldToTyping) {
+    // 终验 F-M1：他人更新的自动刷新不锁编辑区——先在后台取好版式，期间用户一输入就放弃这次刷新（改为显示提示条）
+    const started = Date.now();
+    const before = options.carryTyping && editor.value ? blockTexts(editor.value) : null;
+    refreshReason.value = options.reason || "正在载入最新内容…";
+    let preview: Awaited<ReturnType<typeof previewDocument>>;
+    try { preview = await previewDocument(record.id); }
+    catch { return false; }
+    finally { refreshReason.value = ""; }
+    if (document.value !== record || documentId.value !== record.id) return false;
+    if (refreshingEditor.value) return false;
+    if (!options.stateApplied && (isDirty.value || saving.value)) return false;
+    // 载入期间用户打了字：只有“在一段里连续插入”且该段在新版本里原样存在时，才重绘并把这串字原位写回；否则放弃重绘
+    let carry: ReturnType<typeof typedInsertion> = null;
+    let target = -1;
+    if (lastInputAt >= started) {
+      if (!before || composing || !editor.value) return false;
+      carry = typedInsertion(before, blockTexts(editor.value));
+      if (!carry) return false;
+      const probe = window.document.createElement("div");
+      probe.innerHTML = preview.html;
+      target = matchBlock(blockTexts(probe), carry);
+      if (target < 0) return false;
+    }
+    if (result.formatTemplate) record.formatTemplate = result.formatTemplate;
+    aiUndo.value = null;
+    if (!options.stateApplied) {
+      record.revision = result.revision;
+      record.status = result.status;
+      record.markdownContent = result.markdownContent;
+      markdownContent.value = result.markdownContent;
+      savedContent.value = result.markdownContent;
+      persistLocalDraft();
+    }
+    const root = editor.value;
+    const caret = root && window.document.activeElement === root ? captureCaret(root) : [];
+    showEditorHtml(preview.html, preview.objectModel);
+    if (root && carry) {
+      const index = matchBlock(blockTexts(root), carry);
+      const point = { index: index >= 0 ? index : target, offset: carry.offset };
+      const placed = index >= 0 && restoreCaret(root, [point, point]) && window.document.execCommand("insertText", false, carry.insert);
+      if (!placed) {
+        // 极少见：新版式里找不到原段落。把字留在提示里，不让它无声消失
+        noteAction(`载入期间输入的“${carry.insert.slice(0, 40)}”没能写入正文，请在需要的位置重新输入。`, 15000);
+      }
+    } else if (root && caret.length) restoreCaret(root, caret);
+    return true;
+  }
   if (result.formatTemplate) record.formatTemplate = result.formatTemplate;
   aiUndo.value = null;
-  refreshingEditor.value = true;
-  if (editor.value) editor.value.contentEditable = "false";
+  beginEditorLock(options.reason || "正在刷新编辑区…");
   record.revision = result.revision;
   record.status = result.status;
   record.markdownContent = result.markdownContent;
@@ -857,15 +1070,16 @@ async function acceptContent(result: DocumentContentResult) {
   try {
     const preview = await previewDocument(record.id);
     if (document.value === record && documentId.value === record.id) showEditorHtml(preview.html, preview.objectModel);
+    return true;
   } catch (error) {
     if (document.value === record) {
       errorText.value = `内容已保存，编辑视图加载失败：${messageOf(error)}`;
       // Block editing stale HTML; loading the saved content is safe to retry.
       phase.value = "error";
     }
+    return false;
   } finally {
-    refreshingEditor.value = false;
-    if (editor.value) editor.value.contentEditable = String(editable.value);
+    endEditorLock();
   }
 }
 async function addHeading() {
@@ -1289,6 +1503,7 @@ async function switchMode(next: "original" | "edit" | "layout") {
 }
 function onEditorInput(event?: Event) {
   if (!editor.value) return;
+  lastInputAt = Date.now();
   aiUndo.value = null;
   const copy = editor.value.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
@@ -1508,10 +1723,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         mergeBase = null;
       }
       // 审查员第 2 条：提示条显示期间（含点了“立即刷新”的这次保存）不再补发“已合并”短提示
-      if (result.merged && !othersUpdated.value) {
-        const text = changedByText(result.changedBy);
-        if (text) noteAction(text, 6000, "others");
-      }
+      noteMerged(result);
       // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
       const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
       if (!typedNewer) othersUpdated.value = null;
@@ -1524,8 +1736,17 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       persistLocalDraft();
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
       if (rerender && !isDirty.value) {
-        await acceptContent({ markdownContent: serverText, revision: record.revision, status: record.status });
-        if (mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
+        const who = (result.changedBy || []).map(person => person.name).join("、");
+        const reason = `正在合并 ${who || "他人"} 的更新…`;
+        const merged = { markdownContent: serverText, revision: record.revision, status: record.status };
+        // 终验 F-M1：先不锁编辑区；载入期间用户继续输入就不重绘（编辑区保留他的字），下次保存按原基准再合并
+        const started = Date.now();
+        let shown = await acceptContent(merged, { reason, yieldToTyping: true, stateApplied: true, carryTyping: true });
+        if (!shown && current()) {
+          if (lastInputAt >= started) mergeBase = base;
+          else shown = await acceptContent(merged, { reason });
+        }
+        if (shown && mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
       } else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
       if (current()) handleSaveError(error, content, trigger, baseRevision ?? mergeBase ?? record.revision);
@@ -1606,8 +1827,7 @@ async function revertBlockedBlock() {
   revertingBlock.value = true;
   // 界面复验 N2：撤销期间锁住编辑区（编辑区还是撤销前的样子，任何输入都会把这一段再删掉），
   // 保存成功后总是按服务器正文重绘，不依赖差异判断。
-  refreshingEditor.value = true;
-  if (editor.value) editor.value.contentEditable = "false";
+  beginEditorLock("正在恢复这一段…");
   const previous = markdownContent.value;
   let rendered = false;
   try {
@@ -1621,8 +1841,9 @@ async function revertBlockedBlock() {
     if (!blocked.value && markdownContent.value === savedContent.value) {
       const scroller = editor.value?.closest(".desk");
       const top = scroller?.scrollTop ?? 0;
-      await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
+      // acceptContent 接管锁（沿用撤销开始时的焦点和光标），重绘完成后由它解锁
       rendered = true;
+      await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status }, { reason: "正在恢复这一段…" });
       if (scroller) scroller.scrollTop = top;
       noteAction("已撤销这一段的修改，其余修改已保存。");
     } else if (markdownContent.value === reverted) {
@@ -1633,10 +1854,7 @@ async function revertBlockedBlock() {
     }
   } finally {
     revertingBlock.value = false;
-    if (!rendered) {
-      refreshingEditor.value = false;
-      if (editor.value) editor.value.contentEditable = String(editable.value);
-    }
+    if (!rendered) endEditorLock();
   }
 }
 function retryNow() {
@@ -1835,8 +2053,7 @@ async function refreshEditorFormatting(saveFirst = true) {
   }
   const scroll = root.closest(".desk");
   const scrollTop = scroll?.scrollTop || 0;
-  refreshingEditor.value = true;
-  root.contentEditable = "false";
+  beginEditorLock("正在刷新排版…");
   window.clearTimeout(autoSaveTimer);
   try {
     if (saveFirst) await save();
@@ -1871,8 +2088,8 @@ async function refreshEditorFormatting(saveFirst = true) {
   } catch (error) {
     noteAction(`排版刷新失败：${messageOf(error)}`);
   } finally {
-    refreshingEditor.value = false;
-    if (editor.value === root) root.contentEditable = String(editable.value);
+    if (editor.value === root) endEditorLock();
+    else { refreshingEditor.value = false; refreshReason.value = ""; }
   }
   captureEditorTarget();
 }
@@ -1967,6 +2184,7 @@ onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
   updateTimer = window.setInterval(() => void checkOthersUpdated(), 45000);
   window.addEventListener("resize", scheduleMarks);
+  window.addEventListener("keydown", bufferLockedTyping, true);
   void load();
 });
 onUnmounted(() => {
@@ -1981,6 +2199,8 @@ onUnmounted(() => {
   window.clearInterval(clockTimer);
   window.clearInterval(updateTimer);
   window.removeEventListener("resize", scheduleMarks);
+  window.removeEventListener("keydown", bufferLockedTyping, true);
+  window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
   window.cancelAnimationFrame(marksFrame);
   window.clearTimeout(retryTimer);
   window.clearTimeout(savingTimer);
@@ -2025,15 +2245,16 @@ onUnmounted(() => {
         <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>下载原稿</a>
         <div v-else class="export-group">
           <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || opBusy || document.permissions?.canExport === false" :title="document.permissions?.canExport === false ? '你在该项目中没有导出权限' : undefined" @click="handleExport"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
-          <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
-          <div v-if="exportMenu" class="export-menu" role="menu" @keydown.esc="exportMenu = false">
+          <button v-if="isDirty" ref="exportMoreButton" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu" @keydown="onExportMenuKeydown"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
+          <div v-if="exportMenu" ref="exportMenuEl" class="export-menu" role="menu" aria-label="下载方式" @keydown="onExportMenuKeydown">
             <button type="button" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
             <button type="button" role="menuitem" @click="exportMenu = false; downloadMyChanges()">我的修改（.md）</button>
           </div>
           <!-- 界面验收 S9：导出失败只在导出按钮旁说明（危险色），不占通栏 -->
           <div v-if="exportError" class="export-error" role="alert" data-testid="export-error">
             <p>{{ exportError }}</p>
-            <span class="acts"><button type="button" class="text" @click="downloadMyChanges">下载我的修改</button><button type="button" class="text neutral" @click="exportError = ''">知道了</button></span>
+            <!-- 终验 S-8：只有能编辑且有未保存修改时才提供“下载我的修改” -->
+            <span class="acts"><button v-if="isDirty && !readonly && document.permissions?.canEdit !== false" type="button" class="text" @click="downloadMyChanges">下载我的修改</button><button type="button" class="text neutral" @click="exportError = ''">知道了</button></span>
           </div>
         </div>
       </header>
@@ -2041,6 +2262,7 @@ onUnmounted(() => {
       <!-- 第 2 步：提示条统一放在文档栏下方、三栏上方 -->
       <div class="notices">
         <p v-if="errorText" class="wb-notice danger" role="alert">{{ errorText }}</p>
+        <p v-if="refreshNotice" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNotice }}</span></p>
         <div v-if="blocked" class="wb-notice danger save-blocked" role="alert" data-testid="save-blocked">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
           <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
@@ -2131,11 +2353,11 @@ onUnmounted(() => {
           <div class="ohead">
             <span>目录</span>
             <div class="acts">
-              <button type="button" class="subtle icon-btn" aria-label="搜索标题" :aria-pressed="outlineSearchOpen" @click="toggleOutlineSearch"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg></button>
+              <button ref="outlineSearchButton" type="button" class="subtle icon-btn" aria-label="搜索标题" :aria-pressed="outlineSearchOpen" @click="toggleOutlineSearch"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg></button>
               <button type="button" class="subtle icon-btn" aria-label="添加标题" aria-haspopup="dialog" :aria-expanded="addHeadingOpen" :disabled="readonly || opBusy" @click="addHeadingOpen = !addHeadingOpen"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
             </div>
           </div>
-          <div v-if="outlineSearchOpen" class="osearch"><input v-model="outlineSearch" class="control" type="search" placeholder="搜索标题" aria-label="搜索标题" /></div>
+          <div v-if="outlineSearchOpen" class="osearch"><input ref="outlineSearchInput" v-model="outlineSearch" class="control" type="search" placeholder="搜索标题" aria-label="搜索标题" @keydown.esc.prevent="closeOutlineSearch" /></div>
           <form v-if="addHeadingOpen" class="add-heading" aria-label="添加标题" @submit.prevent="addHeading" @keydown.esc="addHeadingOpen = false">
             <label for="new-heading">标题名称</label>
             <input id="new-heading" v-model="headingTitle" class="control" type="text" maxlength="120" :disabled="addingHeading || saving || aiLocked || readonly" required />
@@ -2185,7 +2407,7 @@ onUnmounted(() => {
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
           <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
-          <div ref="desk" class="desk page-scroll"><div class="paper" :style="paperZoom < 1 ? { ...paperStyle, zoom: String(paperZoom) } : paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <div ref="desk" class="desk page-scroll"><div class="paper" :style="paperZoom < 1 ? { ...paperStyle, zoom: String(paperZoom) } : paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -2334,6 +2556,11 @@ onUnmounted(() => {
 .wb-notice > span:not(.acts) { min-width:0; overflow-wrap:anywhere; }
 .wb-notice .acts, .draft-row .acts { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; flex-shrink:0; }
 .wb-notice.info { background:var(--info-50); color:var(--gray-800); }
+/* 终验 F-M1：编辑区重绘/载入中的中性提示 */
+.wb-notice.neutral { background:var(--bg-subtle); color:var(--text-secondary); }
+.wb-notice .spin { width:12px; height:12px; flex:none; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:wb-spin .8s linear infinite; }
+@keyframes wb-spin { to { transform:rotate(360deg); } }
+.paper-content.refreshing { cursor:progress; opacity:.7; transition:opacity var(--duration) var(--ease-out); }
 .wb-notice.info > .ico { color:var(--info-600); }
 .wb-notice.danger { background:var(--danger-50); color:var(--danger-700); }
 .wb-notice.warning { background:var(--warning-50); color:var(--gray-800); }
@@ -2381,9 +2608,9 @@ onUnmounted(() => {
 .oitem:disabled { cursor:not-allowed; opacity:.6; }
 .oitem:focus-visible { outline:var(--focus-outline); outline-offset:-2px; }
 .oitem.l1 { font-weight:var(--weight-medium); }
-.oitem.l2 { padding-left:22px; }
-.oitem.l3 { padding-left:36px; }
-.oitem.l4 { padding-left:50px; }
+.oitem.l2 { padding-left:var(--outline-indent-2); }
+.oitem.l3 { padding-left:var(--outline-indent-3); }
+.oitem.l4 { padding-left:var(--outline-indent-4); }
 .oitem.empty .otext { color:var(--text-tertiary); }
 .oitem.on { background:var(--bg-active); color:var(--brand-700); font-weight:var(--weight-medium); }
 .oitem.on .otext { color:var(--brand-700); }
@@ -2391,7 +2618,7 @@ onUnmounted(() => {
 .omark { display:inline-block; width:7px; height:7px; border-radius:var(--radius-pill); flex:none; }
 .omark.danger { background:var(--danger-600); }
 .omark.info { background:var(--info-600); }
-.ostate { flex:none; color:var(--text-disabled); font-size:var(--text-xs); }
+.ostate { flex:none; color:var(--text-tertiary); font-size:var(--text-xs); } /* 终验 S-2：对比度 ≥ 4.5 */
 .ofoot { display:flex; flex-wrap:wrap; gap:var(--space-1) var(--space-3); padding:var(--space-3) var(--space-4); border-top:1px solid var(--border-subtle); color:var(--text-tertiary); font-size:var(--text-xs); }
 .ofoot span { display:inline-flex; align-items:center; gap:var(--space-1); }
 

@@ -51,3 +51,26 @@ export function mergedInBlocks(sent: string, server: string): string[] {
   const mine = new Set(blocksOf(sent));
   return blocksOf(server).filter(block => !mine.has(block) && !/^#{1,6}[ \t]/.test(block));
 }
+
+/** 载入期间只在一个段落里插入了一串字（最常见的连续打字）：返回段落序号、插入位置和插入的字；其他改法返回 null。 */
+export function typedInsertion(before: string[], after: string[]): { index: number; text: string; offset: number; insert: string } | null {
+  if (before.length !== after.length) return null;
+  const changed = before.map((text, index) => text === after[index] ? -1 : index).filter(index => index >= 0);
+  if (changed.length !== 1) return null;
+  const index = changed[0], old = before[index], now = after[index];
+  if (now.length <= old.length) return null;
+  let prefix = 0;
+  while (prefix < old.length && old[prefix] === now[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < old.length - prefix && old[old.length - 1 - suffix] === now[now.length - 1 - suffix]) suffix += 1;
+  if (prefix + suffix !== old.length) return null;
+  return { index, text: old, offset: prefix, insert: now.slice(prefix, now.length - suffix) };
+}
+/** 在新版式里找到“打字前那一段”（原文一字不差、离原位置最近的一段）。 */
+export function matchBlock(texts: string[], carry: { index: number; text: string }): number {
+  let best = -1;
+  texts.forEach((text, index) => {
+    if (text === carry.text && (best < 0 || Math.abs(index - carry.index) < Math.abs(best - carry.index))) best = index;
+  });
+  return best;
+}
