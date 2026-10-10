@@ -314,13 +314,17 @@ def commit_derived(connection, session, did: UUID, base: DocumentRow, updated: s
                         after_write=after_write, template_update=template_update)
 
 
+WHITESPACE_NOTES = ("whitespaceDropped", "whitespaceDeleted", "theirsWhitespaceOverridden")
+
+
 def _merged_result(request: Request, connection, session, did: UUID, data: dict) -> dict:
     result = _content_result(request, _document_row(connection, did, session.user_id, _admin(session.roles)))
     result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
     if data.get("replayed"):
         result["data"]["replayed"] = True
-    if data.get("whitespaceDropped"):
-        result["data"]["whitespaceDropped"] = data["whitespaceDropped"]  # 终验 S-1：我方只改空白、对方也改了这一处
+    for key in WHITESPACE_NOTES:  # 终验 S-1 及终审建议：只改空白的修改没被写入/被覆盖时的提示计数
+        if data.get(key):
+            result["data"][key] = data[key]
     return result
 
 
@@ -792,8 +796,9 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
     result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
     if data.get("replayed"):
         result["data"]["replayed"] = True
-    if data.get("whitespaceDropped"):
-        result["data"]["whitespaceDropped"] = data["whitespaceDropped"]  # 终验 S-1：我方只改空白、对方也改了这一处
+    for key in WHITESPACE_NOTES:  # 终验 S-1 及终审建议：只改空白的修改没被写入/被覆盖时的提示计数
+        if data.get(key):
+            result["data"][key] = data[key]
     return result
 
 

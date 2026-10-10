@@ -138,3 +138,28 @@ def test_whitespace_merge_pairs_by_node_kind():
     base = "引言\n\n正文。\n"
     result = merge3(base, base.replace("正文。", "正文改。"), "# 引言\n\n正文。\n")
     assert "# 引言" in result.markdown and result.whitespace_dropped == 0
+
+
+def test_whitespace_notes_for_deleted_and_overridden():
+    """终审建议：对方删段 / 对方只改空白而我改文字，分别给出准确的提示计数。"""
+    base = "# 标题\n\n导出下载   的完整说明。\n\n另一段。\n"
+    mine_ws = base.replace("下载   的", "下载  的")
+    deleted = merge3(base, base.replace("导出下载   的完整说明。\n\n", ""), mine_ws)
+    assert not deleted.conflicts and "导出下载" not in deleted.markdown
+    assert deleted.whitespace_deleted == 1 and deleted.whitespace_dropped == 0
+    assert deleted.whitespace_notes() == {"whitespaceDeleted": 1}
+    overridden = merge3(base, base.replace("下载   的", "下载 的"), base.replace("完整说明", "全部说明"))
+    assert not overridden.conflicts and "下载   的全部说明" in overridden.markdown
+    assert overridden.whitespace_notes() == {"theirsWhitespaceOverridden": 1}
+
+
+def test_code_block_indentation_is_a_real_change():
+    """终审建议：代码块缩进有语义——双方把同一代码块的缩进改得不同要进冲突；只一方改则采用其修改。"""
+    base = "# 示例\n\n```\nif a:\n    run()\n```\n\n说明。\n"
+    theirs = base.replace("    run()", "  run()")
+    mine = base.replace("    run()", "\trun()")
+    both = merge3(base, theirs, mine)
+    assert len(both.conflicts) == 1 and both.conflicts[0].reason == "MODIFIED"
+    assert both.whitespace_notes() == {}
+    only_mine = merge3(base, base.replace("说明。", "对方说明。"), mine)
+    assert not only_mine.conflicts and "\trun()" in only_mine.markdown and "对方说明。" in only_mine.markdown

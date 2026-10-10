@@ -305,13 +305,13 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                                          doc_revision=revision, source=source, rhash=rhash, mine_md=mine_md,
                                          items=items, appliable_md=result.markdown)
                 merged = result.markdown
-                whitespace_dropped = result.whitespace_dropped
+                whitespace_notes = result.whitespace_notes()
             else:
                 merged = mine_md
-                whitespace_dropped = 0
+                whitespace_notes = {}
             if merged == theirs:
                 return {"revision": revision, "merged": merged_flag, "changeId": None, "noop": True,
-                        "whitespaceDropped": whitespace_dropped,
+                        **whitespace_notes,
                         "changedBy": _changed_by(connection, document_id, base_revision, actor), "markdownContent": theirs}
             try:
                 check_word(merged)
@@ -342,8 +342,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                         after_write(connection, revision + 1)
                     data = {"revision": revision + 1, "merged": merged_flag, "changeId": str(change_id),
                             "changedBy": _changed_by(connection, document_id, base_revision, actor)}
-                    if whitespace_dropped:
-                        data["whitespaceDropped"] = whitespace_dropped
+                    data.update(whitespace_notes)
                     connection.execute("UPDATE document_changes SET result_json=%s WHERE id=%s",
                                        (json.dumps(data, ensure_ascii=False), change_id))
             except _Retry:

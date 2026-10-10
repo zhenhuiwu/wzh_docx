@@ -34,6 +34,14 @@ class MergeResult:
     theirs_changed: bool = False
     prefix_conflict: bool = False
     whitespace_dropped: int = 0   # 我方只改了空白、因对方也改了这一处而没写入的块数（合并提示用）
+    whitespace_deleted: int = 0   # 我方只改了空白、但对方删掉了这一块
+    theirs_whitespace_overridden: int = 0   # 对方只改了空白、我方改了这一块的文字（采用我方，对方的空白修改没保留）
+
+    def whitespace_notes(self) -> dict[str, int]:
+        """合并提示用的计数（只返回非零项，键名即接口字段名）。"""
+        notes = {"whitespaceDropped": self.whitespace_dropped, "whitespaceDeleted": self.whitespace_deleted,
+                 "theirsWhitespaceOverridden": self.theirs_whitespace_overridden}
+        return {key: value for key, value in notes.items() if value}
 
     @property
     def markdown(self) -> str:
@@ -46,7 +54,8 @@ def _key(block: Block) -> tuple:
 
 
 def _canon(blocks: list[Block]) -> list[tuple]:
-    return [(block.kind, canonical_key(block.body)) for block in blocks]
+    # 终审建议：代码块里的缩进和空白有语义，按原文比较（双方都改了缩进且不同 → 进冲突，不再只提示）
+    return [(block.kind, block.body if block.kind == "code" else canonical_key(block.body)) for block in blocks]
 
 
 def _raw(blocks: list[Block]) -> list[tuple]:
@@ -55,7 +64,9 @@ def _raw(blocks: list[Block]) -> list[tuple]:
 
 
 def _whitespace_only(a: list[Block], b: list[Block]) -> bool:
-    """两段只差空白（空格数量、全角空格、换行等）。"""
+    """两段只差空白（空格数量、全角空格、换行等）。代码块的空白是实质修改，不算。"""
+    if any(block.kind == "code" for block in [*a, *b]):
+        return False
     return _raw(a) != _raw(b) and [(x.kind, "".join(x.body.split())) for x in a] == [(x.kind, "".join(x.body.split())) for x in b]
 
 
@@ -180,11 +191,17 @@ def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool =
                 result.entries.extend(Entry(block, "m", m1 + offset) for offset, block in enumerate(seg_m))
                 cursor = max(cursor, t2)
                 continue
-            if "m" in sides:
+            if "m" in sides and not seg_t:
+                result.whitespace_deleted += _dropped_whitespace(seg_b, seg_t, seg_m)  # 对方删掉了这一块：按删除处理并提示
+            elif "m" in sides:
                 result.whitespace_dropped += _dropped_whitespace(seg_b, seg_t, seg_m)  # 对方也改了这一处：保留对方并提示
             copy_theirs(t2)
             continue
         if not theirs_changed_here:
+            if "t" in sides and _raw(seg_t) != _raw(seg_b):
+                # 对方只改了空白、我方改了文字：采用我方，提示对方的空白调整没保留
+                result.theirs_whitespace_overridden += sum(1 for b, t in zip(seg_b, seg_t) if _whitespace_only([t], [b])) \
+                    if len(seg_b) == len(seg_t) else int(_whitespace_only(seg_t, seg_b))
             result.entries.extend(Entry(block, "m", m1 + offset) for offset, block in enumerate(seg_m))
             cursor = max(cursor, t2)
             continue
