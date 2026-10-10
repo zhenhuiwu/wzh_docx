@@ -14,6 +14,7 @@ import re
 from typing import Sequence
 
 import markdown
+from lxml import etree
 from docx import Document
 from docx.oxml.table import CT_Tbl
 from docx.oxml import OxmlElement
@@ -78,7 +79,16 @@ def _html_blocks(content: str) -> list:
         markdown.markdown(content, extensions=["tables", "fenced_code"]),
         create_parent="div",
     )
-    return list(root)
+    # 工作台重塑轮：正文里的 HTML 注释在 Word 中没有对应内容，整体去掉（保留其后的文字），
+    # 不再把 lxml 的英文报错（“Input object is not an XML element: HtmlComment”）抛给用户，也不把注释文字写进 Word。
+    for comment in list(root.iter(etree.Comment)):
+        comment.drop_tree()
+    # 只写“#”的空标题：Word 里不会产生可对应的标题段（预览因此 422），按不存在处理；编辑区重绘后这一行随之消失。
+    return [child for child in root if isinstance(child.tag, str)
+            and not (child.tag in _HEADING_TAGS and not "".join(child.itertext()).strip() and not child.xpath(".//img"))]
+
+
+_HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 
 
 def _word_blocks(doc, *, flat_lists: bool = False, outline_headings: bool = False) -> list[_Block]:
