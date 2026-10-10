@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
 import uuid
@@ -52,11 +51,11 @@ def same_row(page, doc_id: str, server: dict, editor: str, gap: int, i: int, big
     md = server["markdownContent"]
     mines = "\n".join(((item.get("mine") or {}).get("markdown") or "") for item in open_items)
     mine_open = MARK in mines
-    # 冲突返回后才打的字会写在（已换成对方版本的）这一段末尾：标记可能分成几截，分别在冲突副本和正文里
-    runs = "".join(re.findall(r"[【丙0-9A-J丁】]*[【丙A-J丁】][【丙0-9A-J丁】]*", mines + "\n" + md + "\n" + editor))
-    split_kept = set(MARK) <= set(runs)
+    # 冲突返回后才打的字会写在（已换成对方版本的）这一段末尾：标记分成前后两截——前一截在冲突副本（或正文），后一截在正文。
+    # 只认已存到服务器的（正文或未处理冲突的“我的版本”），按顺序切成两截核对，不认只在编辑区里的字
+    split_kept = any(MARK[:k] in mines + "\n" + md and MARK[k:] in md for k in range(1, len(MARK)))
     row = {"same": True, "gap": gap, "i": i, "big": big, "other_kept": "（对方改同段）" in md, "server_full": MARK in md,
-           "mine_kept": MARK in md or mine_open or MARK in editor or split_kept, "mine_whole": MARK in md or mine_open or MARK in editor, "conflicts": [(status, ((item.get("theirs") or {}).get("updatedBy") or {}).get("name"))
+           "mine_kept": MARK in md or mine_open or split_kept, "mine_whole": MARK in md or mine_open, "editor_full": MARK in editor, "conflicts": [(status, ((item.get("theirs") or {}).get("updatedBy") or {}).get("name"))
                                                                               for status, item in items],
            "status": page.get_by_test_id("save-status").inner_text()[:30], "rev": server["revision"]}
     row["theirs_by_other"] = all(name == "张工" for _, name in row["conflicts"])
