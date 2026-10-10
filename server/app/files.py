@@ -7,7 +7,7 @@ import json
 import os
 import re
 from contextlib import nullcontext
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -284,17 +284,34 @@ def read_object_bytes(root: Path, storage_key: str) -> bytes:
     return path.read_bytes()
 
 
+def _ascii_filename(name: str) -> str:
+    """A quoted-string safe fallback: printable ASCII without quotes or backslashes.
+
+    Non-ASCII names fall back to "download" plus a safe extension; browsers
+    use the RFC 5987 filename* parameter for the real name.
+    """
+    def safe(value: str) -> str:
+        return "".join(char if " " <= char <= "~" and char not in '"\\' else "_" for char in value)
+
+    if not name.isascii():
+        suffix = PurePath(name).suffix
+        return "download" + (suffix if suffix.isascii() and safe(suffix) == suffix and len(suffix) <= 16 else "")
+    return safe(name).strip(" .")[:150] or "download"
+
+
+def content_disposition(disposition: str, name: str) -> str:
+    """Never echo control characters or quotes from a stored file name into a header."""
+    encoded = quote(name, safe="")
+    return f"{disposition}; filename=\"{_ascii_filename(name)}\"; filename*=UTF-8''{encoded}"
+
+
 def _file_response(record: FileRecord, inline: bool) -> Response:
     payload = read_object_bytes(get_settings().file_data_dir, record.storage_key)
     disposition = "inline" if inline else "attachment"
     headers = {
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": f"{disposition}; filename=\"download\"; filename*=UTF-8''{quote(record.name, safe='')}",
+        "Content-Disposition": content_disposition(disposition, record.name),
     }
-    if record.name.isascii() and '"' not in record.name and "\\" not in record.name:
-        headers["Content-Disposition"] = (
-            f"{disposition}; filename=\"{record.name}\""
-        )
     return Response(content=payload, media_type=record.media_type, headers=headers)
 
 

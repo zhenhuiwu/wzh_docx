@@ -266,3 +266,19 @@ def test_path_and_unauthenticated_reads_are_rejected(
         assert row["name"] == "files"
     finally:
         secret.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("name,fallback", [
+    ("report.docx", "report.docx"),
+    ('evil"\r\nSet-Cookie: x=1.docx', "evil___Set-Cookie: x=1.docx"),
+    ("a\\b.pdf", "a_b.pdf"),
+    ("需求规格说明.docx", "download.docx"),
+    ("\x00\x01", "__"),
+    ("...", "download"),
+])
+def test_content_disposition_never_echoes_unsafe_characters(name, fallback):
+    from app.files import content_disposition
+
+    header = content_disposition("attachment", name)
+    assert "\r" not in header and "\n" not in header and "\x00" not in header
+    assert header.startswith(f'attachment; filename="{fallback}"; filename*=UTF-8\'\'')
