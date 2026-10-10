@@ -74,39 +74,82 @@ export function typedInsertion(before: string[], after: string[], caret?: { inde
   return { index, text: old, offset: prefix, insert: now.slice(prefix, now.length - suffix) };
 }
 /**
- * 终审必改：把重绘前的段落下标换算到重绘后的版式里。前后两版段落文字做 LCS 对齐，
- * 分别取“尽早配对”和“尽晚配对”两种极端对齐；两种都把该段配到同一位置才算确定，否则返回 -1（调用方放弃写回）。
- * 不再按“文字相同、位置最近”找段——模板里重复的“无。”会因此写进另一段。
+ * 把重绘前的段落下标换算到重绘后的版式里（终审必改 F-M1，最后一审建议 1/2 修正）。
+ * 判据：在前后两版段落文字的**所有** LCS 最优对齐中，before[index] 都必须配对、且都配到同一个 after 下标，才返回该下标；
+ * 否则返回 -1（调用方放弃写回）。用前缀 DP 与后缀 DP 求可行位置集合，只保留两行，内存 O(m)、时间 O(n·m)。
+ * 超过 limit 格时先去掉前后相同的段落再算；这时只在不会和被去掉部分混淆（文字在两版中都不出现在去掉的部分）时才返回。
  */
-export function mapBlockIndex(before: string[], after: string[], index: number, limit = 4_000_000): number {
+export function mapBlockIndex(before: string[], after: string[], index: number, limit = 36_000_000): number {
   const n = before.length, m = after.length;
-  if (index < 0 || index >= n || (n + 1) * (m + 1) > limit) return -1;
-  const first = alignedIndex(before, after, index);
-  const reversed = alignedIndex([...before].reverse(), [...after].reverse(), n - 1 - index);
-  const last = reversed < 0 ? -1 : m - 1 - reversed;
-  return first >= 0 && first === last ? first : -1;
+  if (index < 0 || index >= n) return -1;
+  if (n * m <= limit) return exactIndex(before, after, index);
+  let head = 0;
+  while (head < n && head < m && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (tail < n - head && tail < m - head && before[n - 1 - tail] === after[m - 1 - tail]) tail += 1;
+  const text = before[index];
+  const trimmed = new Set([...before.slice(0, head), ...before.slice(n - tail), ...after.slice(0, head), ...after.slice(m - tail)]);
+  if (index < head || index >= n - tail) {
+    // 落在去掉的前后相同部分：文字在两版中都唯一才确定（重复文字可能有别的最优对齐）
+    const j = index < head ? index : m - (n - index);
+    return countOf(before, text) === 1 && countOf(after, text) === 1 ? j : -1;
+  }
+  if (trimmed.has(text)) return -1;
+  const core = (n - head - tail) * (m - head - tail);
+  if (core > limit) return -1;
+  const j = exactIndex(before.slice(head, n - tail), after.slice(head, m - tail), index - head);
+  return j < 0 ? -1 : j + head;
 }
-/** 一种 LCS 对齐（能配就配、配不上先跳过新版的段）：返回 before[index] 配到的 after 下标，未配上为 -1。 */
-function alignedIndex(before: string[], after: string[], index: number): number {
-  const n = before.length, m = after.length, width = m + 1;
-  const dp = new Int32Array((n + 1) * width);  // dp[i*width+j] = before[i:] 与 after[j:] 的 LCS 长度
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i * width + j] = before[i] === after[j] ? dp[(i + 1) * width + j + 1] + 1 : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
+function countOf(list: string[], text: string): number {
+  let count = 0;
+  for (const item of list) if (item === text && ++count > 1) break;
+  return count;
+}
+/** 所有 LCS 最优对齐中 before[k] 的去向：唯一且必配对时返回下标，否则 -1。 */
+function exactIndex(a: string[], b: string[], k: number): number {
+  const n = a.length, m = b.length;
+  // 前缀 DP：P[i][j] = LCS(a[:i], b[:j])，只算到第 k 行
+  let prev = new Int32Array(m + 1), row = new Int32Array(m + 1);
+  for (let i = 1; i <= k; i++) {
+    row[0] = 0;
+    for (let j = 1; j <= m; j++) row[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], row[j - 1]);
+    [prev, row] = [row, prev];
+  }
+  const pk = prev;  // P[k][*]
+  // 后缀 DP：S[i][j] = LCS(a[i:], b[j:])，算到第 k 行，同时留下第 k+1 行
+  let next = new Int32Array(m + 1), cur = new Int32Array(m + 1);
+  for (let i = n - 1; i > k; i--) {
+    cur[m] = 0;
+    for (let j = m - 1; j >= 0; j--) cur[j] = a[i] === b[j] ? next[j + 1] + 1 : Math.max(next[j], cur[j + 1]);
+    [next, cur] = [cur, next];
+  }
+  const sk1 = next;  // S[k+1][*]
+  let best = 0;
+  for (let j = 0; j <= m; j++) {
+    const viaMatch = j < m && a[k] === b[j] ? pk[j] + 1 + sk1[j + 1] : 0;
+    best = Math.max(best, pk[j] + sk1[j], viaMatch);
+  }
+  // k 不配对也能达到最优 → 不确定
+  for (let j = 0; j <= m; j++) if (pk[j] + sk1[j] === best) return -1;
+  let found = -1;
+  for (let j = 0; j < m; j++) {
+    if (a[k] === b[j] && pk[j] + 1 + sk1[j + 1] === best) {
+      if (found >= 0) return -1;
+      found = j;
     }
   }
-  let i = 0, j = 0;
-  while (i < n && j < m) {
-    const here = dp[i * width + j];
-    if (before[i] === after[j] && here === dp[(i + 1) * width + j + 1] + 1) {
-      if (i === index) return j;
-      i += 1; j += 1;
-    } else if (dp[i * width + j + 1] === here) {
-      j += 1;
-    } else {
-      if (i === index) return -1;
-      i += 1;
-    }
-  }
-  return -1;
+  return found;
+}
+
+/**
+ * 最后一审建议 2：恢复光标用。先按 mapBlockIndex 精确换算；不确定（或超大文档放弃）时，
+ * 光标所在段的文字在前后两版里都只出现一次就放到那一段，否则返回 -1（调用方不放光标）。
+ */
+export function caretBlockIndex(before: string[], after: string[], index: number, limit?: number): number {
+  const mapped = mapBlockIndex(before, after, index, limit);
+  if (mapped >= 0) return mapped;
+  const text = before[index];
+  if (text === undefined || before.indexOf(text) !== before.lastIndexOf(text)) return -1;
+  const at = after.indexOf(text);
+  return at >= 0 && at === after.lastIndexOf(text) ? at : -1;
 }
