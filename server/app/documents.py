@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace as _replace_row
 import json
 import os
 import re
@@ -30,7 +31,7 @@ from app.errors import AppError
 from app.config import get_settings
 from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
-from app.document_commit import commit_whole, open_counts, replay, request_hash, router as conflicts_router
+from app.document_commit import _version_markdown, commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
 from app.document_access import DocumentRow, Need, check_project, document_principal, load_document, member_role, permissions_of
 from app.models import format_timestamp
@@ -156,7 +157,13 @@ class DocumentSkillBody(BaseModel):
     documentInstructions: str = Field(default="", max_length=2000)
 
 
-class HeadingAddBody(BaseModel):
+class MergeOptions(BaseModel):
+    """S6（01 §4.3）：派生写入接口的 opt-in 三方合并；不带时保持严格检查。"""
+    allowMerge: bool = False
+    clientSaveKey: str | None = Field(default=None, min_length=8, max_length=80)
+
+
+class HeadingAddBody(MergeOptions):
     model_config = ConfigDict(extra="forbid")
 
     expectedRevision: int = Field(ge=0)
@@ -174,7 +181,7 @@ class DocumentSelectionBody(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
 
 
-class SelectionInsertBody(BaseModel):
+class SelectionInsertBody(MergeOptions):
     model_config = ConfigDict(extra="forbid")
     expectedRevision: int = Field(ge=0)
     selection: DocumentSelectionBody
@@ -193,7 +200,7 @@ class SectionDraftBody(BaseModel):
     selection: DocumentSelectionBody | None = None
 
 
-class SectionInsertBody(BaseModel):
+class SectionInsertBody(MergeOptions):
     model_config = ConfigDict(extra="forbid")
 
     expectedRevision: int = Field(ge=0)
@@ -209,7 +216,7 @@ class DocumentEdit(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
 
 
-class DocumentInsertBody(BaseModel):
+class DocumentInsertBody(MergeOptions):
     model_config = ConfigDict(extra="forbid")
     expectedRevision: int = Field(ge=0)
     edits: list[DocumentEdit] = Field(min_length=1, max_length=200)
@@ -272,6 +279,43 @@ def _save_markdown(connection, document_id: UUID, markdown: str, expected_revisi
                            kind=kind, restored_from_revision=restored_from_revision)
     return record_commit(connection, document_id, base_revision=expected_revision, markdown=markdown, kind=kind,
                          ai_assisted=kind in _AI_KINDS, **commit)
+
+
+def merge_base(connection, row: DocumentRow, expected: int, allow_merge: bool, message: str) -> DocumentRow:
+    """S6：严格接口版本不符 → 409 REVISION_CONFLICT；allowMerge → 正文换成 versions[expected] 的基线快照。"""
+    if row.revision == expected:
+        return row
+    if not allow_merge:
+        raise revision_conflict(connection, row.id, message)
+    if expected > row.revision:
+        raise AppError(422, "VALIDATION_FAILED", "保存所依据的版本不存在。")
+    base = _version_markdown(connection, row.id, expected)
+    if base is None:
+        raise AppError(409, "BASE_REVISION_UNAVAILABLE", "找不到保存所依据的版本，请刷新后重试。", current_revision=row.revision)
+    return _replace_row(row, markdown_content=base, revision=expected)
+
+
+def commit_derived(connection, session, did: UUID, base: DocumentRow, updated: str, *, kind: str, client_save_key: str | None,
+                   images: list[dict] | None = None, template_update=None, after_write=None, extra: dict | None = None) -> dict:
+    """S6：派生写入（AI 采纳、标题、图表、测试结果）在基线上算好新全文后，与当前正文三方合并提交。"""
+    admin = _admin(session.roles)
+
+    def check(markdown: str) -> None:
+        fresh = _document_row(connection, did, session.user_id, admin, "edit")
+        merged_images = None if images is None else list((fresh[6] or {}).get("images", [])) + images
+        _check_word(connection, fresh, markdown, images=merged_images)
+
+    return commit_whole(connection, document_id=did, actor=session.user_id, base_revision=base.revision, mine_md=updated,
+                        kind=kind, source=kind, client_save_key=client_save_key, check_word=check, extra=extra,
+                        after_write=after_write, template_update=template_update)
+
+
+def _merged_result(request: Request, connection, session, did: UUID, data: dict) -> dict:
+    result = _content_result(request, _document_row(connection, did, session.user_id, _admin(session.roles)))
+    result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
+    if data.get("replayed"):
+        result["data"]["replayed"] = True
+    return result
 
 
 def _check_word(connection, row, content: str, *, images: list[dict] | None = None) -> None:
@@ -737,9 +781,8 @@ def add_heading(request: Request, document_id: str, body: HeadingAddBody) -> dic
     if body.placement not in {"child", "sibling"}:
         raise AppError(422, "VALIDATION_FAILED", "标题位置不正确。")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "文档已更新，请刷新后重试。")
+        row = merge_base(conn, _document_row(conn, did, session.user_id, _admin(session.roles), "edit"),
+                         body.expectedRevision, body.allowMerge, "文档已更新，请刷新后重试。")
         markdown = row[7]
         if body.afterIndex is None:
             level, position, insert_index = 1, len(markdown), len(_headings(markdown))
@@ -752,6 +795,14 @@ def add_heading(request: Request, document_id: str, body: HeadingAddBody) -> dic
             position = int(following["start"]) if following else len(markdown)
             insert_index = next((index for index, item in enumerate(headings) if int(item["start"]) >= position), len(headings))
         updated = _insert_at(markdown, position, f"{'#' * level} {title}")
+        if body.allowMerge:
+            data = commit_derived(conn, session, did, row, updated, kind="heading", client_save_key=body.clientSaveKey)
+            result = _merged_result(request, conn, session, did, data)
+            # 合并后标题序号按服务器全文重新定位（同名取基线序号附近的那个）。
+            texts = [str(item["text"]) for item in _headings(str(result["data"]["markdownContent"]))]
+            near = [index for index, text in enumerate(texts) if text == title]
+            result["data"]["headingIndex"] = min(near, key=lambda index: abs(index - insert_index)) if near else insert_index
+            return result
         _check_word(conn, row, updated)
         _save_markdown(conn, did, updated, row[12], kind="heading")
         conn.commit()
@@ -1061,9 +1112,8 @@ def insert_selection(request: Request, document_id: str, body: SelectionInsertBo
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "文档已更新，请重新选择正文并生成。")
+        row = merge_base(conn, _document_row(conn, did, session.user_id, _admin(session.roles), "edit"),
+                         body.expectedRevision, body.allowMerge, "文档已更新，请重新选择正文并生成。")
         rules = section_rules(heading="选中内容", document_name=row[2], template_name=row[15] or "",
                               instruction=body.instruction, existing=body.selection.text, selected_only=True, writing_skill=_writing_skill(row))
         try:
@@ -1071,6 +1121,12 @@ def insert_selection(request: Request, document_id: str, body: SelectionInsertBo
         except DraftFormatError as exc:
             raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
         updated = _replace_selection(row[7], body.selection, content)
+        if body.allowMerge:
+            data = commit_derived(conn, session, did, row, updated, kind="selection", client_save_key=body.clientSaveKey,
+                                  after_write=lambda c, revision: record_memory(c, did, body.instruction, scope="selection",
+                                                                                 target="选中内容", revision=revision),
+                                  extra={"instruction": body.instruction})
+            return _merged_result(request, conn, session, did, data)
         _check_word(conn, row, updated)
         _save_markdown(conn, did, updated, row[12], kind="selection")
         record_memory(conn, did, body.instruction, scope="selection", target="选中内容", revision=row[12] + 1)
@@ -1084,14 +1140,20 @@ def insert_section(request: Request, document_id: str, body: SectionInsertBody) 
     did = _uuid(document_id, "documentId")
     content = body.content.strip()
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "文档已更新，请刷新后重试。")
+        row = merge_base(conn, _document_row(conn, did, session.user_id, _admin(session.roles), "edit"),
+                         body.expectedRevision, body.allowMerge, "文档已更新，请刷新后重试。")
         heading, _, _ = _section_body(row[7], body.headingIndex)
         try:
             updated = _section_update(row, body.headingIndex, content, body.mode, body.instruction)
         except DraftFormatError as exc:
             raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
+        if body.allowMerge:
+            target = str(heading["text"])[:120]
+            data = commit_derived(conn, session, did, row, updated, kind="ai_section", client_save_key=body.clientSaveKey,
+                                  after_write=lambda c, revision: record_memory(c, did, body.instruction, scope="section",
+                                                                                 target=target, revision=revision),
+                                  extra={"instruction": body.instruction})
+            return _merged_result(request, conn, session, did, data)
         _check_word(conn, row, updated)
         _save_markdown(conn, did, updated, row[12], kind="ai_section")
         record_memory(conn, did, body.instruction, scope="section", target=str(heading["text"])[:120], revision=row[12] + 1)
@@ -1104,14 +1166,20 @@ def insert_document_edits(request: Request, document_id: str, body: DocumentInse
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "文档已更新，请重新生成全文草稿。")
+        row = merge_base(conn, _document_row(conn, did, session.user_id, _admin(session.roles), "edit"),
+                         body.expectedRevision, body.allowMerge, "文档已更新，请重新生成全文草稿。")
         try:
             edits = _validate_edits(row, body.edits, body.instruction)
         except DraftFormatError as exc:
             raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
         updated = _apply_edits(row[7], edits)
+        if body.allowMerge:
+            target = row[2][:120]
+            data = commit_derived(conn, session, did, row, updated, kind="ai_document", client_save_key=body.clientSaveKey,
+                                  after_write=lambda c, revision: record_memory(c, did, body.instruction, scope="document",
+                                                                                 target=target, revision=revision),
+                                  extra={"instruction": body.instruction})
+            return _merged_result(request, conn, session, did, data)
         _check_word(conn, row, updated)
         _save_markdown(conn, did, updated, row[12], kind="ai_document")
         record_memory(conn, did, body.instruction, scope="document", target=row[2][:120], revision=row[12] + 1)

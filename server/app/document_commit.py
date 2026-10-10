@@ -261,7 +261,8 @@ def store_conflict(connection, *, document_id: UUID, actor: UUID, base_revision:
 
 def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: int, mine_md: str, kind: str,
                  client_save_key: str | None, check_word: Callable[[str], None], source: str = "content",
-                 extra: dict | None = None, after_write: Callable | None = None) -> dict:
+                 extra: dict | None = None, after_write: Callable | None = None,
+                 template_update: Callable[[dict], dict] | None = None) -> dict:
     """allowMerge 的整篇提交；返回 {revision, merged, changeId, changedBy, markdownContent?, noop?}。"""
     from app.documents import _save_markdown
 
@@ -325,8 +326,13 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                     current = connection.execute("SELECT revision FROM documents WHERE id=%s", (document_id,)).fetchone()
                     if int(current["revision"]) != revision:
                         raise _Retry()
+                    template = None
+                    if template_update is not None:
+                        # S6：图表/测试结果在写锁内基于当前 format_template 追加，不覆盖他人同时写入的图片。
+                        raw = connection.execute("SELECT format_template FROM documents WHERE id=%s", (document_id,)).fetchone()[0]
+                        template = template_update(dict(json.loads(raw) if isinstance(raw, str) else (raw or {})))
                     change_id = _save_markdown(connection, document_id, merged, revision, kind=kind, merged=merged_flag,
-                                               client_save_key=client_save_key, request_hash=rhash)
+                                               client_save_key=client_save_key, request_hash=rhash, format_template=template)
                     if after_write is not None:
                         after_write(connection, revision + 1)
                     data = {"revision": revision + 1, "merged": merged_flag, "changeId": str(change_id),

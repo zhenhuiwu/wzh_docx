@@ -2,9 +2,13 @@
 import { computed, onMounted, ref } from "vue";
 import DOMPurify from "dompurify";
 import { getDocumentVersion, listDocumentVersions, restoreDocumentVersion, type DocumentContentResult, type DocumentVersion, type DocumentVersionDetail } from "../api/documents";
+import { ApiError } from "../api/client";
+import { revisionConflictText } from "../saveModel";
 
 const props = defineProps<{ documentId: string; revision: number; restoreBlockedReason?: string }>();
-const emit = defineEmits<{ close: []; restored: [result: DocumentContentResult]; busy: [value: boolean] }>();
+const emit = defineEmits<{ close: []; restored: [result: DocumentContentResult]; busy: [value: boolean]; refresh: [] }>();
+// S6：恢复是严格接口；409 时按 details 说明谁改了，并提供“刷新版本列表”（02 §3.7 第 11 条）。
+const staleRestore = ref(false);
 const items = ref<DocumentVersion[]>([]);
 const offset = ref(0);
 const hasMore = ref(false);
@@ -51,9 +55,14 @@ async function load(next = 0) {
 async function restore() {
   if (props.restoreBlockedReason) return;
   if (!detail.value || restoring.value || detail.value.revision === props.revision) return;
-  restoring.value = true; emit("busy", true); detailError.value = "";
+  restoring.value = true; emit("busy", true); detailError.value = ""; staleRestore.value = false;
   try { emit("restored", await restoreDocumentVersion(props.documentId, detail.value.revision, props.revision)); }
-  catch (e) { detailError.value = message(e); }
+  catch (e) {
+    if (e instanceof ApiError && e.status === 409 && e.code === "REVISION_CONFLICT") {
+      staleRestore.value = true;
+      detailError.value = revisionConflictText(e.details as Parameters<typeof revisionConflictText>[0]);
+    } else detailError.value = message(e);
+  }
   finally { restoring.value = false; emit("busy", false); }
 }
 onMounted(() => void load());
@@ -73,7 +82,7 @@ onMounted(() => void load());
       </nav>
       <nav v-if="offset || hasMore" class="history-pages" aria-label="版本分页"><button type="button" class="ghost" :disabled="!offset || loading || restoring" @click="load(offset - 5)">上一页</button><button type="button" class="ghost" :disabled="!hasMore || loading || restoring" @click="load(offset + 5)">下一页</button></nav>
       <p v-if="detailLoading" role="status">正在读取正文…</p>
-      <div v-if="detailError"><p class="history-error" role="alert">{{ detailError }}</p><button v-if="!detail" type="button" class="ghost" @click="load(offset)">重试</button></div>
+      <div v-if="detailError"><p class="history-error" role="alert">{{ detailError }}</p><button v-if="!detail" type="button" class="ghost" @click="load(offset)">重试</button><button v-else-if="staleRestore" type="button" class="ghost" @click="staleRestore = false; detailError = ''; emit('refresh'); load(0)">刷新版本列表</button></div>
       <template v-if="detail">
         <div class="version-preview" aria-label="历史版本正文" v-html="html"></div>
         <footer><p v-if="restoreBlockedReason" class="history-hint">{{ restoreBlockedReason }}</p><button type="button" class="primary" :disabled="restoring || detail.revision === revision || Boolean(restoreBlockedReason)" :title="restoreBlockedReason || undefined" @click="restore">{{ restoring ? '恢复中…' : '恢复此版本' }}</button></footer>

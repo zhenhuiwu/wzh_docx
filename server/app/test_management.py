@@ -22,7 +22,6 @@ from app.docx_parser import parse_docx
 from app.documents import _project_visible, _uuid
 from app.ai_capability import require_ai
 from app.errors import AppError
-from app.document_objects import revision_conflict
 from app.files import resolve_object
 from app.document_access import document_principal
 from app.identity import require_permission
@@ -93,6 +92,9 @@ class ResultsInsert(BaseModel):
     expectedRevision: int = Field(ge=0)
     headingIndex: int | None = Field(default=None, ge=0)
     caseIds: list[str] = Field(min_length=1, max_length=100)
+    # S6：opt-in 三方合并（01 §4.3）
+    allowMerge: bool = False
+    clientSaveKey: str | None = Field(default=None, min_length=8, max_length=80)
 
 
 def _envelope(request: Request, data: dict) -> dict:
@@ -734,7 +736,7 @@ def _selected_run(connection, task_id: str, run_id: str):
 
 @router.post("/test-tasks/{task_id}/documents/insert")
 def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> dict:
-    from app.documents import _admin, _check_word, _document_row, _insert_at, _save_markdown, _section_body
+    from app.documents import _admin, _check_word, _document_row, _insert_at, _save_markdown, _section_body, commit_derived, merge_base
     from app.test_executor import MissingInput, result_markdown
 
     require_permission(request, "tests.read")
@@ -766,9 +768,9 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
         existing = {item.get("caseId") for item in bindings if item.get("runId") == run["id"]}
         pending = [case for case in cases if case["caseId"] not in existing]
         already = len(cases) - len(pending)
+        merged = pending_saved = False
         if pending:
-            if document[12] != body.expectedRevision:
-                raise revision_conflict(connection, did, "文档已更新，请刷新后重新选择补充位置。")
+            document = merge_base(connection, document, body.expectedRevision, body.allowMerge, "文档已更新，请刷新后重新选择补充位置。")
             offset, level = len(document[7]), 1
             if body.headingIndex is not None:
                 heading, _, offset = _section_body(document[7], body.headingIndex)
@@ -778,6 +780,19 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
             except MissingInput as error:
                 raise AppError(422, "REPORT_EVIDENCE_MISSING", str(error)) from None
             updated = _insert_at(document[7], offset, content)
+            if body.allowMerge:
+                links = [{"runId": run["id"], "caseId": case["caseId"]} for case in pending]
+
+                def add_results(current: dict) -> dict:
+                    refs = {item.get("ref") for item in current.get("images", [])}
+                    known = {(item.get("runId"), item.get("caseId")) for item in current.get("testResults", [])}
+                    return {**current, "images": list(current.get("images", [])) + [item for item in pictures if item.get("ref") not in refs],
+                            "testResults": list(current.get("testResults", [])) + [item for item in links if (item["runId"], item["caseId"]) not in known]}
+                data = commit_derived(connection, actor, did, document, updated, kind="test_results", client_save_key=body.clientSaveKey,
+                                      images=pictures, template_update=add_results, extra={"run": run["id"], "cases": ids})
+                merged = bool(data["merged"])
+                pending_saved = True
+        if pending and not pending_saved:
             images = list(template.get("images", [])) + pictures
             _check_word(connection, document, updated, images=images)
             connection.execute("BEGIN IMMEDIATE")
@@ -789,7 +804,8 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
         connection.commit()
         current = _document_row(connection, did, actor.user_id, _admin(actor.roles))
         return _envelope(request, {"documentId": str(did), "projectId": str(current[1]), "documentName": current[2],
-                                  "revision": current[12], "insertedCount": len(pending), "alreadyInsertedCount": already})
+                                  "revision": current[12], "insertedCount": len(pending), "alreadyInsertedCount": already,
+                                  "merged": merged})
 
 
 @router.get("/test-tasks/{task_id}/report")

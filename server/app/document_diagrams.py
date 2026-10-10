@@ -17,7 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from app.config import ai_reasoning_kwargs, get_settings
 from app.db import connect
 from app.document_memory import load_task_memory
-from app.documents import _admin, _check_word, _content_result, _document_row, _insert_at, _save_markdown, _section_body, _uuid
+from app.documents import (_admin, _check_word, _content_result, _document_row, _insert_at, _merged_result, _save_markdown,
+                           _section_body, _uuid, commit_derived, merge_base)
 from app.ai_capability import require_ai
 from app.errors import AppError
 from app.document_objects import revision_conflict
@@ -102,6 +103,9 @@ class DiagramInsertBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     expectedRevision: int = Field(ge=0)
     headingIndex: int | None = Field(default=None, ge=0)
+    # S6：opt-in 三方合并（01 §4.3）
+    allowMerge: bool = False
+    clientSaveKey: str | None = Field(default=None, min_length=8, max_length=80)
 
 
 def _diagram_path(diagram_id: UUID, filename: str) -> Path:
@@ -254,11 +258,15 @@ def insert_diagram(request: Request, document_id: str, diagram_id: str, body: Di
     session = document_principal(request)
     did, gid = _uuid(document_id, "documentId"), _uuid(diagram_id, "diagramId")
     with connect() as connection:
-        row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
+        current_row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
         diagram = _diagram_row(connection, did, gid)
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(connection, did, "文档已更新，请刷新后重试。")
         ref = "docx-image:diagram-" + str(gid)
+        if ref in current_row[7] and not (body.allowMerge and body.clientSaveKey and connection.execute(
+                "SELECT 1 FROM document_changes WHERE document_id=%s AND actor_id=%s AND client_save_key=%s",
+                (did, session.user_id, body.clientSaveKey)).fetchone()):
+            # 同键重放由 commit_whole 返回第一次的结果；其余情况图表已在正文中。
+            raise AppError(409, "DIAGRAM_ALREADY_INSERTED", "这个图表已在文档中。")
+        row = merge_base(connection, current_row, body.expectedRevision, body.allowMerge, "文档已更新，请刷新后重试。")
         if ref in row[7]:
             raise AppError(409, "DIAGRAM_ALREADY_INSERTED", "这个图表已在文档中。")
         picture = _diagram_path(gid, "diagram.png")
@@ -268,8 +276,18 @@ def insert_diagram(request: Request, document_id: str, diagram_id: str, body: Di
         updated = _insert_at(row[7], offset, f"![{diagram['name']}]({ref})")
         template = dict(row[6] or {})
         images = list(template.get("images", []))
-        images.append({"ref": ref, "alt": diagram["name"], "data": base64.b64encode(picture.read_bytes()).decode("ascii"),
-                       "content_type": "image/png"})
+        image = {"ref": ref, "alt": diagram["name"], "data": base64.b64encode(picture.read_bytes()).decode("ascii"),
+                 "content_type": "image/png"}
+        images.append(image)
+        if body.allowMerge:
+            def add_image(current: dict) -> dict:
+                kept = [item for item in current.get("images", []) if item.get("ref") != ref]
+                return {**current, "images": kept + [image]}
+            data = commit_derived(connection, session, did, row, updated, kind="diagram", client_save_key=body.clientSaveKey,
+                                  images=[image], template_update=add_image, extra={"diagram": str(gid)})
+            result = _merged_result(request, connection, session, did, data)
+            result["data"]["formatTemplate"] = _document_row(connection, did, session.user_id, _admin(session.roles))[6]
+            return result
         _check_word(connection, row, updated, images=images)
         template["images"] = images
         _save_markdown(connection, did, updated, row[12], format_template=template, kind="diagram")

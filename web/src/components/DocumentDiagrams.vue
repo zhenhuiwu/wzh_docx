@@ -2,9 +2,10 @@
 import { computed, nextTick, onUnmounted, ref } from "vue";
 import { generateDocumentDiagram, insertDocumentDiagram, listDocumentDiagrams, type DocumentDiagram } from "../api/documentDiagrams";
 import type { DocumentContentResult, DocumentRecord } from "../api/documents";
+import { ApiError } from "../api/client";
 
 const props = defineProps<{ document: DocumentRecord; headings: { text: string }[]; headingIndex: number | null }>();
-const emit = defineEmits<{ inserted: [DocumentContentResult & { formatTemplate: Record<string, any> }]; busy: [boolean] }>();
+const emit = defineEmits<{ inserted: [DocumentContentResult & { formatTemplate: Record<string, any> }]; busy: [boolean]; conflict: [ApiError] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const instructionInput = ref<HTMLTextAreaElement | null>(null);
 const items = ref<DocumentDiagram[]>([]);
@@ -68,10 +69,14 @@ async function insert() {
   inserting.value = true;
   emit("busy", true);
   try {
-    const result = await insertDocumentDiagram(props.document.id, selected.value.id, props.document.revision, target());
+    // S6：与他人修改按块合并；改到同一段时进入冲突面板。
+    const result = await insertDocumentDiagram(props.document.id, selected.value.id, props.document.revision, target(), { allowMerge: true, clientSaveKey: crypto.randomUUID() });
     emit("inserted", result);
     dialog.value?.close();
-  } catch (value) { error.value = message(value); }
+  } catch (value) {
+    error.value = message(value);
+    if (value instanceof ApiError && value.code === "OBJECT_CONFLICT") emit("conflict", value);
+  }
   finally { inserting.value = false; emit("busy", false); }
 }
 function select(item: DocumentDiagram) { selected.value = item; kind.value = item.kind; imageError.value = false; }

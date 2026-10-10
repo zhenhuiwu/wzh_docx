@@ -101,7 +101,7 @@ def test_stored_results_insert_into_current_word_with_evidence_versions_and_guar
             (folder / "full.png").write_bytes(png)
             inserted = client.post(url, json=body, headers=headers)
             assert inserted.status_code == 200, inserted.text
-            assert inserted.json()["data"] == {"documentId": did, "projectId": str(projects[0]), "documentName": "测试结果文档", "revision": 2, "insertedCount": 3, "alreadyInsertedCount": 0}
+            assert inserted.json()["data"] == {"documentId": did, "projectId": str(projects[0]), "documentName": "测试结果文档", "revision": 2, "insertedCount": 3, "alreadyInsertedCount": 0, "merged": False}
             current = client.get(f"/api/v1/documents/{did}").json()["data"]
             assert current["originalDocxFileId"] == str(stored.id)
             assert "用户已编辑的正文。" in current["markdownContent"]
@@ -145,10 +145,20 @@ def test_stored_results_insert_into_current_word_with_evidence_versions_and_guar
             assert again.status_code == 200 and again.json()["data"]["insertedCount"] == 1
             reinserted = client.get(f"/api/v1/documents/{did}").json()["data"]
             assert reinserted["markdownContent"].index("实测记录") > reinserted["markdownContent"].index("# 后续章节")
+            # 用例 17（S6）：他人改了别处后，用旧 expectedRevision 补写测试结果 → allowMerge 合并成功。
+            other_edit = client.patch(f"/api/v1/documents/{did}/content", json={"expectedRevision": 4, "markdownContent": reinserted["markdownContent"].replace("用户已编辑的正文。", "并发修改的正文。")}, headers=headers)
+            assert other_edit.status_code == 200, other_edit.text
+            assert client.post(url, json={**body, "expectedRevision": 4, "headingIndex": 0, "caseIds": [case_ids[1]]}, headers=headers).status_code == 409
+            merged = client.post(url, json={**body, "expectedRevision": 4, "headingIndex": 0, "caseIds": [case_ids[1]], "allowMerge": True, "clientSaveKey": "results-merge-1"}, headers=headers)
+            assert merged.status_code == 200, merged.text
+            assert merged.json()["data"]["merged"] is True and merged.json()["data"]["revision"] == 6
+            merged_doc = client.get(f"/api/v1/documents/{did}").json()["data"]
+            assert "并发修改的正文。" in merged_doc["markdownContent"] and "函数测试" in merged_doc["markdownContent"]
+            assert len(merged_doc["formatTemplate"]["testResults"]) == 2
             with connect() as connection:
                 connection.execute("UPDATE test_task_runs SET status='running' WHERE id=%s", (run_id,))
                 connection.commit()
-            assert client.post(url, json={**body, "expectedRevision": 4}, headers=headers).status_code == 409
-            assert client.get(f"/api/v1/documents/{did}").json()["data"]["revision"] == 4
+            assert client.post(url, json={**body, "expectedRevision": 6, "caseIds": [case_ids[2]]}, headers=headers).status_code == 409
+            assert client.get(f"/api/v1/documents/{did}").json()["data"]["revision"] == 6
     finally:
         clear_settings_cache()

@@ -137,7 +137,12 @@ export async function previewDocument(id: string): Promise<{ html: string }> {
   return body.data;
 }
 
+/** S6：派生写入接口的 opt-in 三方合并（01 §4.3）。 */
+export interface MergeRequest { allowMerge?: boolean; clientSaveKey?: string }
+
 export interface DocumentContentResult {
+  merged?: boolean;
+  changedBy?: Array<{ id: string; name: string; objects: number }>;
   markdownContent: string;
   revision: number;
   status: DocumentRecord["status"];
@@ -165,15 +170,15 @@ export async function restoreDocumentVersion(id: string, revision: number, expec
   if (!body?.data) throw new Error("恢复版本响应不完整。");
   return body.data;
 }
-export async function replaceDocumentSelection(id: string, expectedRevision: number, selection: DocumentSelection, content: string, instruction: string): Promise<DocumentContentResult> {
-  const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/selection`, { method: "POST", json: { expectedRevision, selection, content, instruction } });
+export async function replaceDocumentSelection(id: string, expectedRevision: number, selection: DocumentSelection, content: string, instruction: string, merge: MergeRequest = {}): Promise<DocumentContentResult> {
+  const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/selection`, { method: "POST", json: { expectedRevision, selection, content, instruction, ...merge } });
   if (!body?.data) throw new Error("替换选区响应不完整。");
   return body.data;
 }
 
-export async function addDocumentHeading(id: string, expectedRevision: number, afterIndex: number | null, placement: "child" | "sibling", title: string): Promise<DocumentContentResult> {
+export async function addDocumentHeading(id: string, expectedRevision: number, afterIndex: number | null, placement: "child" | "sibling", title: string, merge: MergeRequest = {}): Promise<DocumentContentResult> {
   const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/headings`, {
-    method: "POST", json: { expectedRevision, afterIndex, placement, title },
+    method: "POST", json: { expectedRevision, afterIndex, placement, title, ...merge },
   });
   if (!body?.data) throw new Error("新增标题响应不完整。");
   return body.data;
@@ -205,9 +210,9 @@ export async function clearWritingMemory(id: string): Promise<void> {
   await apiRequest(`/documents/${id}/memory`, { method: "DELETE" });
 }
 
-export async function applyDocumentEdits(id: string, expectedRevision: number, edits: DocumentEdit[], instruction: string): Promise<DocumentContentResult> {
+export async function applyDocumentEdits(id: string, expectedRevision: number, edits: DocumentEdit[], instruction: string, merge: MergeRequest = {}): Promise<DocumentContentResult> {
   const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/edits`, {
-    method: "POST", json: { expectedRevision, edits, instruction },
+    method: "POST", json: { expectedRevision, edits, instruction, ...merge },
   });
   if (!body?.data) throw new Error("全文修改响应不完整。");
   return body.data;
@@ -226,9 +231,9 @@ export async function streamDocumentSection(id: string, expectedRevision: number
   if (!completed) throw new Error("AI 编写中断，请重试。");
 }
 
-export async function insertDocumentSection(id: string, expectedRevision: number, headingIndex: number, content: string, mode: "append" | "replace" = "append", instruction = ""): Promise<DocumentContentResult> {
+export async function insertDocumentSection(id: string, expectedRevision: number, headingIndex: number, content: string, mode: "append" | "replace" = "append", instruction = "", merge: MergeRequest = {}): Promise<DocumentContentResult> {
   const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/sections/insert`, {
-    method: "POST", json: { expectedRevision, headingIndex, content, mode, instruction },
+    method: "POST", json: { expectedRevision, headingIndex, content, mode, instruction, ...merge },
   });
   if (!body?.data) throw new Error("插入正文响应不完整。");
   return body.data;

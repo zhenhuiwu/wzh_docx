@@ -264,6 +264,36 @@ async function settlePendingSaves(record: DocumentRecord) {
     noteAction("上次关闭页面前的修改已保存到服务器。");
   }
 }
+/** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
+async function refreshFromServer(): Promise<boolean> {
+  const record = document.value;
+  if (!record || isDirty.value || saving.value) return false;
+  const latest = await getDocument(record.id);
+  if (document.value !== record) return false;
+  if (latest.revision === record.revision) return true;
+  if (latest.formatTemplate) record.formatTemplate = latest.formatTemplate;
+  mergeBase = null;
+  await acceptContent({ markdownContent: latest.markdownContent, revision: latest.revision, status: latest.status });
+  void refreshConflicts();
+  return true;
+}
+function isRevisionConflict(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409 && error.code === "REVISION_CONFLICT";
+}
+/** S6：AI 采纳、标题、图表插入都带 allowMerge（01 §4.3），每次操作一个新键。 */
+function mergeRequest() { return { allowMerge: true, clientSaveKey: crypto.randomUUID() }; }
+function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }> }): boolean {
+  if (!result.merged) return false;
+  const text = changedByText(result.changedBy);
+  if (text) noteAction(text, 6000);
+  return true;
+}
+/** 派生写入 409 OBJECT_CONFLICT：冲突已存为副本，按主动保存处理（打开面板 + 重交可合并部分）。 */
+function derivedConflict(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.code !== "OBJECT_CONFLICT" || !document.value) return false;
+  handleSaveError(error, markdownContent.value, "manual", document.value.revision);
+  return true;
+}
 async function refreshConflicts() {
   const record = document.value;
   if (!record) return;
@@ -393,8 +423,9 @@ async function addHeading() {
   try {
     if (isDirty.value) await save();
     if (isDirty.value) return;
-    const result = await addDocumentHeading(document.value.id, document.value.revision, selectedHeading.value, headingPlacement.value, title);
+    const result = await addDocumentHeading(document.value.id, document.value.revision, selectedHeading.value, headingPlacement.value, title, mergeRequest());
     await acceptContent(result);
+    noteMerged(result);
     selectedHeading.value = result.headingIndex ?? null;
     headingTitle.value = "";
     aiDraft.value = "";
@@ -402,7 +433,7 @@ async function addHeading() {
     await nextTick();
     if (selectedHeading.value !== null) scrollToHeading(selectedHeading.value);
   } catch (error) {
-    headingError.value = messageOf(error);
+    if (!derivedConflict(error)) headingError.value = messageOf(error);
   } finally {
     addingHeading.value = false;
   }
@@ -648,35 +679,41 @@ async function insertSection(insertMode: "append" | "replace") {
   const previousContent = savedContent.value;
   const id = document.value.id;
   const instruction = draftInstruction;
+  let merged = false;
   try {
     if (aiScope.value === "selection") {
       if (!draftSelection) throw new Error("请重新选择正文并生成。");
-      const result = await replaceDocumentSelection(document.value.id, document.value.revision, draftSelection, aiDraft.value, instruction);
+      const result = await replaceDocumentSelection(document.value.id, document.value.revision, draftSelection, aiDraft.value, instruction, mergeRequest());
       clearAiDraft();
       await acceptContent(result);
+      merged = noteMerged(result);
       aiScope.value = "section";
       void refreshMemory();
     } else if (aiScope.value === "document") {
       if (!aiComplete.value || !aiEdits.value.length) throw new Error("全文草稿尚未完成，请重新生成。");
-      const result = await applyDocumentEdits(document.value.id, document.value.revision, aiEdits.value, instruction);
+      const result = await applyDocumentEdits(document.value.id, document.value.revision, aiEdits.value, instruction, mergeRequest());
       clearAiDraft();
       await acceptContent(result);
+      merged = noteMerged(result);
       aiScope.value = "document";
       void refreshMemory();
     } else if (selectedHeading.value !== null) {
-      const result = await insertDocumentSection(document.value.id, document.value.revision, selectedHeading.value, aiDraft.value, insertMode, instruction);
+      const result = await insertDocumentSection(document.value.id, document.value.revision, selectedHeading.value, aiDraft.value, insertMode, instruction, mergeRequest());
       clearAiDraft();
       await acceptContent(result);
+      merged = noteMerged(result);
       await nextTick();
       scrollToHeading(selectedHeading.value);
       void refreshMemory();
     }
-    if (document.value?.id === id && !isDirty.value && phase.value === "ready") {
+    // 合并了他人修改时不提供“撤回 AI 修改”：撤回会用采纳前的全文覆盖他人的修改（撤回是严格接口，01 §8.2 用例 18）。
+    if (document.value?.id === id && !isDirty.value && phase.value === "ready" && !merged) {
       aiUndo.value = { id, content: previousContent, revision: document.value.revision };
     }
     clearAiDraft();
   } catch (error) {
-    aiError.value = messageOf(error);
+    if (derivedConflict(error)) clearAiDraft();
+    else aiError.value = messageOf(error);
   } finally {
     aiInserting.value = false;
     if (editor.value) editor.value.contentEditable = String(editable.value);
@@ -693,13 +730,15 @@ async function undoAiChange() {
     await acceptContent(result);
     void refreshMemory();
   } catch (error) {
-    noteAction(`撤回失败：${messageOf(error)}`, 8000);
+    // 撤回是严格接口（用例 18）：他人更新后不能撤回，说明是谁改的。
+    if (isRevisionConflict(error)) { aiUndo.value = null; noteAction(`不能撤回：${revisionConflictText(error.details).replace("请刷新后重试。", "撤回会覆盖这些修改。")}`, 8000); }
+    else noteAction(`撤回失败：${messageOf(error)}`, 8000);
   } finally {
     undoingAi.value = false;
     if (editor.value) editor.value.contentEditable = String(editable.value);
   }
 }
-async function loadOriginal() {
+async function loadOriginal(retried = false): Promise<void> {
   if (!document.value) return;
   originalController?.abort();
   const controller = new AbortController();
@@ -713,6 +752,11 @@ async function loadOriginal() {
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
+      // 版式预览是严格接口：他人刚更新过时刷新到最新正文后自动重试一次（02 §3.7 第 11 条）。
+      if (response.status === 409 && payload?.error?.code === "REVISION_CONFLICT" && !retried && !controller.signal.aborted && await refreshFromServer().catch(() => false)) {
+        if (originalController === controller) return loadOriginal(true);
+        return;
+      }
       throw new Error(payload?.error?.message || "版式预览暂时不可用。");
     }
     const blob = await response.blob();
@@ -846,7 +890,8 @@ async function restoreLocalDraft() {
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
     await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
-    if (!blocked.value) await refreshEditorFormatting(false);
+    // 编辑区按服务器正文重绘（草稿条存在时 refreshEditorFormatting 会被锁住）。
+    if (!blocked.value && !isDirty.value && document.value === record) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
     if (!blocked.value) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId);
       localDrafts.value = localDrafts.value.filter(item => item !== draft);
@@ -908,11 +953,12 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       record.revision = result.revision;
       record.status = result.status;
       record.markdownContent = serverText;
+      let rerender = false;
       if (!typedNewer) {
         mergeBase = null;
         markdownContent.value = serverText;
-        // 合并带进了别人的修改：编辑区按服务器正文重绘。
-        if (changedText) layoutNeedsRefresh = true;
+        // 合并带进了别人的修改：编辑区按服务器正文重绘（不受 AI/草稿锁影响，否则编辑区会停在旧内容上）。
+        rerender = changedText;
       } else if (changedText) {
         // 编辑区有更新的输入，不能替换；下次保存仍以编辑区原基准合并（同段落会再次冲突，新冲突取代旧的）。
         mergeBase = editor?.base ?? base;
@@ -931,7 +977,8 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       savedAt.value = Date.now();
       persistLocalDraft();
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
-      if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
+      if (rerender && !isDirty.value) await acceptContent({ markdownContent: serverText, revision: record.revision, status: record.status });
+      else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
       if (current()) handleSaveError(error, content, trigger, baseRevision ?? mergeBase ?? record.revision);
     } finally {
@@ -1115,6 +1162,7 @@ async function acceptDiagram(result: DocumentContentResult & { formatTemplate: R
   document.value.formatTemplate = result.formatTemplate;
   clearAiDraft();
   await acceptContent(result);
+  noteMerged(result);
 }
 async function leaveDocument(to?: RouteLocationNormalized) {
   if (leaveBypass) { leaveBypass = false; return true; }
@@ -1251,10 +1299,18 @@ async function handleExport() {
   exporting.value = true;
   exportError.value = "";
   try {
-    const result = await exportDocument(document.value.id, document.value.revision);
+    let result: { fileId: string };
+    try {
+      result = await exportDocument(document.value.id, document.value.revision);
+    } catch (error) {
+      // 导出是严格接口：他人刚更新过时先刷新到最新正文，再自动重试一次（02 §3.7 第 11 条）。
+      if (!isRevisionConflict(error) || !(await refreshFromServer())) throw error;
+      noteAction(`${revisionConflictText(error.details).replace("请刷新后重试。", "")}已刷新到最新内容并导出。`, 6000);
+      result = await exportDocument(document.value!.id, document.value!.revision);
+    }
     const link = window.document.createElement("a");
     link.href = `/api/v1/files/${result.fileId}/content`;
-    link.download = `${document.value.name}.docx`;
+    link.download = `${document.value!.name}.docx`;
     window.document.body.appendChild(link);
     link.click();
     link.remove();
@@ -1381,13 +1437,13 @@ onUnmounted(() => {
         <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
         <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
       </div>
-      <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" />
+      <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" @conflict="derivedConflict" />
       <div class="workspace" :class="{ 'original-mode': mode !== 'edit', 'ai-open': mode === 'edit' && aiOpen, 'history-open': historyOpen || (mode === 'edit' && conflictOpen) }">
         <div v-if="mode !== 'edit'" class="original-viewer">
           <div v-if="originalPhase === 'loading'" class="preview-state">正在使用 Word 生成{{ mode === 'layout' ? '编辑稿' : '原稿' }}预览...</div>
           <div v-else-if="originalPhase === 'error'" class="preview-state" role="alert">
             <p>{{ originalError }}</p>
-            <button type="button" class="ghost" @click="loadOriginal">重试预览</button>
+            <button type="button" class="ghost" @click="loadOriginal()">重试预览</button>
           </div>
           <div v-else class="pdf-viewer">
             <div class="page-controls" aria-label="Word 翻页">
@@ -1480,7 +1536,7 @@ onUnmounted(() => {
         <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="document.id" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
           @close="conflictOpen = false" @resolved="acceptResolution" @count="conflictSummary = { mineOpen: $event, allOpen: conflictSummary?.allOpen ?? null }" />
-        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" />
+        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
