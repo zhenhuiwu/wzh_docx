@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 from contextlib import nullcontext
 import secrets
@@ -371,6 +372,18 @@ def _locked(connection, key: str) -> bool:
     return int(row["failed_count"]) >= _FAILURE_LIMIT
 
 
+def _retry_after(connection, key: str) -> int:
+    """Whole seconds until the failure window of ``key`` ends (at least 1)."""
+    row = connection.execute(
+        "select window_started_at from login_guards where account_key = %s",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return 1
+    remaining = row["window_started_at"] + _FAILURE_WINDOW - _now()
+    return max(1, math.ceil(remaining.total_seconds()))
+
+
 def _record_failure(key: str) -> None:
     with connect() as connection:
         with connection.transaction():
@@ -510,7 +523,8 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
     key = account_key(cleaned)
     with connect() as connection:
         if _locked(connection, key):
-            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。")
+            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。",
+                           retry_after=_retry_after(connection, key))
         row = connection.execute(
             """
             select id, password_hash, status
@@ -573,7 +587,8 @@ def change_password(request: Request, body: PasswordBody) -> Response:
     guard = password_change_guard(principal.user_id)
     with connect() as connection:
         if _locked(connection, guard):
-            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请 10 分钟后再试。")
+            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请稍后再试。",
+                           retry_after=_retry_after(connection, guard))
         row = connection.execute(
             "select password_hash from users where id = %s",
             (principal.user_id,),
