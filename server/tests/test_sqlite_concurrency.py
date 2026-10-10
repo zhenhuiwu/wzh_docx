@@ -123,9 +123,17 @@ def test_five_writers_on_large_document_all_succeed(members, monkeypatch):  # no
             login = own.post("/api/v1/auth/login", json={"account": accounts[index], "password": PASSWORD},
                              headers={"X-CSRF-Token": token})
             mine = text.replace(paragraphs[1000 * (index + 1)], f"并发{index}修改。")
-            results.append(own.patch(f"/api/v1/documents/{document['id']}/content",
-                                     json={"expectedRevision": 1, "markdownContent": mine, "allowMerge": True},
-                                     headers={"X-CSRF-Token": login.json()["data"]["csrfToken"]}))
+            # 测试复测 N1：CPU 饱和时合并重试可能用尽，返回可重试的 503 DATABASE_BUSY（带 Retry-After）。
+            # 与前端保存队列一样按 Retry-After 退避重试（同一个 clientSaveKey），最多 3 次；数据不能丢。
+            key = f"w29-{index}-key"
+            for attempt in range(4):
+                response = own.patch(f"/api/v1/documents/{document['id']}/content",
+                                     json={"expectedRevision": 1, "markdownContent": mine, "allowMerge": True, "clientSaveKey": key},
+                                     headers={"X-CSRF-Token": login.json()["data"]["csrfToken"]})
+                if response.status_code != 503 or response.json()["error"]["code"] != "DATABASE_BUSY" or attempt == 3:
+                    break
+                time.sleep(float(response.headers.get("Retry-After", "1")))
+            results.append(response)
 
     threads = [threading.Thread(target=run, args=(index,)) for index in range(5)]
     for thread in threads:
