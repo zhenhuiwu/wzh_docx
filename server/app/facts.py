@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
 from app.errors import AppError
-from app.identity import require_permission, require_session
+from app.identity import require_csrf, require_session
+from app.permissions import has_permission
 from app.knowledge import _admin, _can_see, _require_base
 from app.projects import require_project_owner
 from app.models import format_timestamp
@@ -72,6 +73,30 @@ def _typed_value(text: str | None) -> str | None:
 def _auditor(roles) -> bool:
     """全局审计员：只读接口按可见处理（写接口不用）。"""
     return "auditor" in roles
+
+
+def _writer(request: Request):
+    """写接口：先只验登录与 CSRF；项目可见性（非成员 404）在前，权限（403）在后，避免向非成员暴露项目存在。"""
+    actor = require_session(request)
+    require_csrf(request, actor)
+    return actor
+
+
+def _require(actor, permission: str) -> None:
+    if not has_permission(actor.roles, permission):
+        raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
+
+
+def _writable_project(connection, project_id: UUID, actor, admin: bool, permission: str) -> dict:
+    """非成员写：404；全局审计员能看到项目，写时仍按 403；成员缺权限：403。"""
+    try:
+        project = _visible_project(connection, project_id, actor.user_id, admin)
+    except AppError:
+        if _auditor(actor.roles) and connection.execute("select 1 from projects where id = %s", (project_id,)).fetchone():
+            raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。") from None
+        raise
+    _require(actor, permission)
+    return project
 
 
 def _visible_project(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict:
@@ -280,7 +305,7 @@ def list_facts(
 
 @router.post("/projects/{project_id}/facts", status_code=201)
 def create_candidate(project_id: str, request: Request, body: FactCreateBody) -> dict[str, object]:
-    actor = require_permission(request, "facts.edit")
+    actor = _writer(request)
     target = _uuid(project_id, "projectId")
     key = body.key.strip()
     label = body.label.strip()
@@ -296,7 +321,7 @@ def create_candidate(project_id: str, request: Request, body: FactCreateBody) ->
     admin = _admin(actor.roles)
     with connect() as connection:
         with connection.transaction():
-            _visible_project(connection, target, actor.user_id, admin)
+            _writable_project(connection, target, actor, admin, "facts.edit")
             sources = _usable_sources(connection, source_ids, actor.user_id, admin, target)
             if not sources and not body.decisionReason.strip():
                 raise AppError(422, "VALIDATION_FAILED", "请填写来源或人工确认依据。")
@@ -337,7 +362,7 @@ def create_candidate(project_id: str, request: Request, body: FactCreateBody) ->
 
 @router.patch("/facts/{fact_id}")
 def revise_fact(fact_id: str, request: Request, body: FactPatchBody) -> dict[str, object]:
-    actor = require_permission(request, "facts.edit")
+    actor = _writer(request)
     target = _uuid(fact_id, "factId")
     if len(body.decisionReason) > 1000:
         raise AppError(422, "VALIDATION_FAILED", "依据不能超过 1000 个字。")
@@ -352,7 +377,7 @@ def revise_fact(fact_id: str, request: Request, body: FactPatchBody) -> dict[str
             fact = connection.execute("select * from facts where id = %s", (target,)).fetchone()
             if fact is None:
                 raise AppError(404, "NOT_FOUND", "没有这个事实。")
-            _visible_project(connection, fact["project_id"], actor.user_id, admin)
+            _writable_project(connection, fact["project_id"], actor, admin, "facts.edit")
             if int(fact["revision"]) != body.expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "这个事实刚被改过。", current_revision=int(fact["revision"]))
             sources = _usable_sources(connection, source_ids, actor.user_id, admin, fact["project_id"])
@@ -391,7 +416,7 @@ def revise_fact(fact_id: str, request: Request, body: FactPatchBody) -> dict[str
 
 @router.post("/facts/{fact_id}/confirm")
 def confirm_fact(fact_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
-    actor = require_permission(request, "facts.confirm")
+    actor = _writer(request)
     target = _uuid(fact_id, "factId")
     if not body.reason.strip() or len(body.reason) > 1000:
         raise AppError(422, "VALIDATION_FAILED", "请填写不超过 1000 个字的确认说明。")
@@ -401,7 +426,7 @@ def confirm_fact(fact_id: str, request: Request, body: ReasonBody) -> dict[str, 
             fact = connection.execute("select * from facts where id = %s for update", (target,)).fetchone()
             if fact is None:
                 raise AppError(404, "NOT_FOUND", "没有这个事实。")
-            _visible_project(connection, fact["project_id"], actor.user_id, admin)
+            _writable_project(connection, fact["project_id"], actor, admin, "facts.confirm")
             if int(fact["revision"]) != body.expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "这个事实刚被改过。", current_revision=int(fact["revision"]))
             current = connection.execute(
@@ -483,13 +508,13 @@ def list_bindings(project_id: str, request: Request) -> dict[str, object]:
 
 @router.put("/projects/{project_id}/knowledge-bindings")
 def set_bindings(project_id: str, request: Request, body: BindingBody) -> dict[str, object]:
-    actor = require_permission(request, "projects.manage")
+    actor = _writer(request)
     target = _uuid(project_id, "projectId")
     admin = _admin(actor.roles)
     base_ids = [_uuid(item, "baseIds") for item in body.baseIds]
     with connect() as connection:
         with connection.transaction():
-            project = _visible_project(connection, target, actor.user_id, admin)
+            project = _writable_project(connection, target, actor, admin, "projects.manage")
             require_project_owner(connection, actor, target)
             if int(project["revision"]) != body.expectedProjectRevision:
                 raise AppError(409, "REVISION_CONFLICT", "这个项目刚被改过。", current_revision=int(project["revision"]))

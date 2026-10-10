@@ -121,6 +121,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="确认执行（默认只检查）")
     parser.add_argument("--service-stopped", action="store_true", help="非交互运行时声明：已人工确认所有使用该库的服务都已停止")
     args = parser.parse_args(argv)
+    path = _database_path()
+    if args.yes and path.exists():
+        # 终验可顺手做：能检测到服务在运行时，在要求输入 yes 之前就拒绝（不让人白确认一次）
+        connection = sqlite3.connect(path, timeout=30)
+        try:
+            busy = _in_use(path, connection)
+        finally:
+            connection.close()
+        if busy:
+            print(f"服务似乎正在运行（{busy}）。请先停止使用该库的服务，再执行回滚。", file=sys.stderr)
+            return 2
     if args.yes and not args.service_stopped:
         # 旧版本/中间版本的服务没有运行标记、空闲时也查不到，必须人工确认
         prompt = "旧版本服务没有运行标记，空闲时检测不到。确认所有使用该库的服务都已停止，请输入 yes："
@@ -130,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         if input(prompt).strip().lower() != "yes":
             print("已取消，库未改动。")
             return 2
-    return rollback(_database_path(), args.yes)
+    return rollback(path, args.yes)
 
 
 if __name__ == "__main__":

@@ -205,3 +205,38 @@ def test_hidden_knowledge_base_is_not_copied(client: TestClient) -> None:
             "select count(*) as total from facts where fact_key in ('leaked', 'from-secret')"
         ).fetchone()
     assert copied["total"] == 0
+
+
+def test_non_member_writes_get_404_member_without_permission_gets_403(client: TestClient) -> None:
+    """终验可顺手做：非成员写事实/知识库关联返回 404（不暴露项目存在），成员但无权限返回 403。"""
+    admin_id = _user("facts-404-admin", ["system_admin"])
+    csrf = _login(client, "facts-404-admin")
+    project = client.post("/api/v1/projects", json={"name": "事实权限", "ownerId": admin_id, "status": "active"},
+                          headers={"X-CSRF-Token": csrf, "Idempotency-Key": "facts-404-project"})
+    project_id = project.json()["data"]["id"]
+    created = client.post(f"/api/v1/projects/{project_id}/facts",
+                          json={"key": "software_version", "label": "软件版本", "value": "1.0", "decisionReason": "人工登记"},
+                          headers={"X-CSRF-Token": csrf})
+    assert created.status_code == 201, created.text
+    fact = created.json()["data"]
+    member = str(create_user(account="facts-404-member", name="成员", password=PASSWORD, roles=[], allow_no_roles=True))
+    revision = client.get(f"/api/v1/projects/{project_id}").json()["data"]["revision"]
+    added = client.put(f"/api/v1/projects/{project_id}/members/{member}",
+                       json={"userId": member, "role": "editor", "expectedProjectRevision": revision}, headers={"X-CSRF-Token": csrf})
+    assert added.status_code == 200, added.text
+    project_revision = client.get(f"/api/v1/projects/{project_id}").json()["data"]["revision"]
+    create_user(account="facts-404-outsider", name="外人", password=PASSWORD, roles=[], allow_no_roles=True)
+    create_user(account="facts-404-creator", name="创建者", password=PASSWORD, roles=["project_creator"])
+
+    def writes(token: str) -> list[int]:
+        headers = {"X-CSRF-Token": token}
+        return [
+            client.post(f"/api/v1/projects/{project_id}/facts", json={"key": "k2", "label": "名称", "value": "v", "decisionReason": "r"}, headers=headers).status_code,
+            client.patch(f"/api/v1/facts/{fact['id']}", json={"expectedRevision": fact["revision"], "value": "2", "decisionReason": "r"}, headers=headers).status_code,
+            client.post(f"/api/v1/facts/{fact['id']}/confirm", json={"expectedRevision": fact["revision"], "reason": "r"}, headers=headers).status_code,
+            client.put(f"/api/v1/projects/{project_id}/knowledge-bindings", json={"baseIds": [], "expectedProjectRevision": project_revision}, headers=headers).status_code,
+        ]
+
+    assert writes(_login(client, "facts-404-outsider")) == [404, 404, 404, 404]
+    assert writes(_login(client, "facts-404-creator")) == [404, 404, 404, 404]
+    assert writes(_login(client, "facts-404-member")) == [403, 403, 403, 403]

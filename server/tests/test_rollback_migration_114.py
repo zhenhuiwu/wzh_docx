@@ -123,3 +123,37 @@ def test_main_requires_manual_confirmation(tmp_path, monkeypatch, capsys):
         assert COLUMN not in _columns(path)
     finally:
         config.get_settings.cache_clear()
+
+
+def test_main_refuses_before_asking_yes_when_service_running(tmp_path, monkeypatch, capsys):
+    """终验可顺手做：检测得到服务在运行时，在要求输入 yes 之前就拒绝（不调用 input）。"""
+    import subprocess
+    import sys
+
+    from app import config
+    from app.db import migrate
+    from app.rollback_migration_114 import main
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        holder = subprocess.Popen([sys.executable, "-c", (
+            "import time; from pathlib import Path; from app import service_lock; "
+            f"service_lock.acquire(Path({str(path)!r})); print('ready', flush=True); time.sleep(60)")],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout.readline().strip() == "ready"
+            monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+            asked = []
+            monkeypatch.setattr("builtins.input", lambda prompt="": asked.append(prompt) or "yes")
+            assert main(["--yes"]) == 2
+            assert asked == []
+            assert "请先停止" in capsys.readouterr().err
+            assert COLUMN in _columns(path)
+        finally:
+            holder.terminate()
+            holder.wait(10)
+    finally:
+        config.get_settings.cache_clear()
