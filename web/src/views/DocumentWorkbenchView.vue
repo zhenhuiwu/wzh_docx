@@ -6,11 +6,9 @@ import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import DOMPurify from "dompurify";
-import TurndownService from "turndown";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-// @ts-expect-error The GFM plugin does not publish TypeScript declarations.
-import { gfm } from "turndown-plugin-gfm";
+import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
@@ -97,20 +95,7 @@ const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiIns
 const aiLocked = computed(() => skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value));
 const canUndoAi = computed(() => Boolean(aiUndo.value) && aiUndo.value?.id === document.value?.id && aiUndo.value?.revision === document.value?.revision && !isDirty.value && !aiLocked.value && !saving.value && !addingHeading.value);
 const canStartAi = computed(() => !skillOpen.value && !skillBusy.value && !historyOpen.value && !historyBusy.value && !aiBusy.value && !aiInserting.value && !saving.value && !refreshingEditor.value && !undoingAi.value && !addingHeading.value && !diagramBusy.value && !localDraft.value);
-const turndown = new TurndownService({ headingStyle: "atx", bulletListMarker: "-" });
-turndown.use(gfm);
-turndown.addRule("storedImage", {
-  filter: "img",
-  replacement: (_content, node) => {
-    const image = node as HTMLImageElement;
-    const source = image.getAttribute("src") || "";
-    const stored = (document.value?.formatTemplate.images || []).find(
-      (item: { ref: string; content_type: string; data: string }) =>
-        source === item.ref || source === `data:${item.content_type};base64,${item.data}`,
-    );
-    return stored ? `\n\n![${image.alt || "图片"}](${stored.ref})\n\n` : "";
-  },
-});
+const turndown = createTurndown(storedImageRule(() => document.value?.formatTemplate.images || []));
 function messageOf(error: unknown) {
   return error instanceof ApiError || error instanceof Error ? error.message : "暂时不能连接服务。";
 }
@@ -656,8 +641,9 @@ function onEditorInput(event?: Event) {
   aiUndo.value = null;
   const copy = editor.value.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
-  markdownContent.value = turndown.turndown(DOMPurify.sanitize(copy.innerHTML));
-  persistLocalDraft(copy.innerHTML);
+  const html = copy.innerHTML;
+  markdownContent.value = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
+  persistLocalDraft(html);
   editorVersion.value += 1;
   if (event instanceof InputEvent && ["insertParagraph", "insertFromDrop"].includes(event.inputType)) layoutNeedsRefresh = true;
   if (aiDraft.value) aiError.value = "文档已变化，请重新生成草稿。";
