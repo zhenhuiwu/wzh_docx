@@ -154,8 +154,9 @@ async function submitCreate() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadOwners(), load()]);
-  if (route.query.create === "1") await openCreate();
+  // 终验回归（低）：负责人列表接口要求 projects.create，没有新建权限的账号不请求（避免两条 403 控制台报错）
+  await Promise.all([canCreate.value ? loadOwners() : Promise.resolve(), load()]);
+  if (route.query.create === "1" && canCreate.value) await openCreate();
 });
 </script>
 
