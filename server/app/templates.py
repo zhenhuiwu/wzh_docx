@@ -116,7 +116,7 @@ def _admin(roles: tuple[str, ...]) -> bool:
 @router.get("/templates")
 def list_templates(request: Request, page: int = 1, pageSize: int = 20, name: str = "") -> dict[str, object]:
     """列出所有模板组"""
-    session = require_permission(request, "templates.read")
+    require_permission(request, "templates.read")
     if page < 1 or not 1 <= pageSize <= 100:
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     page_size = pageSize
@@ -185,7 +185,7 @@ def list_templates(request: Request, page: int = 1, pageSize: int = 20, name: st
 @router.post("/templates")
 def create_template(request: Request, body: TemplateCreateBody) -> dict[str, object]:
     """创建模板组"""
-    session = require_permission(request, "templates.manage")
+    require_permission(request, "templates.manage")
 
     name = body.name.strip()
     category = body.category.strip()
@@ -247,7 +247,7 @@ def create_template(request: Request, body: TemplateCreateBody) -> dict[str, obj
 @router.get("/templates/{template_id}")
 def get_template(request: Request, template_id: str) -> dict[str, object]:
     """获取模板组详情"""
-    session = require_permission(request, "templates.read")
+    require_permission(request, "templates.read")
     tid = _uuid(template_id, "templateId")
 
     with connect() as conn:
@@ -286,7 +286,7 @@ def update_template(
     body: TemplatePatchBody
 ) -> dict[str, object]:
     """更新模板组"""
-    session = require_permission(request, "templates.manage")
+    require_permission(request, "templates.manage")
     tid = _uuid(template_id, "templateId")
 
     with connect() as conn:
@@ -373,7 +373,7 @@ def update_template(
 @router.get("/templates/{template_id}/documents")
 def list_template_documents(request: Request, template_id: str) -> dict[str, object]:
     """列出模板组中的文档"""
-    session = require_permission(request, "templates.read")
+    require_permission(request, "templates.read")
     tid = _uuid(template_id, "templateId")
 
     with connect() as conn:
@@ -413,7 +413,7 @@ def create_template_document(
     body: TemplateDocumentCreateBody
 ) -> dict[str, object]:
     """添加文档到模板组（上传 Word 并解析）"""
-    session = require_permission(request, "templates.manage")
+    require_permission(request, "templates.manage")
     tid = _uuid(template_id, "templateId")
     word_file_id = _uuid(body.wordFileId, "wordFileId")
 
@@ -550,7 +550,7 @@ def update_template_structure(request: Request, document_id: str, body: Template
 @router.delete("/template-documents/{document_id}")
 def delete_template_document(request: Request, document_id: str) -> dict[str, object]:
     """从模板组中删除文档"""
-    session = require_permission(request, "templates.manage")
+    require_permission(request, "templates.manage")
     doc_id = _uuid(document_id, "documentId")
 
     with connect() as conn:

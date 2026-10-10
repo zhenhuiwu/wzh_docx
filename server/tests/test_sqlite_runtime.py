@@ -2,7 +2,6 @@
 
 from io import BytesIO
 from typing import ClassVar
-from uuid import uuid4
 
 from docx import Document
 from fastapi.testclient import TestClient

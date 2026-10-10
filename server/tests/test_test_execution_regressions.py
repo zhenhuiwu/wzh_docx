@@ -3,7 +3,6 @@
 import asyncio
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import Thread
 import struct
 import time

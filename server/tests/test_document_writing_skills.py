@@ -8,7 +8,7 @@ from app.config import get_settings
 from app.db import connect
 from app.identity import create_user
 from test_document_selection_api import descriptor
-from test_document_versions import version_context, login
+from test_document_versions import version_context, login  # noqa: F401 - pytest fixtures
 
 
 def create_skill(client, headers, name="本地编写规范"):

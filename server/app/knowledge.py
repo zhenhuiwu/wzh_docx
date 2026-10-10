@@ -184,7 +184,7 @@ def list_bases(request: Request, page: int = 1, pageSize: int = 10, name: str = 
 
 @router.post("/knowledge-bases", status_code=201)
 def create_base(request: Request, body: KnowledgeCreateBody) -> dict[str, object]:
-    actor = require_permission(request, "knowledge.manage")
+    require_permission(request, "knowledge.manage")
     name = body.name.strip()
     if not name or body.scope not in {"organization", "project"}:
         raise AppError(422, "VALIDATION_FAILED", "请填写名称和归属。")

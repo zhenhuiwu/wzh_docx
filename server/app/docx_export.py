@@ -64,7 +64,6 @@ def _word_blocks(doc, *, flat_lists: bool = False, outline_headings: bool = Fals
             blocks.append(_Block("table", [element]))
         elif isinstance(element, CT_P):
             paragraph = Paragraph(element, doc)
-            style = paragraph.style.name if paragraph.style else "Normal"
             text = paragraph.text.strip()
             listing = _list_info(paragraph)
             if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None and text:

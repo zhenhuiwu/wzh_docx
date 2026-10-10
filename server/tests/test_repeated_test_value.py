@@ -8,7 +8,7 @@ import pytest
 from app.test_browser_agent import BrowserSession
 from app.test_executor import MissingInput, _functional, _test_text, _value
 from app.test_management import _valid_step
-from test_browser_agent import neutral_service, ref
+from test_browser_agent import neutral_service, ref  # noqa: F401 - pytest fixtures
 
 
 def test_repeat_validation_and_existing_credentials():

@@ -191,7 +191,7 @@ def test_project_owner_choices_for_admin_are_paginated_and_minimal(client):
 
 def test_upload_scope_and_idempotency_include_metadata(client):
     owner = _user("core-owner", ["project_creator"])
-    outsider = _user("core-outsider", ["project_creator"])
+    _user("core-outsider", ["project_creator"])
     csrf = _login(client, "core-owner")
     first = _project(client, csrf, owner)
     second = _project(client, csrf, owner, "第二项目")
