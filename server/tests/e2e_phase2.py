@@ -1,10 +1,12 @@
 """阶段2 浏览器验收（S8）：1920×1080，非管理员账号。
 
-环境变量（测试 L5）：E2E_API（默认 http://127.0.0.1:8041/api/v1）、E2E_WEB（默认 http://127.0.0.1:5211）、
-E2E_SHOTS（验收截图目录）、E2E_OUT（失败截图与下载，默认系统临时目录/e2e_phase2）；
+环境变量（测试 L5 / 复测 N5）：E2E_API、E2E_WEB **必须设置**（不设直接报错，避免打到别人的服务）；
+E2E_SHOTS（验收截图目录，默认系统临时目录/e2e_phase2/shots，不再默认写协作目录）、
+E2E_OUT（失败截图与下载，默认系统临时目录/e2e_phase2）；
 DATABASE_URL / FILE_DATA_DIR 必须指向被测服务的同一个库（脚本直接建账号）。
 
 运行（先用 /tmp/wzh_phase2_run/live/start.sh 起服务）：
+    E2E_API=http://127.0.0.1:8041/api/v1 E2E_WEB=http://127.0.0.1:5211 E2E_SHOTS=/workspace/wzh_collab/screens/phase2 \
     DATABASE_URL=sqlite:////tmp/wzh_phase2_run/live/app.db FILE_DATA_DIR=/tmp/wzh_phase2_run/live/files \
         uv run python tests/e2e_phase2.py
 覆盖：成员可见项目与文档列表、非成员 404、438C 模板文档编辑保存与导出（失败提示在导出按钮旁）、“文档标识号”行可保存、
@@ -28,11 +30,11 @@ import httpx
 from playwright.sync_api import Page, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-# 测试 L5：地址与输出目录都可配置（默认值是开发机的 8041/5211）。
-API = os.environ.get("E2E_API", "http://127.0.0.1:8041/api/v1")
-WEB = os.environ.get("E2E_WEB", "http://127.0.0.1:5211")
-SHOTS = Path(os.environ.get("E2E_SHOTS", "/workspace/wzh_collab/screens/phase2"))
+# 测试 L5 / 复测 N5：地址必须显式给出；输出默认写系统临时目录。
+API = os.environ.get("E2E_API", "")
+WEB = os.environ.get("E2E_WEB", "")
 OUT = Path(os.environ.get("E2E_OUT", str(Path(tempfile.gettempdir()) / "e2e_phase2")))
+SHOTS = Path(os.environ.get("E2E_SHOTS", str(OUT / "shots")))
 PASSWORD = "E2e-phase2-pass-1"
 RUN = uuid.uuid4().hex[:6]
 results: list[tuple[str, bool, str]] = []
@@ -175,7 +177,14 @@ def pick_paragraphs(markdown: str, count: int) -> list[str]:
     return picked
 
 
+def require_targets() -> None:
+    missing = [name for name, value in (("E2E_API", API), ("E2E_WEB", WEB), ("DATABASE_URL", os.environ.get("DATABASE_URL", ""))) if not value]
+    if missing:
+        raise SystemExit(f"请设置环境变量 {', '.join(missing)}（被测服务的接口、前端地址和同一个数据库），脚本不再使用默认值。")
+
+
 def main() -> int:
+    require_targets()
     data = seed()
     markdown = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
     p_export, p_a, p_b, p_conflict, p_offline, p_member, p_upd, p_upd2, p_dup_a, p_dup_b, p_block, p_del = pick_paragraphs(markdown, 12)
