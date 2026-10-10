@@ -99,25 +99,111 @@ def _better(x: str, y: str, own_x: str, own_y: str) -> bool:
     return score >= SPLIT_SIMILARITY and score > _ratio(own_x, own_y)
 
 
+def _upper(a: str, b: str) -> float:
+    """相似度的廉价上界（用来剪枝）。"""
+    if a == b:
+        return 1.0
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return min(matcher.real_quick_ratio(), matcher.quick_ratio())
+
+
+def _assignment_value(weight: list[list[float]], banned: tuple[int, int] | None = None) -> float:
+    """最大权完全匹配的权值和（匈牙利算法，O(n^3)）。banned=(i, j) 时禁止这一对。"""
+    size = len(weight)
+    big = 1e9
+    cost = [[(big if banned == (i, j) else -weight[i][j]) for j in range(size)] for i in range(size)]
+    u, v = [0.0] * (size + 1), [0.0] * (size + 1)
+    match, way = [0] * (size + 1), [0] * (size + 1)
+    for i in range(1, size + 1):
+        match[0] = i
+        j0 = 0
+        minv, used = [float("inf")] * (size + 1), [False] * (size + 1)
+        while True:
+            used[j0] = True
+            i0, delta, j1 = match[j0], float("inf"), 0
+            for j in range(1, size + 1):
+                if not used[j]:
+                    cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j], way[j] = cur, j0
+                    if minv[j] < delta:
+                        delta, j1 = minv[j], j
+            for j in range(size + 1):
+                if used[j]:
+                    u[match[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if match[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            match[j0] = match[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    total = 0.0
+    for j in range(1, size + 1):
+        c = cost[match[j] - 1][j - 1]
+        if c >= big:
+            return float("-inf")
+        total -= c
+    return total
+
+
+def _positional_is_unique_best(a: list[str], b: list[str]) -> bool:
+    """审查 M3：先用全局相似度做最优匹配。权重 = 相似度（< 0.5 记 0，不相似的交叉对不算匹配）。
+    按位置配对必须是最大权匹配；且每个相似的位置对都必不可少（禁掉它后最优值严格下降），即没有打平的另一种配法。
+    否则（如模板化段落里插入的新段比原位那段更像）不拆开，整块作为结构冲突。"""
+    size = len(a)
+    weight = [[0.0] * size for _ in range(size)]
+    for i in range(size):
+        for j in range(size):
+            if i == j or _upper(a[i], b[j]) >= SPLIT_SIMILARITY:
+                score = _ratio(a[i], b[j])
+                weight[i][j] = score if score >= SPLIT_SIMILARITY else 0.0
+    identity = sum(weight[k][k] for k in range(size))
+    # 每个新块都不能有比原位那块更像（或一样像）的别的旧块：否则它多半来自那一块，按位置配会错位
+    for k in range(size):
+        floor = max(weight[k][k], SPLIT_SIMILARITY)
+        if any(weight[other][k] >= floor for other in range(size) if other != k):
+            return False
+    if not any(weight[i][j] for i in range(size) for j in range(size) if i != j):
+        return True  # 交叉对都不相似：按位置配对是唯一合理的配法
+    eps = 1e-9
+    if _assignment_value(weight) > identity + eps:
+        return False
+    for k in range(size):
+        if weight[k][k] and _assignment_value(weight, (k, k)) >= identity - eps:
+            return False
+    return True
+
+
+PAIR_EXACT_LIMIT = 40
+
+
 def _pairable(ops, a_blocks, b_blocks):
-    """审查 N1：块数相同的替换按位置逐块拆开前先核对配对是不是同一段：每一对要么相似（相似度 ≥ 0.5），
-    要么两块都不像区间里的其他块（原位整段改写）。否则（如删 A、改 B、插 X 得到的 [A,B]→[B',X]，B' 像 B）
-    改记为 replace_whole，整块作为一个 hunk，不按位置错配。"""
+    """审查 N1 / M3：块数相同的替换按位置逐块拆开前先核对配对：按位置配对必须是全局唯一最优（见上），
+    且每一对要么相似（≥ 0.5），要么是原位整段改写（与区间里别的块都不更像）。否则改记为 replace_whole，
+    整块作为一个 hunk（结构冲突），不按位置错配。超大区间（> PAIR_EXACT_LIMIT 块）退回逐对的错位检查。"""
     out = []
     for tag, i1, i2, j1, j2 in ops:
         if tag == "replace" and i2 - i1 == j2 - j1 > 1:
             size = i2 - i1
             a = [block.body for block in a_blocks[i1:i2]]
             b = [block.body for block in b_blocks[j1:j2]]
-            for k in range(size):
-                if _similar(a[k], b[k]):
-                    continue
-                # 不相似的一对（整段改写）只有在两块都不像本区间里别的块时才算“同一位置的改写”；
-                # 像别处的块（N1：[A,B]→[B',X] 里 B' 像 B）说明发生了错位，按位置配对会配错
-                if any(_better(a[other], b[k], a[k], b[k]) or _better(a[k], b[other], a[other], b[other])
-                       for other in range(size) if other != k):
+            if size <= PAIR_EXACT_LIMIT:
+                if not _positional_is_unique_best(a, b):
                     tag = "replace_whole"
-                    break
+            else:
+                for k in range(size):
+                    if _similar(a[k], b[k]):
+                        continue
+                    if any(_better(a[other], b[k], a[k], b[k]) or _better(a[k], b[other], a[other], b[other])
+                           for other in range(size) if other != k):
+                        tag = "replace_whole"
+                        break
         out.append((tag, i1, i2, j1, j2))
     return out
 

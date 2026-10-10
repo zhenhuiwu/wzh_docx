@@ -290,3 +290,32 @@ def test_migration_115_sql_is_idempotent(tmp_path, monkeypatch):
         assert migrate() == []
     finally:
         config.get_settings.cache_clear()
+
+
+def test_downgraded_author_cannot_append_snapshot(team):
+    """已定（审查建议 2 / 测试 K4-L）：作者被降为查看者后不能再存快照，返回 403。"""
+    client, did, users = team
+    details = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})
+    cid = details["conflictId"]
+    assert _mine(client, did, cid, 0, "B2。降级前。", "down-key-0001").status_code == 200
+    with connect() as connection:
+        connection.execute("UPDATE project_members SET role='viewer' WHERE user_id=%s", (users["editor2"],))
+        connection.commit()
+    denied = _mine(client, did, cid, 0, "B2。降级后。", "down-key-0002")
+    assert denied.status_code == 403, denied.text
+    [item] = _open_items(client, did)
+    assert item["mineLatest"]["markdown"] == "B2。降级前。"
+
+
+def test_snapshot_total_bytes_cap_per_conflict(team, monkeypatch):
+    """已定（审查建议 1）：每条冲突所有快照合计不超过上限（20MB），超过返回 422 SNAPSHOT_LIMIT。"""
+    client, did, _ = team
+    monkeypatch.setattr("app.document_commit.MAX_SNAPSHOT_BYTES_PER_CONFLICT", 30)
+    details = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})
+    cid = details["conflictId"]
+    assert _mine(client, did, cid, 0, "一二三四五", "cap-key-0001").status_code == 200  # 15 字节
+    over = _mine(client, did, cid, 0, "一二三四五六", "cap-key-0002")  # 再 18 字节 → 33 > 30
+    assert over.status_code == 422 and over.json()["error"]["code"] == "SNAPSHOT_LIMIT"
+    assert "20MB" in over.json()["error"]["message"]
+    # 同键重放不受上限影响
+    assert _mine(client, did, cid, 0, "一二三四五", "cap-key-0001").status_code == 200

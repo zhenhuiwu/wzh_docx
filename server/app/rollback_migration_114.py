@@ -85,6 +85,13 @@ def rollback(path: Path, apply: bool) -> int:
         filled = connection.execute(
             f"select count(*) from document_objects where {COLUMN} is not null"
         ).fetchone()[0] if has_column else 0
+        # 测试工程师：115（冲突快照表）还在时不能直接回滚 114——旧程序不认识 115，必须先回滚 115
+        later = connection.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'document_conflict_mine_snapshots'").fetchone() is not None
+        if later:
+            print("迁移 115（document_conflict_mine_snapshots 表）还在。请先运行 python -m app.rollback_migration_115 回滚 115，再回滚 114。",
+                  file=sys.stderr)
+            return 2
         print(f"数据库：{path}")
         print(f"迁移记录：{'有' if recorded else '无'}；{COLUMN} 列：{'有' if has_column else '无'}；其中有值的已删除对象 {filled} 个（回滚后丢失）。")
         busy = _in_use(path, connection)

@@ -1029,6 +1029,8 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
 
 
 MAX_SNAPSHOTS_PER_ITEM = 500
+# 审查建议 1（已定）：每条冲突所有快照合计不超过 20MB（按 UTF-8 字节）
+MAX_SNAPSHOT_BYTES_PER_CONFLICT = 20 * 1024 * 1024
 
 
 class MineSnapshotBody(BaseModel):
@@ -1049,6 +1051,8 @@ def save_mine_snapshot(request: Request, document_id: str, conflict_id: str, bod
         conflict = _load_conflict(connection, did, conflict_id)
         if str(conflict["actor_id"]) != str(principal.user_id):
             raise AppError(403, "FORBIDDEN", "只有提交这份修改的人可以保存冲突副本。")
+        # 已定：被降为没有编辑权限的作者不能再存快照（与处理冲突一致）
+        load_document(connection, did, principal.user_id, is_admin(principal), "edit")
         if connection.in_transaction:
             connection.commit()
         with write_transaction(connection):
@@ -1073,6 +1077,13 @@ def save_mine_snapshot(request: Request, document_id: str, conflict_id: str, bod
                         (str(conflict["id"]), body.itemIndex)).fetchone()["n"] >= MAX_SNAPSHOTS_PER_ITEM:
                     raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已保存太多份，请先在冲突面板处理。",
                                    details={"itemIndex": body.itemIndex})
+                if replayed is None:
+                    used = connection.execute(
+                        "SELECT COALESCE(SUM(LENGTH(CAST(markdown AS BLOB))), 0) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s",
+                        (str(conflict["id"]),)).fetchone()["n"]
+                    if used + len(body.markdown.encode("utf-8")) > MAX_SNAPSHOT_BYTES_PER_CONFLICT:
+                        raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已超过总大小上限（20MB），请先在冲突面板处理。",
+                                       details={"itemIndex": body.itemIndex, "totalBytes": int(used)})
                 snapshot = append_snapshot(connection, conflict_id=conflict["id"], item_index=body.itemIndex,
                                            actor=principal.user_id, markdown=body.markdown, key=body.clientSaveKey,
                                            tab_id=body.tabId, seq=body.seq)

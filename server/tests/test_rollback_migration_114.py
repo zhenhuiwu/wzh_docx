@@ -5,6 +5,17 @@ import sqlite3
 from app.rollback_migration_114 import COLUMN, VERSION, rollback
 
 
+def _migrate():
+    """迁移到最新后先回滚 115（114 回滚要求 115 已回滚）。"""
+    from app.db import migrate
+    from app.rollback_migration_115 import rollback as rollback_115
+
+    migrate()
+    from app.rollback_migration_114 import _database_path
+
+    assert rollback_115(_database_path(), apply=True) == 0
+
+
 def _columns(path):
     with sqlite3.connect(path) as connection:
         return {row[1] for row in connection.execute("pragma table_info(document_objects)")}
@@ -17,13 +28,12 @@ def _recorded(path):
 
 def test_rollback_114_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, capsys):
     from app import config
-    from app.db import migrate
 
     path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
     config.get_settings.cache_clear()
     try:
-        migrate()
+        _migrate()
         assert COLUMN in _columns(path) and _recorded(path) == 1
         assert rollback(path, apply=False) == 0
         assert COLUMN in _columns(path) and _recorded(path) == 1  # 只检查不改库
@@ -32,7 +42,7 @@ def test_rollback_114_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, cap
         assert list(tmp_path.glob("app.db.before-rollback-114-*.db"))
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        migrate()
+        _migrate()
         assert COLUMN in _columns(path) and _recorded(path) == 1
     finally:
         config.get_settings.cache_clear()
@@ -44,13 +54,12 @@ def test_rollback_114_refuses_while_service_running(tmp_path, monkeypatch, capsy
     import sys
 
     from app import config, service_lock
-    from app.db import migrate
 
     path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
     config.get_settings.cache_clear()
     try:
-        migrate()
+        _migrate()
         # 另起一个进程模拟正在运行的服务（持有运行标记）
         holder = subprocess.Popen([sys.executable, "-c", (
             "import sys, time; from pathlib import Path; from app import service_lock; "
@@ -81,13 +90,12 @@ def test_open_connection_counts_as_in_use(tmp_path, monkeypatch):
     import sys
 
     from app import config, service_lock
-    from app.db import migrate
 
     path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
     config.get_settings.cache_clear()
     try:
-        migrate()
+        _migrate()
         holder = subprocess.Popen([sys.executable, "-c", (
             "import sqlite3, time; c = sqlite3.connect(" + repr(str(path)) + "); c.execute('select 1 from document_objects limit 1').fetchall(); "
             "print('ready', flush=True); time.sleep(60)")], stdout=subprocess.PIPE, text=True)
@@ -107,14 +115,13 @@ def test_open_connection_counts_as_in_use(tmp_path, monkeypatch):
 def test_main_requires_manual_confirmation(tmp_path, monkeypatch, capsys):
     """终审建议：旧版本服务查不出来，--yes 非交互时必须另加 --service-stopped，否则不改库。"""
     from app import config
-    from app.db import migrate
     from app.rollback_migration_114 import main
 
     path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
     config.get_settings.cache_clear()
     try:
-        migrate()
+        _migrate()
         monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
         assert main(["--yes"]) == 2
         assert "--service-stopped" in capsys.readouterr().err
@@ -131,14 +138,13 @@ def test_main_refuses_before_asking_yes_when_service_running(tmp_path, monkeypat
     import sys
 
     from app import config
-    from app.db import migrate
     from app.rollback_migration_114 import main
 
     path = tmp_path / "app.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
     config.get_settings.cache_clear()
     try:
-        migrate()
+        _migrate()
         holder = subprocess.Popen([sys.executable, "-c", (
             "import time; from pathlib import Path; from app import service_lock; "
             f"service_lock.acquire(Path({str(path)!r})); print('ready', flush=True); time.sleep(60)")],
@@ -155,5 +161,23 @@ def test_main_refuses_before_asking_yes_when_service_running(tmp_path, monkeypat
         finally:
             holder.terminate()
             holder.wait(10)
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_rollback_114_refuses_while_115_present(tmp_path, monkeypatch, capsys):
+    """测试工程师：115 的表还在时拒绝回滚 114（退出码 2），提示先回滚 115；库不变。"""
+    from app import config
+    from app.db import migrate
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        assert rollback(path, apply=True) == 2
+        assert "rollback_migration_115" in capsys.readouterr().err
+        assert COLUMN in _columns(path) and _recorded(path) == 1
+        assert not list(tmp_path.glob("app.db.before-rollback-114-*.db"))
     finally:
         config.get_settings.cache_clear()
