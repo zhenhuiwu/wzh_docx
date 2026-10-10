@@ -250,3 +250,148 @@ def test_last_admin_and_disable_revoke_session(client: TestClient) -> None:
         jobs = connection.execute("select name from sqlite_master where type = 'table' and name = 'jobs'").fetchone()
     assert jobs is not None
     assert jobs["name"] == "jobs"
+
+
+# ---- 新建用户的全局角色（09 视觉分支审查《新建用户默认角色的后端建议》） ----
+
+
+def _create(client: TestClient, csrf: str, account: str, key: str, roles=None):
+    body = {"account": account, "name": "角色用例", "password": PASSWORD}
+    if roles is not None:
+        body["globalRoles"] = roles
+    return client.post(
+        "/api/v1/users",
+        json=body,
+        headers={"Idempotency-Key": key, "X-CSRF-Token": csrf},
+    )
+
+
+def _events(account: str) -> list[dict]:
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            select e.action, e.reason
+            from user_admin_events e join users u on u.id = e.user_id
+            where u.account_key = %s
+            order by e.created_at, e.action
+            """,
+            (account,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def test_create_without_roles_makes_project_member_only(client: TestClient) -> None:
+    _reset("dev04-norole")
+    csrf = _admin(client)
+    created = _create(client, csrf, "dev04-norole", "dev04-norole")
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["globalRoles"] == []
+    listed = client.get("/api/v1/users", params={"account": "dev04-norole"})
+    assert listed.json()["data"]["items"][0]["globalRoles"] == []
+    member = TestClient(client.app)
+    _login(member, "dev04-norole")
+    me = member.get("/api/v1/auth/me").json()["data"]
+    assert me["permissions"] == []
+    # 只看到自己是成员的项目：本分支 GET /projects 仍要求 projects.read（403）；
+    # phase2 S1 开放给成员后应返回 200 且只有自己加入的项目（这里一个都没有）。
+    projects = member.get("/api/v1/projects")
+    assert projects.status_code in {200, 403}
+    if projects.status_code == 200:
+        assert projects.json()["data"]["total"] == 0
+
+
+def test_create_rejects_unknown_role(client: TestClient) -> None:
+    _reset("dev04-badrole")
+    csrf = _admin(client)
+    created = _create(client, csrf, "dev04-badrole", "dev04-badrole", ["no_such"])
+    assert created.status_code == 422
+    assert created.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+def test_create_rejects_more_than_ten_roles(client: TestClient) -> None:
+    _reset("dev04-manyroles")
+    csrf = _admin(client)
+    created = _create(client, csrf, "dev04-manyroles", "dev04-manyroles", ["auditor"] * 11)
+    assert created.status_code == 422
+
+
+def test_only_system_admin_can_grant_system_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import permissions
+
+    # 一个拿到全部管理员权限、但本身不是 system_admin 的测试角色。
+    monkeypatch.setitem(
+        permissions._ROLE_PERMISSIONS,
+        "test_user_admin",
+        permissions._ROLE_PERMISSIONS["system_admin"],
+    )
+    _reset("dev04-useradmin")
+    _reset("dev04-granted")
+    create_user(account="dev04-useradmin", name="账号管理员", password=PASSWORD, roles=["auditor"])
+    with connect() as connection:
+        with connection.transaction():
+            row = connection.execute(
+                "select id from users where account_key = 'dev04-useradmin'"
+            ).fetchone()
+            connection.execute("delete from user_roles where user_id = %s", (row["id"],))
+            connection.execute(
+                "insert into user_roles (user_id, role) values (%s, 'test_user_admin')",
+                (row["id"],),
+            )
+    csrf = _login(client, "dev04-useradmin")
+    denied = _create(client, csrf, "dev04-granted", "dev04-granted", ["system_admin"])
+    assert denied.status_code == 403
+    assert "系统管理员" in denied.json()["error"]["message"]
+    allowed = _create(client, csrf, "dev04-granted", "dev04-granted-2", ["auditor"])
+    assert allowed.status_code == 201, allowed.text
+    _reset("dev04-useradmin")
+
+
+def test_idempotent_replay_treats_missing_and_empty_roles_alike(client: TestClient) -> None:
+    _reset("dev04-replay")
+    csrf = _admin(client)
+    first = _create(client, csrf, "dev04-replay", "dev04-replay")
+    assert first.status_code == 201
+    again = _create(client, csrf, "dev04-replay", "dev04-replay", [])
+    assert again.status_code == 201
+    assert again.json()["data"]["id"] == first.json()["data"]["id"]
+    changed = _create(client, csrf, "dev04-replay", "dev04-replay", ["auditor"])
+    assert changed.status_code == 409
+
+
+def test_audit_records_granted_roles_including_empty(client: TestClient) -> None:
+    _reset("dev04-audit-none")
+    _reset("dev04-audit-admin")
+    csrf = _admin(client)
+    assert _create(client, csrf, "dev04-audit-none", "dev04-audit-none").status_code == 201
+    assert (
+        _create(client, csrf, "dev04-audit-admin", "dev04-audit-admin", ["system_admin", "auditor"]).status_code
+        == 201
+    )
+    none_events = _events("dev04-audit-none")
+    assert [e["action"] for e in none_events] == ["create"]
+    assert "全局角色：无" in none_events[0]["reason"]
+    admin_events = _events("dev04-audit-admin")
+    actions = {e["action"]: e["reason"] for e in admin_events}
+    assert "system_admin" in actions["create"] and "auditor" in actions["create"]
+    assert "users.role.grant_admin" in actions
+
+
+def test_role_change_revokes_target_sessions(client: TestClient) -> None:
+    _reset("dev04-rolechange")
+    csrf = _admin(client)
+    create_user(account="dev04-rolechange", name="改角色", password=PASSWORD, roles=["auditor"])
+    member = TestClient(client.app)
+    _login(member, "dev04-rolechange")
+    assert member.get("/api/v1/auth/me").status_code == 200
+    user = client.get("/api/v1/users", params={"account": "dev04-rolechange"}).json()["data"]["items"][0]
+    changed = client.put(
+        f"/api/v1/users/{user['id']}/roles",
+        json={"expectedRevision": user["revision"], "globalRoles": ["project_creator"], "reason": "调岗"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert changed.status_code == 200, changed.text
+    assert member.get("/api/v1/auth/me").status_code == 401
+    # 管理员自己的会话不受影响
+    assert client.get("/api/v1/auth/me").status_code == 200

@@ -34,7 +34,8 @@ class UserCreateBody(BaseModel):
     account: str
     name: str
     department: str = ""
-    globalRoles: list[str] = Field(min_length=1)
+    # 省略或空数组：不授予全局角色，即“仅项目成员”账号（只能访问被加入的项目）。
+    globalRoles: list[str] = Field(default_factory=list, max_length=10)
     password: str
 
 
@@ -170,18 +171,30 @@ def _clean_reason(reason: str) -> str:
     return cleaned
 
 
+_MAX_ROLES = 10
+
+
 def _grantable(actor_roles: tuple[str, ...] | list[str], requested: list[str]) -> list[str]:
-    if not requested or len(requested) > 10:
+    """校验要授予的全局角色；空列表合法（不授予全局角色）。"""
+    if len(requested) > _MAX_ROLES:
         raise AppError(422, "VALIDATION_FAILED", "角色不正确。")
     unknown = [role for role in requested if role not in GLOBAL_ROLES]
     if unknown:
         raise AppError(422, "VALIDATION_FAILED", "角色不在可分配范围内。")
+    roles = list(dict.fromkeys(requested))
+    # 系统管理员只能由系统管理员授予（即使将来有别的角色拿到 users.manage）。
+    if "system_admin" in roles and "system_admin" not in actor_roles:
+        raise AppError(403, "FORBIDDEN", "只有系统管理员能授予系统管理员角色。")
     actor_permissions = set(permissions_for(actor_roles))
-    for role in requested:
+    for role in roles:
         needed = set(permissions_for([role]))
         if not needed.issubset(actor_permissions):
             raise AppError(403, "FORBIDDEN", "不能分配超出自己权限的角色。")
-    return list(dict.fromkeys(requested))
+    return roles
+
+
+def _roles_text(roles: list[str]) -> str:
+    return "、".join(roles) if roles else "无（仅项目成员）"
 
 
 def _record(connection, user_id: UUID, actor_id: UUID, action: str, reason: str) -> None:
@@ -194,14 +207,24 @@ def _record(connection, user_id: UUID, actor_id: UUID, action: str, reason: str)
     )
 
 
-def _revoke(connection, user_id: UUID) -> None:
+def _revoke(connection, user_id: UUID, keep_session: UUID | None = None) -> None:
+    if keep_session is None:
+        connection.execute(
+            """
+            update sessions
+            set revoked_at = now()
+            where user_id = %s and revoked_at is null
+            """,
+            (user_id,),
+        )
+        return
     connection.execute(
         """
         update sessions
         set revoked_at = now()
-        where user_id = %s and revoked_at is null
+        where user_id = %s and revoked_at is null and id <> %s
         """,
-        (user_id,),
+        (user_id, keep_session),
     )
 
 
@@ -337,6 +360,7 @@ def create_account(request: Request, body: UserCreateBody) -> dict[str, object]:
                 department=body.department.strip(),
                 connection=connection,
                 must_change_password=True,
+                allow_no_roles=True,
             )
             connection.execute(
                 """
@@ -347,7 +371,9 @@ def create_account(request: Request, body: UserCreateBody) -> dict[str, object]:
                 """,
                 (actor.user_id, key, request_hash, user_id),
             )
-            _record(connection, user_id, actor.user_id, "create", "创建账号")
+            _record(connection, user_id, actor.user_id, "create", f"创建账号；全局角色：{_roles_text(roles)}")
+            if "system_admin" in roles:
+                _record(connection, user_id, actor.user_id, "users.role.grant_admin", "授予系统管理员")
             created = _load(connection, user_id)
     return _envelope(request, created)
 
@@ -386,7 +412,7 @@ def update_user(user_id: str, request: Request, body: UserPatchBody) -> dict[str
 def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, object]:
     actor = require_permission(request, "users.manage")
     target = _parse_user_id(user_id)
-    roles = _grantable(actor.roles, body.globalRoles) if body.globalRoles else []
+    roles = _grantable(actor.roles, body.globalRoles)
     reason = _clean_reason(body.reason)
     with connect() as connection:
         with connection.transaction(immediate=True):
@@ -398,6 +424,7 @@ def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, 
                 raise AppError(404, "NOT_FOUND", "没有这个账号。")
             _check_revision(row["revision"], body.expectedRevision)
             _reject_last_admin(connection, target, roles, disabling=False)
+            previous = _roles_for(connection, target)
             connection.execute("delete from user_roles where user_id = %s", (target,))
             for role in roles:
                 connection.execute(
@@ -412,7 +439,13 @@ def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, 
                 """,
                 (target,),
             )
-            _record(connection, target, actor.user_id, "roles", reason)
+            _record(connection, target, actor.user_id, "roles", f"{reason}（全局角色：{_roles_text(roles)}）"[:1000])
+            if "system_admin" in roles and "system_admin" not in previous:
+                _record(connection, target, actor.user_id, "users.role.grant_admin", "授予系统管理员")
+            if sorted(previous) != sorted(roles):
+                # 权限变了：撤销该用户的会话，让其重新登录后拿到新权限（自己改自己时保留当前会话）。
+                keep = actor.session_id if target == actor.user_id else None
+                _revoke(connection, target, keep)
             updated = _load(connection, target)
     return _envelope(request, updated)
 
