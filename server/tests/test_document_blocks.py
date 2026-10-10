@@ -108,3 +108,33 @@ def test_diff3_duplicate_paragraphs_and_insert_dedupe():
     assert merge3(BASE, same, same, dedupe_inserts=True).markdown.count("S\n") == 1     # 同一账号重发：去重
     assert merge3(BASE, same, same, dedupe_inserts=False).markdown.count("S\n") == 2    # 不同账号：都保留
     assert merge3("- a\n- b\n", "- a\n- b\n- t\n", "- a\n- m\n- b\n").markdown == "- a\n- m\n- b\n- t\n"
+
+
+def test_whitespace_only_edits_survive_concurrent_merge():
+    """终验 S-1：只改空白的修改在并发合并时不能被静默丢掉。"""
+    base = "# 标题\n\n导出下载   的完整说明。\n\n另一段。\n"
+    theirs = base.replace("另一段。", "对方改了另一段。")
+    mine = base.replace("下载   的", "下载  的")
+    # 对方没碰这一块：采用我方原文
+    result = merge3(base, theirs, mine)
+    assert not result.conflicts and result.whitespace_dropped == 0
+    assert "下载  的完整" in result.markdown and "对方改了另一段。" in result.markdown
+    # 全角空格同理
+    full = merge3(base, theirs, base.replace("下载   的", "下载　　的"))
+    assert "下载　　的" in full.markdown
+    # 双方都只改了空白、改法不同：保留对方，计入提示
+    both = merge3(base, base.replace("下载   的", "下载 的"), mine)
+    assert not both.conflicts and "下载 的完整" in both.markdown and both.whitespace_dropped == 1
+    # 对方改了文字、我只改空白：保留对方的文字，同样提示
+    real = merge3(base, base.replace("下载   的完整", "下载   的全部"), mine)
+    assert not real.conflicts and "的全部" in real.markdown and real.whitespace_dropped == 1
+    # 双方改动相同（含空白）：不提示
+    same = merge3(base, mine.replace("另一段。", "对方。"), mine)
+    assert same.whitespace_dropped == 0 and "下载  的" in same.markdown
+
+
+def test_whitespace_merge_pairs_by_node_kind():
+    """配对比较带上节点类型：段落改成同文字的标题不算“只改空白”。"""
+    base = "引言\n\n正文。\n"
+    result = merge3(base, base.replace("正文。", "正文改。"), "# 引言\n\n正文。\n")
+    assert "# 引言" in result.markdown and result.whitespace_dropped == 0

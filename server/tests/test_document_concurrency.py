@@ -257,3 +257,22 @@ def test_merge_that_breaks_word_becomes_format_conflict(team, monkeypatch):
     # 没有他人修改时（不合并）仍是 422
     own = save(client, did, 2, TEXT.replace("第三段。", "C。"), _as(client, "editor"))
     assert own.status_code == 422
+
+
+def test_whitespace_only_edit_kept_when_others_saved_elsewhere(team):
+    """终验 S-1（接口）：A 只改空格数量，B 同时改了别的段，A 的空格修改写入服务器。"""
+    client, did, _ = team
+    other = save(client, did, 1, TEXT.replace("引用段。", "B 改引用段。"), _as(client, "editor2"))
+    assert other.status_code == 200, other.text
+    mine = TEXT.replace("第二段。", "第二  段。")
+    saved = save(client, did, 1, mine, _as(client, "editor"))
+    assert saved.status_code == 200, saved.text
+    data = saved.json()["data"]
+    assert data["merged"] is True and "第二  段。" in data["markdownContent"] and "B 改引用段。" in data["markdownContent"]
+    assert "whitespaceDropped" not in data
+    # 双方都改了同一段的空白：保留对方并返回 whitespaceDropped
+    third = save(client, did, data["revision"], data["markdownContent"].replace("第二  段。", "第二 段。"), _as(client, "editor2"))
+    assert third.status_code == 200
+    late = save(client, did, data["revision"], data["markdownContent"].replace("第二  段。", "第二    段。"), _as(client, "editor"))
+    assert late.status_code == 200, late.text
+    assert "第二 段。" in late.json()["data"]["markdownContent"] and late.json()["data"]["whitespaceDropped"] == 1

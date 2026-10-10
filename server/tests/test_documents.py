@@ -128,3 +128,6 @@ def test_current_document_creation_uses_names_and_project_scoped_sources(documen
                                 "templateDocumentId": template_document.json()["data"]["id"]}, headers=headers)
     assert from_template.status_code == 200, from_template.text
     assert from_template.json()["data"]["markdownContent"] == created["markdownContent"]
+    # 终验 S-3：详情带模板组名，工作台模板标签显示它
+    detail = client.get(f"/api/v1/documents/{from_template.json()['data']['id']}").json()["data"]
+    assert detail["templateName"] == "当前模板" and detail["templateDocumentName"] == "范围说明"

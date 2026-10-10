@@ -319,6 +319,8 @@ def _merged_result(request: Request, connection, session, did: UUID, data: dict)
     result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
     if data.get("replayed"):
         result["data"]["replayed"] = True
+    if data.get("whitespaceDropped"):
+        result["data"]["whitespaceDropped"] = data["whitespaceDropped"]  # 终验 S-1：我方只改空白、对方也改了这一处
     return result
 
 
@@ -688,6 +690,11 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
 
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
+        # 终验 S-3：工作台模板标签显示模板组名（如“GJB 438C-2021”），而不是与标题重复的模板文档名
+        group = conn.execute(
+            "SELECT t.name FROM template_documents td JOIN templates t ON t.id = td.template_id WHERE td.id = %s",
+            (row[4],),
+        ).fetchone() if row[4] else None
 
         return {
             "data": {
@@ -707,6 +714,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "updatedAt": format_timestamp(row[13]),
                 "projectName": row[14],
                 "templateDocumentName": row[15],
+                "templateName": None if group is None else group[0],
                 "permissions": permissions_of(row.project_role, row.admin),
             },
             "requestId": request.state.request_id,
@@ -784,6 +792,8 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
     result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
     if data.get("replayed"):
         result["data"]["replayed"] = True
+    if data.get("whitespaceDropped"):
+        result["data"]["whitespaceDropped"] = data["whitespaceDropped"]  # 终验 S-1：我方只改空白、对方也改了这一处
     return result
 
 
