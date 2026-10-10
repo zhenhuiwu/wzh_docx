@@ -1,6 +1,6 @@
 """F1（01 §6.0 / 用例 31–33）：编辑区 HTML → 浏览器内 editorMarkdown → 服务器 Markdown 往返。
 
-需要 Node 22（打包 web/.qa/editor-roundtrip）与 Playwright Chromium；默认跳过，
+需要 Node 22（打包 web/tests/editor-roundtrip）与 Playwright Chromium；默认跳过，
 设置 DOCWB_E2E=1 运行：
     DOCWB_E2E=1 DOCWB_TEST_DATABASE_URL=sqlite:////tmp/x.db uv run pytest tests/test_editor_roundtrip.py
 """
@@ -29,7 +29,7 @@ def page(tmp_path_factory):
     if node is None:
         pytest.skip("需要 Node 22")
     bundle = tmp_path_factory.mktemp("roundtrip") / "roundtrip.js"
-    subprocess.run([node, str(ROOT / "web/.qa/editor-roundtrip/build.mjs"), str(bundle)], check=True, cwd=ROOT / "web")
+    subprocess.run([node, str(ROOT / "web/tests/editor-roundtrip/build.mjs"), str(bundle)], check=True, cwd=ROOT / "web")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport={"width": 1920, "height": 1080})
