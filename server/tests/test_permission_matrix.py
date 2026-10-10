@@ -103,3 +103,13 @@ def test_auditor_sees_all_projects_in_list(matrix):
     assert str(project) in {item["id"] for item in client.get("/api/v1/projects").json()["data"]["items"]}
     _as(client, "outsider")
     assert str(project) not in {item["id"] for item in client.get("/api/v1/projects").json()["data"]["items"]}
+
+
+@pytest.mark.parametrize("path", ["facts", "knowledge-bindings"])
+def test_auditor_reads_facts_and_bindings(matrix, path):
+    """终验回归（低）：全局只读审计口径——审计员非成员也能读事实列表和知识绑定，不能改。"""
+    client, project, _, _ = matrix
+    assert _call(client, "auditor", "GET", f"/projects/{project}/{path}").status_code == 200
+    assert _call(client, "nobody", "GET", f"/projects/{project}/{path}").status_code in (403, 404)
+    assert _call(client, "auditor", "PUT", f"/projects/{project}/knowledge-bindings",
+                 {"baseIds": [], "expectedProjectRevision": 0}).status_code == 403

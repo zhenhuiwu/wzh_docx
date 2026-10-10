@@ -69,6 +69,11 @@ def _typed_value(text: str | None) -> str | None:
     return text
 
 
+def _auditor(roles) -> bool:
+    """全局审计员：只读接口按可见处理（写接口不用）。"""
+    return "auditor" in roles
+
+
 def _visible_project(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict:
     params: list[object] = [project_id]
     clause = "true"
@@ -243,7 +248,8 @@ def list_facts(
         params.append(f"%{name}%")
     where = " and ".join(filters)
     with connect() as connection:
-        _visible_project(connection, target, actor.user_id, admin)
+        # 终验回归（低）：全局审计员与项目/文档接口一致，非成员也可只读查看（来源可见性仍按普通用户判断）
+        _visible_project(connection, target, actor.user_id, admin or _auditor(actor.roles))
         total = connection.execute(
             f"""
             select count(*) as total
@@ -454,7 +460,7 @@ def list_bindings(project_id: str, request: Request) -> dict[str, object]:
     target = _uuid(project_id, "projectId")
     admin = _admin(actor.roles)
     with connect() as connection:
-        project = _visible_project(connection, target, actor.user_id, admin)
+        project = _visible_project(connection, target, actor.user_id, admin or _auditor(actor.roles))
         rows = connection.execute(
             """
             select b.id, b.name, b.revision
