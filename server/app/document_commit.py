@@ -432,7 +432,12 @@ def conflict_summary(request: Request, document_id: str) -> dict:
     with connect() as connection:
         principal, did, _row, manager = _conflict_access(connection, request, document_id)
         mine, total = open_counts(connection, [did], principal.user_id).get(str(did), (0, 0))
-        return {"data": {"mineOpen": mine, "allOpen": total if manager else None}, "requestId": request.state.request_id}
+        # 界面验收 M2：全部处理后仍要能进入“已处理”，所以另给本人已处理条数。
+        handled = connection.execute(
+            """SELECT COUNT(*) AS n FROM document_conflict_items i JOIN document_conflicts c ON c.id=i.conflict_id
+               WHERE c.document_id=%s AND c.actor_id=%s AND i.status<>'open'""", (did, principal.user_id)).fetchone()["n"]
+        return {"data": {"mineOpen": mine, "mineHandled": int(handled), "allOpen": total if manager else None},
+                "requestId": request.state.request_id}
 
 
 def _load_conflict(connection, did: UUID, conflict_id: str):

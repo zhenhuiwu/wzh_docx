@@ -75,7 +75,7 @@ def _word_available() -> bool:
 @contextmanager
 def _local_word_document(path: Path, *, read_only: bool = True):
     if sys.platform != "win32":
-        raise AppError(503, "WORD_UNAVAILABLE", "完整目录和版式处理需要在本机安装 Microsoft Word。")
+        raise AppError(503, "WORD_UNAVAILABLE", "服务器未安装 Microsoft Word，含目录的文档暂时不能导出 Word。")
     import pythoncom
     import win32com.client
 
@@ -1329,7 +1329,7 @@ def preview_original_word(request: Request, document_id: str, scope: Literal["or
     target = preview_dir / (f"{did}.{document[12]}.format4.pdf" if scope == "edited" else f"{file_row[0]}.pdf")
     if not target.is_file():
         if not _word_available():
-            raise AppError(503, "WORD_UNAVAILABLE", "版式预览需要在本机安装 Microsoft Word。")
+            raise AppError(503, "WORD_UNAVAILABLE", "服务器未安装 Microsoft Word，暂时不能生成版式预览。")
         _render_preview(target, preview_dir, did, scope, document, source)
     return FileResponse(
         target,

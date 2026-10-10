@@ -95,7 +95,7 @@ def test_same_paragraph_conflict_keeps_copy_and_visibility(team):
     assert current(client, did)["markdownContent"] == TEXT.replace("第二段。", "A 的第二段。")
     listed = client.get(f"/api/v1/documents/{did}/conflicts").json()["data"]["items"]
     assert len(listed) == 1 and listed[0]["mine"]["markdown"] == "B 的第二段。"
-    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 1, "allOpen": None}
+    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 1, "mineHandled": 0, "allOpen": None}
     with connect() as connection:
         row = connection.execute("SELECT payload_json FROM document_conflicts WHERE document_id=%s", (did,)).fetchone()
         assert mine in row["payload_json"].replace("\\n", "\n")
@@ -106,7 +106,7 @@ def test_same_paragraph_conflict_keeps_copy_and_visibility(team):
     owner = _as(client, "owner")
     everyone = client.get(f"/api/v1/documents/{did}/conflicts", params={"actor": "all"}).json()["data"]["items"]
     assert [entry["actor"]["name"] for entry in everyone] == ["成员editor2"]
-    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 0, "allOpen": 1}
+    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 0, "mineHandled": 0, "allOpen": 1}
     assert client.get(f"/api/v1/documents/{did}/conflicts/{details['conflictId']}").status_code == 200
     denied = client.post(f"/api/v1/documents/{did}/conflicts/{details['conflictId']}/resolve", headers=owner,
                          json={"clientSaveKey": "owner-key-1", "baseDocumentRevision": 2,

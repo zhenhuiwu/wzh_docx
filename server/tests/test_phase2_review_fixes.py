@@ -23,6 +23,8 @@ def test_s1_theirs_deleted_keep_mine_restores_in_place(team):
     resp = _resolve(client, did, details["conflictId"], b, 2, [{"itemIndex": 0, "action": "keep_mine"}], "s1-keep-mine-1")
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["markdownContent"].startswith("# 1 范围\n\n第一段。\n\nB 改的第二段。\n\n第三段。")
+    # 界面验收 M2：全部处理后 summary 仍给出已处理条数，前端据此保留“冲突”入口
+    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 0, "mineHandled": 1, "allOpen": None}
 
 
 def test_s1_reconflict_keeps_object_ids_for_placement(team):
