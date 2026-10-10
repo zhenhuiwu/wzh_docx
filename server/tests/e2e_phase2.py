@@ -178,7 +178,7 @@ def pick_paragraphs(markdown: str, count: int) -> list[str]:
 def main() -> int:
     data = seed()
     markdown = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
-    p_export, p_a, p_b, p_conflict, p_offline, p_member, p_upd, p_upd2, p_dup_a, p_dup_b, p_block = pick_paragraphs(markdown, 11)
+    p_export, p_a, p_b, p_conflict, p_offline, p_member, p_upd, p_upd2, p_dup_a, p_dup_b, p_block, p_del = pick_paragraphs(markdown, 12)
     doc_id = data["document"]["id"]
 
     def server_markdown() -> str:
@@ -540,6 +540,41 @@ def main() -> int:
             shot(page, "20-版本记录")
             page.close()
         duplicate_tab()
+
+        @step("对方删段的冲突：标记不落在标题上，恢复回原位置（复审 M3）")
+        def deleted_conflict():
+            li = Api(f"e2e-li-{RUN}")
+            record = data["zhang"].call("GET", f"/documents/{doc_id}")
+            base, blocks = record["revision"], record["markdownContent"].split("\n\n")
+            index = next(i for i, block in enumerate(blocks) if block.strip().startswith(p_del))
+            victim, before = blocks[index], blocks[index - 1]
+            data["zhang"].call("PATCH", f"/documents/{doc_id}/content", json={
+                "expectedRevision": base, "markdownContent": "\n\n".join(blocks[:index] + blocks[index + 1:]),
+                "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+            mine = blocks[:]
+            mine[index] = victim.rstrip() + "（李工改了被删的段）"
+            response = li.client.patch(f"/documents/{doc_id}/content", headers={"X-CSRF-Token": li.csrf}, json={
+                "expectedRevision": base, "markdownContent": "\n\n".join(mine), "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
+            assert response.status_code == 409 and response.json()["error"]["details"]["conflicts"][0]["reason"] == "DELETED", response.text[:300]
+            b = ctx_b.new_page()  # 前面离线步骤关掉了最初的 b
+            open_pages.append(b)
+            open_doc(b, data)
+            mark = b.get_by_test_id("conflict-mark")
+            expect(mark).to_have_count(1, timeout=20000)
+            expect(mark).to_contain_text("大致位置：张工 删除了这附近的一段")
+            expect(b.locator(".paper-content").locator("h1.blk-conflict, h2.blk-conflict, h3.blk-conflict, h4.blk-conflict, h5.blk-conflict, h6.blk-conflict")).to_have_count(0)
+            expect(b.get_by_test_id("conflict-gap")).to_have_count(1)
+            mark.click()
+            panel = b.locator(".conflict-panel")
+            expect(panel.locator(".ccard")).to_have_count(1, timeout=20000)
+            shot(b, "26-对方删段-大致位置标记")
+            panel.get_by_role("button", name="恢复为新段落").click()
+            expect(panel.locator(".ccard")).to_have_count(0, timeout=20000)
+            restored = server_markdown().split("\n\n")
+            at = next(i for i, block in enumerate(restored) if "（李工改了被删的段）" in block)
+            assert restored[at - 1].strip() == before.strip(), (restored[at - 1][:40], before[:40])
+            expect(paragraph(b, "（李工改了被删的段）")).to_be_visible(timeout=15000)
+        deleted_conflict()
 
         browser.close()
     failed = [item for item in results if not item[1]]

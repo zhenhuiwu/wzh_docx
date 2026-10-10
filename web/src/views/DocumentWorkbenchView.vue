@@ -108,7 +108,7 @@ const conflictEntry = computed(() => conflictToggle(conflictSummary.value));
 const memberConflicts = computed(() => conflictSummary.value?.allOpen != null ? Math.max(0, conflictSummary.value.allOpen - conflictSummary.value.mineOpen) : 0);
 // 界面验收 M5：本人待处理冲突在正文和目录上的标记
 const openConflictItems = ref<ConflictItem[]>([]);
-const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem }>>([]);
+const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem; approx?: boolean }>>([]);
 const conflictHeadings = computed(() => new Set(openConflictItems.value.map(item => item.location?.headingPath?.at(-1)).filter(Boolean) as string[]));
 // 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
 const autoConflict = ref<{ count: number; name: string } | null>(null);
@@ -502,6 +502,15 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
   }
   return target;
 }
+/** 复审：冲突在正文里的位置。exact=false 表示只按章节路径+序号推测（大致位置）。
+ * 对方删段的冲突按“我的”文字找（我的版本仍在编辑区），找不到时不把标记落到标题上。 */
+function findConflictBlock(item: ConflictItem): { block?: HTMLElement; exact: boolean } {
+  const deleted = Boolean(item.theirs?.deleted);
+  const exact = findBlock(null, item.objectIds, deleted ? item.mine?.markdown : item.theirs?.markdown);
+  if (exact) return { block: exact, exact: true };
+  return { block: findBlock(item.location), exact: false };
+}
+const isHeading = (block: HTMLElement) => /^H[1-6]$/.test(block.tagName);
 function conflictName(item: ConflictItem) {
   return (item.theirs?.deleted ? item.theirs?.deletedBy?.name : item.theirs?.updatedBy?.name) || "其他成员";
 }
@@ -513,10 +522,19 @@ function applyConflictMarks() {
   const marks: typeof conflictMarks.value = [];
   if (mode.value === "edit") {
     for (const item of openConflictItems.value) {
-      const block = findBlock(item.location, item.objectIds, item.theirs?.deleted ? null : item.theirs?.markdown);
+      const { block, exact } = findConflictBlock(item);
       if (!block) continue;
-      block.classList.add("blk-conflict");
-      marks.push({ key: `${item.conflictId}:${item.itemIndex}`, top: block.offsetTop, label: `与 ${conflictName(item)} 的修改冲突`, item });
+      const deleted = Boolean(item.theirs?.deleted);
+      const key = `${item.conflictId}:${item.itemIndex}`;
+      if (exact) {
+        block.classList.add("blk-conflict");
+        marks.push({ key, top: block.offsetTop, label: deleted ? `该段已被 ${conflictName(item)} 删除` : `与 ${conflictName(item)} 的修改冲突`, item });
+        continue;
+      }
+      // 大致位置：不给推测出来的块（尤其是标题）加冲突底色，只画一条虚线插入位标记
+      const top = isHeading(block) ? block.offsetTop + block.offsetHeight : block.offsetTop;
+      const what = deleted ? `${conflictName(item)} 删除了这附近的一段` : `与 ${conflictName(item)} 的修改冲突`;
+      marks.push({ key, top, label: `大致位置：${what}`, item, approx: true });
     }
   }
   conflictMarks.value = marks;
@@ -529,8 +547,9 @@ function scheduleMarks() {
 }
 /** 卡片“定位”/正文标签：滚到正文中的块并闪一下；从正文标签进入时打开面板并滚到卡片。 */
 function locateConflict(item: ConflictItem) {
-  const block = findBlock(item.location, item.objectIds, item.theirs?.deleted ? null : item.theirs?.markdown);
+  const { block, exact } = findConflictBlock(item);
   if (!block) { noteAction("没能在正文中找到这一段，可能已被删除或移动。"); return; }
+  if (!exact) noteAction("这一段在正文中已找不到，已滚到它原来所在的大致位置。");
   block.scrollIntoView({ behavior: "smooth", block: "center" });
   block.classList.add("blk-flash");
   window.setTimeout(() => block.classList.remove("blk-flash"), 1600);
@@ -1941,7 +1960,10 @@ onUnmounted(() => {
           </fieldset>
           <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
-              <button v-for="mark in conflictMarks" :key="mark.key" type="button" class="conflict-mark" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)">{{ mark.label }}</button>
+              <template v-for="mark in conflictMarks" :key="mark.key">
+                <div v-if="mark.approx" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
+                <button type="button" class="conflict-mark" :class="{ approx: mark.approx }" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)">{{ mark.label }}</button>
+              </template>
             </div></div></div>
         </main>
         <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
@@ -2039,6 +2061,8 @@ onUnmounted(() => {
 .outline-dot.updated { background:var(--info-600); }
 .paper { position:relative; }
 .conflict-marks { position:absolute; inset:0; pointer-events:none; }
+.conflict-gap { position:absolute; left:0; right:0; border-top:2px dashed var(--danger-600); }
+.conflict-mark.approx { background:var(--bg-surface); border:1px dashed var(--danger-600); }
 .conflict-mark { position:absolute; right:var(--space-2); transform:translateY(-100%); height:auto; padding:0 var(--space-2); border:0; border-radius:var(--radius-control); background:var(--danger-50); color:var(--danger-600); font-size:var(--text-xs); line-height:var(--leading-sm, 1.6); pointer-events:auto; cursor:pointer; }
 .paper-content :deep(.blk-conflict) { box-shadow:inset 3px 0 0 var(--danger-600); background:var(--danger-50); padding-left:var(--space-2); }
 .paper-content :deep(.blk-updated) { box-shadow:inset 3px 0 0 var(--info-200); padding-left:var(--space-2); }
