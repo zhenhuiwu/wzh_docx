@@ -4,6 +4,7 @@
 - 其他账号：必须是项目成员（project_members），否则 404，不泄露项目或文档是否存在、也不给负责人姓名。
 - 是成员但项目角色没有对应权限：403 FORBIDDEN，details = {projectRole, ownerName}。
 - 文档读写不再要求全局 documents.* 权限（决策1）。
+- 全局 auditor（测试复测 I6，待用户确认）：非成员也按只读审计角色可读、可导出，写操作 403。
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from fastapi import Request
 from app.errors import AppError
 from app import identity
 from app.identity import Principal
-from app.permissions import project_permissions
+from app.permissions import AUDIT_PROJECT_ROLE, project_permissions
 
 Need = Literal["read", "edit", "export"]
 
@@ -95,11 +96,17 @@ def document_principal(request: Request) -> Principal:
 
 
 def member_role(connection, project_id: UUID, user_id: UUID) -> str | None:
+    """项目角色；非成员为 None。测试复测 I6（待用户确认）：全局 auditor 非成员时返回 “auditor”（只读审计，能读能导出不能写）。"""
     row = connection.execute(
         "select role from project_members where project_id = %s and user_id = %s",
         (project_id, user_id),
     ).fetchone()
-    return None if row is None else str(row["role"])
+    if row is not None:
+        return str(row["role"])
+    auditor = connection.execute(
+        "select 1 from user_roles where user_id = %s and role = %s", (user_id, AUDIT_PROJECT_ROLE)
+    ).fetchone()
+    return AUDIT_PROJECT_ROLE if auditor is not None else None
 
 
 def _owner_name(connection, project_id: UUID) -> str | None:

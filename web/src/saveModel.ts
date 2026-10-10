@@ -111,7 +111,7 @@ export function capsuleLabel(state: Capsule, options: { savedAt?: number | null;
   }
 }
 
-export const PROJECT_ROLE_TEXT: Record<string, string> = { owner: "负责人", editor: "编写人员", reviewer: "审核人员", viewer: "查看者" };
+export const PROJECT_ROLE_TEXT: Record<string, string> = { owner: "负责人", editor: "编写人员", reviewer: "审核人员", viewer: "查看者", auditor: "审计查看者（只读审计）" };
 
 /** 403/404 文案（02 §3.9 C 第4条）。 */
 export function accessText(error: { status?: number; details?: Record<string, any> }): string {

@@ -134,6 +134,22 @@ def _is_admin(roles: tuple[str, ...]) -> bool:
     return "system_admin" in roles
 
 
+def _reads_all(roles: tuple[str, ...]) -> bool:
+    """测试复测 I6（测试工程师决定，待用户确认）：auditor 是全局只读审计，和系统管理员一样能看到所有项目，但不能写。"""
+    return "system_admin" in roles or "auditor" in roles
+
+
+def _write_actor(request: Request, permission: str, connection, project_id: str):
+    """测试复测 I7（待用户确认）：项目写操作先按可见性判断——看不到这个项目一律 404（与读一致，不泄露存在性），
+    看得到但权限不足才 403。"""
+    actor = require_session(request)
+    require_csrf(request, actor)
+    _load(connection, _parse_uuid(project_id, "projectId"), actor.user_id, _reads_all(actor.roles))
+    if not has_permission(actor.roles, permission):
+        raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
+    return actor
+
+
 def project_role(connection, project_id: UUID, user_id: UUID) -> str | None:
     row = connection.execute(
         """
@@ -289,7 +305,7 @@ def list_projects(
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     if status is not None and status not in _STATUSES:
         raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
-    admin = _is_admin(actor.roles)
+    admin = _reads_all(actor.roles)
     filters = ["p.archived_at is null" if not archived else "p.archived_at is not null"]
     params: list[object] = []
     if not admin:
@@ -473,7 +489,7 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
     target = _parse_uuid(project_id, "projectId")
     with connect() as connection:
         admin = _is_admin(actor.roles)
-        project = _load(connection, target, actor.user_id, admin)
+        project = _load(connection, target, actor.user_id, _reads_all(actor.roles))
         role = project_role(connection, target, actor.user_id)
     # 测试 L2：前端按此隐藏写操作（与 update_project / 成员管理的判定一致）。
     project["permissions"] = {
@@ -486,7 +502,8 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
 
 @router.patch("/projects/{project_id}")
 def update_project(project_id: str, request: Request, body: ProjectPatchBody) -> dict[str, object]:
-    actor = require_permission(request, "projects.manage")
+    with connect() as connection:
+        actor = _write_actor(request, "projects.manage", connection, project_id)
     target = _parse_uuid(project_id, "projectId")
     admin = _is_admin(actor.roles)
     with connect() as connection:
@@ -561,7 +578,8 @@ def update_project(project_id: str, request: Request, body: ProjectPatchBody) ->
 
 @router.post("/projects/{project_id}/archive")
 def archive_project(project_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
-    actor = require_permission(request, "projects.manage")
+    with connect() as connection:
+        actor = _write_actor(request, "projects.manage", connection, project_id)
     target = _parse_uuid(project_id, "projectId")
     _reason(body.reason)
     admin = _is_admin(actor.roles)
@@ -586,7 +604,8 @@ def archive_project(project_id: str, request: Request, body: ReasonBody) -> dict
 
 @router.post("/projects/{project_id}/unarchive")
 def unarchive_project(project_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
-    actor = require_permission(request, "projects.manage")
+    with connect() as connection:
+        actor = _write_actor(request, "projects.manage", connection, project_id)
     target = _parse_uuid(project_id, "projectId")
     _reason(body.reason)
     admin = _is_admin(actor.roles)
@@ -663,7 +682,7 @@ def list_members(
     if role is not None and role not in _ROLES:
         raise AppError(422, "VALIDATION_FAILED", "项目角色不正确。")
     with connect() as connection:
-        _load(connection, target, actor.user_id, _is_admin(actor.roles))
+        _load(connection, target, actor.user_id, _reads_all(actor.roles))
         filters = ["m.project_id = %s"]
         params: list[object] = [target]
         if name.strip():
@@ -717,7 +736,7 @@ def set_member(project_id: str, user_id: str, request: Request, body: MemberBody
         raise AppError(422, "VALIDATION_FAILED", "成员信息不正确。")
     with connect() as connection:
         with connection.transaction(immediate=True):
-            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _load(connection, target, actor.user_id, _reads_all(actor.roles))
             _can_manage_members(connection, actor, target)
             current = connection.execute(
                 "select revision from projects where id = %s",
@@ -774,7 +793,7 @@ def remove_member(project_id: str, user_id: str, request: Request) -> dict[str, 
     member_id = _parse_uuid(user_id, "userId")
     with connect() as connection:
         with connection.transaction(immediate=True):
-            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _load(connection, target, actor.user_id, _reads_all(actor.roles))
             _can_manage_members(connection, actor, target)
             existing = connection.execute(
                 """
