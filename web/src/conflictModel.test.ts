@@ -31,12 +31,25 @@ describe("合一接口（⑫）", () => {
     expect(classifyResolveError({ status: 403, code: "FORBIDDEN" })).toBe("error");
   });
   it("每种原因的处理方式", () => {
-    expect(actionsFor({ reason: "MODIFIED", mine: {}, theirs: {} }).map(a => a.action)).toEqual(["keep_mine", "use_theirs", "manual", "keep_both"]);
+    expect(actionsFor({ reason: "MODIFIED", mine: {}, theirs: {} }).map(a => a.action)).toEqual(["manual", "keep_mine", "use_theirs", "keep_both"]);
     expect(actionsFor({ reason: "DELETED", mine: { markdown: "x" }, theirs: { deleted: true } }).map(a => a.placement ?? a.action)).toEqual(["after_nearest_live", "section_end", "discard"]);
     expect(actionsFor({ reason: "FORMAT", mine: {}, theirs: {} }).map(a => a.action)).toEqual(["use_theirs"]);
   });
   it("他人更新提示", () => {
     expect(changedByText([{ id: "1", name: "李工", objects: 2 }, { id: "2", name: "王工", objects: 1 }])).toBe("李工 等 2 人更新了 3 处内容，已合并到你的文档。");
     expect(changedByText([])).toBe("");
+  });
+});
+
+describe("冲突入口与他人更新文案（界面验收 M2/M3/M6）", () => {
+  it("全部处理完仍能进入，负责人只有成员冲突时显示成员冲突", async () => {
+    const { conflictToggle, othersUpdatedText } = await import("./conflictModel");
+    expect(conflictToggle({ mineOpen: 2, mineHandled: 0, allOpen: 5 })).toMatchObject({ label: "冲突 2", tab: "mine" });
+    expect(conflictToggle({ mineOpen: 0, mineHandled: 0, allOpen: 3 })).toMatchObject({ label: "成员冲突 3", tab: "members" });
+    expect(conflictToggle({ mineOpen: 0, mineHandled: 1, allOpen: null })).toMatchObject({ label: "冲突", tone: "neutral" });
+    expect(conflictToggle({ mineOpen: 0, mineHandled: 0, allOpen: null })).toBeNull();
+    expect(conflictToggle(null, 1)).toMatchObject({ label: "冲突 1" });
+    expect(othersUpdatedText(["李工"], 1, true)).toBe("已显示 李工 的最新修改。");
+    expect(othersUpdatedText(["李工", "王工", "李工"], 3, false)).toBe("李工 等 2 人更新了 3 处内容。你的修改保存后会自动显示他们的更新。");
   });
 });

@@ -33,11 +33,11 @@ export class ResolveKeys {
 }
 
 export const REASON_TEXT: Record<ConflictItem["reason"], string> = {
-  MODIFIED: "对方也修改了这段",
-  DELETED: "这段在对方那里被删除了",
-  ANCHOR_LOST: "插入位置附近的内容已被删除",
-  STRUCTURE: "这一片内容双方都做了调整",
-  FORMAT: "合并后的内容无法写回原 Word",
+  MODIFIED: "对方修改了同一段",
+  DELETED: "这一段已被删除",
+  ANCHOR_LOST: "插入位置已不存在",
+  STRUCTURE: "这里的结构被同时调整",
+  FORMAT: "合并后无法保持 Word 格式",
 };
 
 export interface ActionChoice { action: ConflictAction; label: string; placement?: "after_nearest_live" | "section_end" }
@@ -45,12 +45,12 @@ export interface ActionChoice { action: ConflictAction; label: string; placement
 export function actionsFor(item: Pick<ConflictItem, "reason" | "mine" | "theirs">): ActionChoice[] {
   switch (item.reason) {
     case "MODIFIED":
-      return [{ action: "keep_mine", label: "保留我的" }, { action: "use_theirs", label: "使用对方的" },
-        { action: "manual", label: "手动合并" }, { action: "keep_both", label: "两段都保留" }];
+      return [{ action: "manual", label: "手动合并" }, { action: "keep_mine", label: "保留我的" },
+        { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: "两段都保留" }];
     case "STRUCTURE":
-      return [{ action: "keep_mine", label: "保留我的" }, { action: "use_theirs", label: "使用对方的" }];
+      return [{ action: "keep_mine", label: "保留我的" }, { action: "use_theirs", label: "使用对方的版本" }];
     case "FORMAT":
-      return [{ action: "use_theirs", label: "使用对方的" }];
+      return [{ action: "use_theirs", label: "使用对方的版本" }];
     case "DELETED":
       if (item.mine?.deleted) return [{ action: "keep_mine", label: "仍然删除" }, { action: "use_theirs", label: "保留对方的修改" }];
       return [{ action: "restore_as_new", label: "恢复为新段落", placement: "after_nearest_live" },
@@ -71,6 +71,25 @@ export const ACTION_DONE_TEXT: Record<string, string> = {
 export function changedByText(changedBy: Array<Person & { objects: number }> | undefined): string {
   if (!changedBy?.length) return "";
   const total = changedBy.reduce((sum, person) => sum + person.objects, 0);
-  const who = changedBy.length === 1 ? changedBy[0].name : `${changedBy[0].name} 等 ${changedBy.length} 人`;
+  const who = changedBy.length === 1 ? `${changedBy[0].name} ` : `${changedBy[0].name} 等 ${changedBy.length} 人`;
   return `${who}更新了 ${total} 处内容，已合并到你的文档。`;
+}
+
+/** 他人更新提示条（02 §3.3，界面验收 M6）：本地没有未保存修改时已自动刷新；有修改时常驻提示。 */
+export function othersUpdatedText(names: string[], objects: number, refreshed: boolean): string {
+  const unique = [...new Set(names.filter(Boolean))];
+  const who = !unique.length ? "其他成员" : unique.length === 1 ? unique[0] : `${unique[0]} 等 ${unique.length} 人`;
+  const count = objects > 0 ? ` ${objects} 处` : "";
+  if (refreshed) return `已显示 ${who} 的最新修改。`;
+  return `${who}${unique.length > 1 ? "" : " "}更新了${count}内容。你的修改保存后会自动显示${unique.length > 1 ? "他们" : "他"}的更新。`;
+}
+
+/** 冲突按钮（界面验收 M2/M3）：自己有待处理 → “冲突 N”；只有成员冲突（负责人/管理员）→ “成员冲突 M”；都处理完但有记录 → “冲突”，仍可进入“已处理”。 */
+export function conflictToggle(summary: ConflictSummary | null, local = 0): { label: string; tone: "danger" | "warning" | "neutral"; tab: "mine" | "members" } | null {
+  const mine = conflictCount(summary, local);
+  if (mine > 0) return { label: `冲突 ${mine}`, tone: "danger", tab: "mine" };
+  const members = summary?.allOpen != null ? Math.max(0, summary.allOpen - (summary.mineOpen || 0)) : 0;
+  if (members > 0) return { label: `成员冲突 ${members}`, tone: "warning", tab: "members" };
+  if ((summary?.mineHandled || 0) > 0) return { label: "冲突", tone: "neutral", tab: "mine" };
+  return null;
 }

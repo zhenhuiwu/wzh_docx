@@ -8,7 +8,7 @@ import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
-import { changedByText, conflictCount, conflictOpensPanel } from "../conflictModel";
+import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
@@ -19,7 +19,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { getCapabilities, getConflictSummary, findChangeBySaveKey, type Capabilities, type ConflictSummary, type ResolveResult } from "../api/documents";
+import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, type Capabilities, type ConflictItem, type ConflictSummary, type ResolveResult } from "../api/documents";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -49,8 +49,24 @@ let savePromise: Promise<void> | undefined;
 let loadVersion = 0;
 const diagrams = ref<InstanceType<typeof DocumentDiagrams> | null>(null);
 const diagramBusy = ref(false);
-const historyOpen = ref(false);
+// 界面验收 M7：写作助手、版本记录、冲突面板互斥，统一由 rightPanel 管理（02 §3.4 “与版本记录、写作助手互斥”）。
+type RightPanel = "ai" | "history" | "conflict" | null;
+const rightPanel = ref<RightPanel>(null);
 const historyBusy = ref(false);
+function openPanel(name: RightPanel) {
+  // 版本记录正在恢复时不切走，避免恢复结果丢失
+  if (rightPanel.value === "history" && historyBusy.value && name !== "history") return;
+  rightPanel.value = name;
+}
+function panelFlag(name: Exclude<RightPanel, null>) {
+  return computed<boolean>({
+    get: () => rightPanel.value === name,
+    set: (open) => { if (open) openPanel(name); else if (rightPanel.value === name) rightPanel.value = null; },
+  });
+}
+const historyOpen = panelFlag("history");
+const aiOpen = panelFlag("ai");
+const conflictOpen = panelFlag("conflict");
 const skillOpen = ref(false);
 const skillBusy = ref(false);
 const refreshingEditor = ref(false);
@@ -85,8 +101,26 @@ let clockTimer: number | undefined;
 let pendingKey: { content: string; key: string } | null = null;
 // S5：编辑区正文所基于的修订号。合并保存后编辑区若有更新的输入，编辑区仍基于旧修订，下次保存以它为基准做三方合并。
 let mergeBase: number | null = null;
-const conflictOpen = ref(false);
 const conflictSummary = ref<ConflictSummary | null>(null);
+// 界面验收 M2/M3：冲突入口按 mineOpen / 成员冲突 / 已处理记录显示；打开时停在对应页签。
+const conflictTab = ref<"mine" | "members">("mine");
+const conflictEntry = computed(() => conflictToggle(conflictSummary.value));
+const memberConflicts = computed(() => conflictSummary.value?.allOpen != null ? Math.max(0, conflictSummary.value.allOpen - conflictSummary.value.mineOpen) : 0);
+// 界面验收 M5：本人待处理冲突在正文和目录上的标记
+const openConflictItems = ref<ConflictItem[]>([]);
+const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem }>>([]);
+const conflictHeadings = computed(() => new Set(openConflictItems.value.map(item => item.location?.headingPath?.at(-1)).filter(Boolean) as string[]));
+// 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
+const autoConflict = ref<{ count: number; name: string } | null>(null);
+// 界面验收 M6 / 审查 S3：他人更新
+const othersUpdated = ref<{ names: string[]; objects: number } | null>(null);
+const updatedHeadings = ref<Set<string>>(new Set());
+let updateTimer: number | undefined;
+let checkingUpdates = false;
+// 审查 S14：对象模型不可用（往返校验失败的旧文档）时按整篇提交
+const objectModel = ref<boolean | null>(null);
+const draftConfirmDiscard = ref(false);
+const draftDiffOpen = ref(false);
 const conflictPanel = ref<InstanceType<typeof DocumentConflictPanel> | null>(null);
 const mineConflicts = computed(() => conflictCount(conflictSummary.value));
 // 多标签提示（决策4：提示，不阻止；02 §3.3）：只覆盖同一浏览器。
@@ -104,7 +138,6 @@ const headingTitle = ref("");
 const headingPlacement = ref<"child" | "sibling">("child");
 const addingHeading = ref(false);
 const headingError = ref("");
-const aiOpen = ref(false);
 const aiScope = ref<WritingMemory["scope"]>("section");
 const selectedText = ref("");
 const selectionNeedsRefresh = ref(false);
@@ -178,6 +211,14 @@ async function load() {
   historyOpen.value = false;
   conflictOpen.value = false;
   conflictSummary.value = null;
+  openConflictItems.value = [];
+  conflictMarks.value = [];
+  autoConflict.value = null;
+  othersUpdated.value = null;
+  updatedHeadings.value = new Set();
+  objectModel.value = null;
+  draftConfirmDiscard.value = false;
+  draftDiffOpen.value = false;
   mergeBase = null;
   skillOpen.value = false;
   aiUndo.value = null;
@@ -218,6 +259,8 @@ async function load() {
     }
     markdownContent.value = record.markdownContent;
     savedContent.value = record.markdownContent;
+    // 审查 S14：对象模型不可用（拆块往返校验失败）的文档，服务器按整篇合并
+    void getObjectsSince(record.id, record.revision).then(value => { if (document.value === record) objectModel.value = value.objectModel; }).catch(() => undefined);
     selectedHeading.value = [...record.markdownContent.matchAll(/^(#{1,6})\s+(.+)$/gm)].length ? 0 : null;
     phase.value = "ready";
     await nextTick();
@@ -361,10 +404,169 @@ async function refreshConflicts() {
   if (!record) return;
   try {
     const summary = await getConflictSummary(record.id);
-    if (document.value === record) conflictSummary.value = summary;
+    if (document.value !== record) return;
+    conflictSummary.value = summary;
+    if (!summary.mineOpen) autoConflict.value = null;
+    openConflictItems.value = summary.mineOpen > 0 ? await listConflicts(record.id, "open", "me") : [];
+    if (document.value !== record) return;
+    await nextTick();
+    applyConflictMarks();
   } catch {
     // 数量取不到时保留原值，不影响编辑。
   }
+}
+const plainKey = (text: string) => text.replace(/\\(.)/g, "$1").replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/[\s*_`#>|]+/g, "").replace(/^(\d+\.|[-+])/, "");
+/** 按纯文本找正文中的顶层块（Word 预览没有对象 ID 时用；只认唯一匹配）。 */
+function findBlockByText(markdown: string | null | undefined): HTMLElement | undefined {
+  const root = editor.value, key = markdown ? plainKey(markdown) : "";
+  if (!root || key.length < 2) return undefined;
+  const found = ([...root.children] as HTMLElement[]).filter(block => plainKey(block.textContent || "") === key);
+  return found.length === 1 ? found[0] : undefined;
+}
+/** 按对象 ID 找正文中的块；没有 ID 时按文字，再按章节路径 + 第 N 段（与“保存失败 · 定位”同一逻辑）。 */
+function findBlock(location: LocationInfo | null | undefined, objectIds?: string[], text?: string | null): HTMLElement | undefined {
+  const root = editor.value;
+  if (!root) return undefined;
+  for (const id of objectIds || []) {
+    const node = root.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(id)}"]`);
+    if (node) return (node.closest(".paper-content > *") as HTMLElement | null) || node;
+  }
+  const byText = findBlockByText(text);
+  if (byText) return byText;
+  if (!location) return undefined;
+  const path = location.headingPath || [];
+  const blocks = [...root.children] as HTMLElement[];
+  let start = 0;
+  if (path.length) {
+    const last = path[path.length - 1];
+    const index = blocks.findIndex(block => /^H[1-6]$/.test(block.tagName) && (block.textContent || "").trim() === last);
+    if (index >= 0) start = index;
+  }
+  let target: HTMLElement | undefined = blocks[start];
+  if (location.ordinal && location.kind && location.kind !== "heading") {
+    const tags: Record<string, RegExp> = { paragraph: /^(P|DIV|BLOCKQUOTE)$/, list_item: /^(UL|OL)$/, table: /^TABLE$/, image: /^(P|FIGURE|IMG)$/, code: /^PRE$/ };
+    let seen = 0;
+    for (const block of blocks.slice(path.length ? start + 1 : 0)) {
+      if (/^H[1-6]$/.test(block.tagName)) break;
+      if ((tags[location.kind] || /./).test(block.tagName) && ++seen === location.ordinal) { target = block; break; }
+    }
+  }
+  return target;
+}
+function conflictName(item: ConflictItem) {
+  return (item.theirs?.deleted ? item.theirs?.deletedBy?.name : item.theirs?.updatedBy?.name) || "其他成员";
+}
+/** 冲突块：红色竖线 + 浅红底（class 只加在编辑区 DOM 上，转 Markdown 前去掉）；标签画在纸面浮层里，不进入正文。 */
+function applyConflictMarks() {
+  const root = editor.value;
+  if (!root) { conflictMarks.value = []; return; }
+  root.querySelectorAll(".blk-conflict").forEach(node => node.classList.remove("blk-conflict"));
+  const marks: typeof conflictMarks.value = [];
+  if (mode.value === "edit") {
+    for (const item of openConflictItems.value) {
+      const block = findBlock(item.location, item.objectIds, item.theirs?.deleted ? null : item.theirs?.markdown);
+      if (!block) continue;
+      block.classList.add("blk-conflict");
+      marks.push({ key: `${item.conflictId}:${item.itemIndex}`, top: block.offsetTop, label: `与 ${conflictName(item)} 的修改冲突`, item });
+    }
+  }
+  conflictMarks.value = marks;
+}
+let marksFrame = 0;
+function scheduleMarks() {
+  if (!openConflictItems.value.length) return;
+  window.cancelAnimationFrame(marksFrame);
+  marksFrame = window.requestAnimationFrame(() => applyConflictMarks());
+}
+/** 卡片“定位”/正文标签：滚到正文中的块并闪一下；从正文标签进入时打开面板并滚到卡片。 */
+function locateConflict(item: ConflictItem) {
+  const block = findBlock(item.location, item.objectIds, item.theirs?.deleted ? null : item.theirs?.markdown);
+  if (!block) { noteAction("没能在正文中找到这一段，可能已被删除或移动。"); return; }
+  block.scrollIntoView({ behavior: "smooth", block: "center" });
+  block.classList.add("blk-flash");
+  window.setTimeout(() => block.classList.remove("blk-flash"), 1600);
+}
+function openConflictCard(key: string) {
+  autoConflict.value = null;
+  openConflicts("mine");
+  let tries = 0;
+  const find = () => {
+    const card = window.document.querySelector<HTMLElement>(`.conflict-panel [data-conflict="${CSS.escape(key)}"]`);
+    if (card) { card.scrollIntoView({ behavior: "smooth", block: "nearest" }); card.focus?.(); return; }
+    if (++tries < 20) window.setTimeout(find, 150);
+  };
+  window.setTimeout(find, 0);
+}
+/** 他人更新（02 §3.3）：标签页回到前台或每 45 秒查一次；本地没有未保存修改时直接刷新，有修改时常驻提示。 */
+async function checkOthersUpdated() {
+  const record = document.value;
+  if (!record || phase.value !== "ready" || mode.value !== "edit" || checkingUpdates || window.document.visibilityState === "hidden") return;
+  checkingUpdates = true;
+  try {
+    const since = await getObjectsSince(record.id, record.revision);
+    if (document.value !== record) return;
+    objectModel.value = since.objectModel;
+    if (since.documentRevision <= record.revision) return;
+    const names = since.changedBy.map(person => person.name);
+    const objects = since.changedBy.reduce((sum, person) => sum + person.objects, 0);
+    const changed = since.objects.filter(item => !item.deleted);
+    const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value;
+    if (quiet || (readonly.value && !isDirty.value)) {
+      const scroll = editor.value?.closest(".page-scroll");
+      const top = scroll?.scrollTop || 0;
+      if (!(await refreshFromServer())) { othersUpdated.value = { names, objects }; return; }
+      if (scroll) scroll.scrollTop = top;
+      othersUpdated.value = null;
+      markUpdated(changed);
+      noteAction(names.length ? othersUpdatedText(names, objects, true) : "已显示最新内容。", 5000);
+    } else {
+      othersUpdated.value = { names, objects };
+    }
+  } catch {
+    // 查询失败不影响编辑，下次再查。
+  } finally {
+    checkingUpdates = false;
+  }
+}
+/** 被他人更新、尚未看过的块：左侧蓝色竖线，目录标题右侧蓝点；点击或编辑该块后消失。 */
+function markUpdated(objects: Array<{ id: string; markdown?: string }>) {
+  const root = editor.value;
+  if (!root) return;
+  const headings = new Set<string>();
+  for (const object of objects) {
+    const node = root.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(object.id)}"]`);
+    const block = (node?.closest(".paper-content > *") as HTMLElement | null) || node || findBlockByText(object.markdown);
+    if (!block) continue;
+    block.classList.add("blk-updated");
+    let cursor: Element | null = block;
+    while (cursor && !/^H[1-6]$/.test(cursor.tagName)) cursor = cursor.previousElementSibling;
+    if (cursor) headings.add((cursor.textContent || "").trim());
+  }
+  updatedHeadings.value = headings;
+}
+function clearUpdatedAt(target: EventTarget | null) {
+  const root = editor.value;
+  if (!root || !(target instanceof Node) || !updatedHeadings.value.size && !root.querySelector(".blk-updated")) return;
+  const element = target instanceof Element ? target : target.parentElement;
+  const block = element?.closest(".blk-updated");
+  if (!block) return;
+  block.classList.remove("blk-updated");
+  const remaining = new Set<string>();
+  for (const node of root.querySelectorAll(".blk-updated")) {
+    let cursor: Element | null = node;
+    while (cursor && !/^H[1-6]$/.test(cursor.tagName)) cursor = cursor.previousElementSibling;
+    if (cursor) remaining.add((cursor.textContent || "").trim());
+  }
+  updatedHeadings.value = remaining;
+}
+/** 提示条“立即刷新”：先保存自己的修改（服务器合并他人的更新），再按服务器正文重绘。 */
+async function refreshOthersNow() {
+  window.clearTimeout(autoSaveTimer);
+  if (isDirty.value) await save("manual");
+  if (savePromise) await savePromise.catch(() => undefined);
+  if (isDirty.value) return;
+  await refreshFromServer().catch(() => false);
+  othersUpdated.value = null;
 }
 function headingPathsOf(markdown: string): string[][] {
   // 变化块所在的章节（只用于恢复条提示，不参与保存）。
@@ -444,6 +646,7 @@ function showEditorHtml(html: string) {
       }
       if (paperStyle.value.width) paperStyle.value.boxSizing = "content-box";
     } catch { /* Local drafts without page metadata keep the default paper. */ }
+    void nextTick(() => applyConflictMarks());
   }
 }
 async function acceptContent(result: DocumentContentResult) {
@@ -889,9 +1092,16 @@ function onEditorInput(event?: Event) {
   aiUndo.value = null;
   const copy = editor.value.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
+  // 冲突/他人更新标记只用于显示，不进入正文
+  copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
+    node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
+    if (!node.classList.length) node.removeAttribute("class");
+  });
   const html = copy.innerHTML;
   markdownContent.value = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
   scheduleDraftWrite();
+  scheduleMarks();
+  if (event) clearUpdatedAt(event.target instanceof Node && editor.value?.contains(event.target) ? window.getSelection()?.anchorNode ?? null : null);
   editorVersion.value += 1;
   if (event instanceof InputEvent && ["insertParagraph", "insertFromDrop"].includes(event.inputType)) layoutNeedsRefresh = true;
   if (aiDraft.value) aiError.value = "文档已变化，请重新生成草稿。";
@@ -913,6 +1123,7 @@ function flushDraft() {
 }
 function onVisibilityChange() {
   if (window.document.visibilityState === "hidden") flushDraft();
+  else void checkOthersUpdated();
 }
 const storageUsage = computed(() => storageFailed.value ? draftUsage(window.localStorage, account()) : []);
 const otherDocDrafts = computed(() => storageUsage.value.filter(item => item.docId !== document.value?.id));
@@ -993,13 +1204,31 @@ async function restoreLocalDraft() {
     draftBusy.value = false;
   }
 }
+/** 审查/验收 S11：舍弃用应用内二次确认（不再用浏览器原生 confirm）。 */
 function discardLocalDraft() {
   const draft = localDraft.value;
   if (!draft || !document.value) return;
-  if (!window.confirm("舍弃后这份本机修改将无法恢复，确定舍弃？")) return;
+  if (!draftConfirmDiscard.value) { draftConfirmDiscard.value = true; return; }
+  draftConfirmDiscard.value = false;
   removeDraft(window.localStorage, account(), document.value.id, draft.tabId, { savedAt: draft.savedAt });
   localDrafts.value = localDrafts.value.filter(item => item !== draft);
   localDraft.value = localDrafts.value[0] ?? null;
+}
+function chooseLocalDraft(index: number) {
+  localDraft.value = localDrafts.value[index] ?? localDraft.value;
+  draftConfirmDiscard.value = false;
+}
+/** 恢复条“查看差异”：列出本机草稿与服务器正文不同的段落（按空行分块）。 */
+const draftDiff = computed(() => {
+  const draft = localDraft.value;
+  if (!draft?.markdown) return { added: [] as string[], removed: [] as string[] };
+  const split = (text: string) => text.replace(/\r\n/g, "\n").split(/\n{2,}/).map(item => item.trim()).filter(Boolean);
+  const server = split(savedContent.value), mine = split(draft.markdown);
+  const serverSet = new Set(server), mineSet = new Set(mine);
+  return { added: mine.filter(block => !serverSet.has(block)).slice(0, 20), removed: server.filter(block => !mineSet.has(block)).slice(0, 20) };
+});
+function draftTime(draft: DraftV2) {
+  return new Date(draft.savedAt || Date.now()).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function downloadLocalDraft() {
   if (!localDraft.value?.markdown || !document.value) return;
@@ -1062,6 +1291,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
         const text = changedByText(result.changedBy);
         if (text) noteAction(text, 6000);
       }
+      if (!typedNewer) othersUpdated.value = null;
       pendingKey = null;
       blocked.value = null;
       retrying.value = false;
@@ -1095,8 +1325,9 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const appliable = typeof details.appliableMarkdown === "string" ? details.appliableMarkdown : null;
       const appliableBase = typeof details.appliableBaseRevision === "number" ? details.appliableBaseRevision : null;
       void refreshConflicts().then(() => conflictPanel.value?.load());
-      if (conflictOpensPanel(trigger)) openConflicts();
-      else noteAction(apiError.message, 8000);
+      const conflicts = Array.isArray(details.conflicts) ? details.conflicts as ConflictItem[] : [];
+      if (conflictOpensPanel(trigger)) openConflicts("mine");
+      else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : "其他成员" };
       if (appliable !== null && appliableBase !== null && document.value) {
         const editorBase = base ?? mergeBase ?? document.value.revision;
         queueMicrotask(() => void saveContent(appliable, "auto", appliableBase, { content, base: editorBase }));
@@ -1169,26 +1400,9 @@ function retryNow() {
 }
 /** 把编辑区滚动到保存失败的位置（按章节路径 + 第 N 段，找不到就停在章节标题）。 */
 function locateBlocked() {
-  const location = blocked.value?.location, root = editor.value;
-  if (!location || !root) return;
-  const path = location.headingPath || [];
-  const blocks = [...root.children] as HTMLElement[];
-  let start = 0;
-  if (path.length) {
-    const last = path[path.length - 1];
-    const index = blocks.findIndex(block => /^H[1-6]$/.test(block.tagName) && (block.textContent || "").trim() === last);
-    if (index >= 0) start = index;
-  }
-  let target: HTMLElement | undefined = blocks[start];
-  if (location.ordinal && location.kind && location.kind !== "heading") {
-    const tags: Record<string, RegExp> = { paragraph: /^(P|DIV|BLOCKQUOTE)$/, list_item: /^(UL|OL)$/, table: /^TABLE$/, image: /^(P|FIGURE|IMG)$/, code: /^PRE$/ };
-    let seen = 0;
-    for (const block of blocks.slice(path.length ? start + 1 : 0)) {
-      if (/^H[1-6]$/.test(block.tagName)) break;
-      if ((tags[location.kind] || /./).test(block.tagName) && ++seen === location.ordinal) { target = block; break; }
-    }
-  }
-  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const location = blocked.value?.location;
+  if (!location) return;
+  findBlock(location)?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function onOnline() {
   online.value = true;
@@ -1254,15 +1468,17 @@ async function openDiagrams() {
 }
 async function openHistory() {
   // 有未保存修改也能查看历史，只是不能恢复（02 P1）。
-  if (aiLocked.value || addingHeading.value) return;
-  aiOpen.value = false;
-  conflictOpen.value = false;
-  historyOpen.value = true;
+  if ((aiLocked.value && !historyOpen.value) || addingHeading.value) return;
+  openPanel("history");
 }
-function openConflicts() {
-  aiOpen.value = false;
-  historyOpen.value = false;
-  conflictOpen.value = true;
+function openConflicts(tab?: "mine" | "members") {
+  conflictTab.value = tab || (conflictCount(conflictSummary.value) > 0 ? "mine" : conflictEntry.value?.tab || "mine");
+  autoConflict.value = null;
+  openPanel("conflict");
+}
+function onConflictCount(mineOpen: number) {
+  if (conflictSummary.value) conflictSummary.value = { ...conflictSummary.value, mineOpen };
+  void refreshConflicts();
 }
 /** 处理冲突前先保存正文；仍有未保存修改则不处理（避免处理结果覆盖编辑区）。 */
 async function beforeResolve(): Promise<boolean> {
@@ -1274,7 +1490,7 @@ async function beforeResolve(): Promise<boolean> {
 async function acceptResolution(result: ResolveResult) {
   const record = document.value;
   if (!record) return;
-  conflictSummary.value = { mineOpen: result.mineOpen, allOpen: conflictSummary.value?.allOpen ?? null };
+  conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: result.mineOpen, mineHandled: (conflictSummary.value?.mineHandled || 0) + result.items.length };
   if (result.documentRevision === record.revision && result.markdownContent === record.markdownContent) return;
   mergeBase = null;
   await acceptContent({ ...record, revision: result.documentRevision, markdownContent: result.markdownContent } as unknown as DocumentContentResult);
@@ -1490,6 +1706,8 @@ onMounted(() => {
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
+  updateTimer = window.setInterval(() => void checkOthersUpdated(), 45000);
+  window.addEventListener("resize", scheduleMarks);
   void load();
 });
 onUnmounted(() => {
@@ -1500,6 +1718,9 @@ onUnmounted(() => {
   window.removeEventListener("online", onOnline);
   window.removeEventListener("offline", onOffline);
   window.clearInterval(clockTimer);
+  window.clearInterval(updateTimer);
+  window.removeEventListener("resize", scheduleMarks);
+  window.cancelAnimationFrame(marksFrame);
   window.clearTimeout(retryTimer);
   window.clearTimeout(savingTimer);
   window.clearTimeout(actionNoteTimer);
@@ -1525,7 +1746,7 @@ onUnmounted(() => {
           <div class="document-heading"><h1>{{ document.name }}</h1></div>
         </div>
         <div class="toolbar-right">
-          <button v-if="mode === 'edit' && mineConflicts > 0" type="button" class="ghost danger conflict-toggle" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts()">冲突 {{ mineConflicts }}</button>
+          <button v-if="mode === 'edit' && conflictEntry" type="button" class="ghost conflict-toggle" :class="conflictEntry.tone" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts(conflictEntry.tab)">{{ conflictEntry.label }}</button>
           <button v-if="mode === 'edit'" type="button" class="ghost" :disabled="aiLocked || addingHeading" @click="openHistory">版本记录</button>
           <button v-if="mode === 'edit' && aiUndo" type="button" class="ghost" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
           <div class="mode-switch" role="group" aria-label="文档视图">
@@ -1537,12 +1758,18 @@ onUnmounted(() => {
           <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download>下载原稿</a>
           <template v-else>
             <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
+            <span v-if="objectModel === false" class="tag plain whole-tag" data-testid="whole-save" tabindex="0" title="本文档结构较复杂，修改按整篇提交；发生冲突时按整篇对比">整篇保存</span>
             <div class="export-group">
               <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || aiLocked || document.permissions?.canExport === false" :title="document.permissions?.canExport === false ? '你在该项目中没有导出权限' : undefined" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
               <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu">▾</button>
               <div v-if="exportMenu" class="export-menu card" role="menu" @keydown.esc="exportMenu = false">
                 <button type="button" class="ghost" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
                 <button type="button" class="ghost" role="menuitem" @click="exportMenu = false; downloadMyChanges()">我的修改（.md）</button>
+              </div>
+              <!-- 界面验收 S9：导出失败只在导出按钮旁说明（危险色），不占通栏 -->
+              <div v-if="exportError" class="export-error" role="alert" data-testid="export-error">
+                <p>{{ exportError }}</p>
+                <span class="acts"><button type="button" class="text" @click="downloadMyChanges">下载我的修改</button><button type="button" class="text neutral" @click="exportError = ''">知道了</button></span>
               </div>
             </div>
           </template>
@@ -1565,14 +1792,46 @@ onUnmounted(() => {
           <button v-if="otherDocDrafts.length" type="button" class="ghost" data-testid="clear-other-drafts" @click="exportAndClearOtherDrafts">下载并清理其他文档的草稿（{{ otherDocDrafts.length }} 份）</button>
         </span>
       </div>
-      <p v-if="exportError" class="notice info" role="status">{{ exportError }} <button type="button" class="ghost" @click="exportError = ''">知道了</button></p>
+      <div v-if="autoConflict && !conflictOpen" class="notice warning" role="status" data-testid="auto-conflict">
+        <span>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
+        <span class="acts"><button type="button" class="ghost" @click="openConflicts('mine')">查看冲突</button></span>
+      </div>
+      <div v-if="othersUpdated" class="notice info" role="status" data-testid="others-updated">
+        <span>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
+        <span class="acts">
+          <button type="button" class="ghost" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
+          <button type="button" class="ghost" @click="openHistory">查看修改记录</button>
+          <button type="button" class="subtle" aria-label="关闭提示" @click="othersUpdated = null">×</button>
+        </span>
+      </div>
       <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>
       <p v-if="multiTab && !localDraft && !blocked" class="notice info" role="status" data-testid="multi-tab">此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。 <button type="button" class="ghost" @click="dismissMultiTab">知道了</button></p>
       <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
-        <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}<template v-if="localDrafts.length > 1">（另有 {{ localDrafts.length - 1 }} 份）</template></span>
-        <button type="button" class="primary" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
-        <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
-        <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
+        <div class="draft-row">
+          <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}</span>
+          <label v-if="localDrafts.length > 1" class="draft-pick">本机共 {{ localDrafts.length }} 份
+            <select class="control" :value="localDrafts.indexOf(localDraft)" :disabled="draftBusy" @change="chooseLocalDraft(Number(($event.target as HTMLSelectElement).value))">
+              <option v-for="(item, index) in localDrafts" :key="item.tabId" :value="index">{{ draftTime(item) }}（{{ item.changed || 1 }} 处）</option>
+            </select>
+          </label>
+          <template v-if="draftConfirmDiscard">
+            <span class="draft-confirm">舍弃后这份本机修改将无法恢复。</span>
+            <button type="button" class="ghost" @click="draftConfirmDiscard = false">返回</button>
+            <button type="button" class="primary danger" data-testid="draft-discard-confirm" @click="discardLocalDraft">舍弃</button>
+          </template>
+          <template v-else>
+            <button type="button" class="ghost" :aria-expanded="draftDiffOpen" @click="draftDiffOpen = !draftDiffOpen">查看差异</button>
+            <button type="button" class="primary" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
+            <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
+            <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
+          </template>
+        </div>
+        <p class="draft-hint">先处理本机草稿（恢复、下载或舍弃），再继续编辑；处理前编辑区暂时锁定，避免两份修改互相覆盖。</p>
+        <div v-if="draftDiffOpen" class="draft-diff" aria-label="本机草稿与服务器正文的差异">
+          <p v-if="!draftDiff.added.length && !draftDiff.removed.length">与服务器正文相同。</p>
+          <pre v-for="(block, index) in draftDiff.added" :key="`a${index}`" class="ins">{{ block }}</pre>
+          <pre v-for="(block, index) in draftDiff.removed" :key="`r${index}`" class="del">{{ block }}</pre>
+        </div>
       </div>
       <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" @conflict="derivedConflict" />
       <div class="workspace" :class="{ 'original-mode': mode !== 'edit', 'ai-open': mode === 'edit' && aiOpen, 'history-open': historyOpen || (mode === 'edit' && conflictOpen) }">
@@ -1595,19 +1854,19 @@ onUnmounted(() => {
           <h2>文档大纲</h2>
           <p v-if="outline.length === 0" class="empty-outline">暂无标题</p>
           <nav v-else class="outline-tree">
-            <button v-for="(item, index) in outline" :key="index" type="button" class="ghost outline-item" :disabled="aiLocked || addingHeading" :class="{ selected: selectedHeading === index }" :aria-current="selectedHeading === index ? 'true' : undefined" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-3) * ${item.level - 1}))` }" @click="selectHeading(index)">{{ item.text }}</button>
+            <button v-for="(item, index) in outline" :key="index" type="button" class="ghost outline-item" :disabled="aiLocked || addingHeading" :class="{ selected: selectedHeading === index }" :aria-current="selectedHeading === index ? 'true' : undefined" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-3) * ${item.level - 1}))` }" @click="selectHeading(index)">{{ item.text }}<span v-if="conflictHeadings.has(item.text)" class="outline-dot conflict" title="本章节有冲突待处理" aria-label="有冲突"></span><span v-else-if="updatedHeadings.has(item.text)" class="outline-dot updated" title="他人更新了本章节" aria-label="有更新"></span></button>
           </nav>
           <form class="outline-form" @submit.prevent="addHeading">
             <h3>添加标题</h3>
             <label for="new-heading">标题名称</label>
-            <input id="new-heading" v-model="headingTitle" class="control" type="text" maxlength="120" :disabled="addingHeading || saving || aiLocked" required />
+            <input id="new-heading" v-model="headingTitle" class="control" type="text" maxlength="120" :disabled="addingHeading || saving || aiLocked || readonly" required />
             <label v-if="selectedHeading !== null" for="heading-placement">标题层级</label>
-            <select v-if="selectedHeading !== null" id="heading-placement" v-model="headingPlacement" class="control" :disabled="addingHeading || saving || aiLocked">
+            <select v-if="selectedHeading !== null" id="heading-placement" v-model="headingPlacement" class="control" :disabled="addingHeading || saving || aiLocked || readonly">
               <option value="child" :disabled="(outline[selectedHeading]?.level || 0) >= 6">下级标题</option>
               <option value="sibling">同级标题</option>
             </select>
             <p v-if="headingError" class="form-error" role="alert">{{ headingError }}</p>
-            <button type="submit" class="primary" :disabled="addingHeading || saving || aiLocked || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到大纲" }}</button>
+            <button type="submit" class="primary" :disabled="addingHeading || saving || aiLocked || readonly || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到大纲" }}</button>
           </form>
         </aside>
         <main v-show="mode === 'edit'" class="editor-area">
@@ -1625,7 +1884,10 @@ onUnmounted(() => {
             <button type="button" class="ghost" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
             <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
           </fieldset>
-          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
+          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+            <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
+              <button v-for="mark in conflictMarks" :key="mark.key" type="button" class="conflict-mark" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)">{{ mark.label }}</button>
+            </div></div></div>
         </main>
         <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
           <div class="ai-panel-head"><h2>写作助手</h2><button type="button" class="ghost" aria-label="关闭写作助手" @click="aiOpen = false">收起</button></div>
@@ -1670,9 +1932,10 @@ onUnmounted(() => {
           </details>
         </aside>
         <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" :refresh="refreshFromServer" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
-        <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="document.id" :document-id="document.id" :document-name="document.name" :revision="document.revision"
+        <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="`${document.id}:${conflictTab}`" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
-          @close="conflictOpen = false" @resolved="acceptResolution" @count="conflictSummary = { mineOpen: $event, allOpen: conflictSummary?.allOpen ?? null }" />
+          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts"
+          @close="conflictOpen = false" @resolved="acceptResolution" @count="onConflictCount" @locate="locateConflict" />
         <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
@@ -1709,19 +1972,46 @@ onUnmounted(() => {
 .notice { display:flex; align-items:center; gap:var(--space-2); min-height:40px; margin:0; padding:var(--space-1) var(--space-4); font-size:var(--text-sm); border-bottom:1px solid var(--border-default, var(--rule)); }
 .notice.info { background:var(--info-50, var(--sheet)); color:var(--gray-800, var(--ink)); }
 .notice.danger { background:var(--danger-50, var(--fault-wash)); color:var(--danger-700, var(--fault-ink)); }
+.notice.warning { background:var(--warning-50); color:var(--gray-800); }
+.whole-tag { cursor:help; }
+.export-error { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:21; display:grid; gap:var(--space-2); width:calc(var(--space-7) * 8); padding:var(--space-3); background:var(--bg-surface); border:1px solid var(--danger-200); border-radius:var(--radius-control); box-shadow:var(--shadow-2); color:var(--danger-600); font-size:var(--text-sm); }
+.export-error p { margin:0; overflow-wrap:anywhere; }
+.export-error .acts { display:flex; gap:var(--space-3); justify-content:flex-end; }
+.conflict-toggle.warning { color:var(--warning-600); }
+.conflict-toggle.neutral { color:var(--text-secondary); }
+.outline-dot { display:inline-block; width:6px; height:6px; margin-left:var(--space-1); border-radius:var(--radius-pill); vertical-align:middle; }
+.outline-dot.conflict { background:var(--danger-600); }
+.outline-dot.updated { background:var(--info-600); }
+.paper { position:relative; }
+.conflict-marks { position:absolute; inset:0; pointer-events:none; }
+.conflict-mark { position:absolute; right:var(--space-2); transform:translateY(-100%); height:auto; padding:0 var(--space-2); border:0; border-radius:var(--radius-control); background:var(--danger-50); color:var(--danger-600); font-size:var(--text-xs); line-height:var(--leading-sm, 1.6); pointer-events:auto; cursor:pointer; }
+.paper-content :deep(.blk-conflict) { box-shadow:inset 3px 0 0 var(--danger-600); background:var(--danger-50); padding-left:var(--space-2); }
+.paper-content :deep(.blk-updated) { box-shadow:inset 3px 0 0 var(--info-200); padding-left:var(--space-2); }
+.paper-content :deep(.blk-flash) { outline:2px solid var(--brand-200); outline-offset:2px; }
+.draft-row { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-3); }
+.draft-pick { display:flex; align-items:center; gap:var(--space-1); color:var(--text-secondary); }
+.draft-pick .control { width:auto; }
+.draft-confirm { color:var(--danger-600); }
+.draft-hint { margin:var(--space-1) 0 0; color:var(--text-secondary); font-size:var(--text-xs); }
+.draft-diff { display:grid; gap:var(--space-1); margin-top:var(--space-2); max-height:calc(var(--space-7) * 6); overflow:auto; }
+.draft-diff p { margin:0; color:var(--text-secondary); }
+.draft-diff pre { margin:0; padding:var(--space-1) var(--space-2); white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; border-radius:var(--radius-control); }
+.draft-diff pre.ins { background:var(--diff-ins-bg); }
+.draft-diff pre.del { background:var(--diff-del-bg); text-decoration:line-through; }
 .notice .acts { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; flex-shrink:0; }
 .notice > span:first-child { overflow-wrap:anywhere; }
 .export-group { position:relative; display:flex; gap:1px; }
 .export-more { padding-inline:var(--space-2); }
 .export-menu { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:20; display:flex; flex-direction:column; min-width:180px; padding:var(--space-1); background:var(--bg-surface, var(--sheet)); border:1px solid var(--border-default, var(--rule)); }
 .export-menu button { justify-content:flex-start; text-align:left; border:0; }
-.draft-recovery { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-2) var(--space-5); background:var(--sheet); border-bottom:1px solid var(--rule); font-size:var(--text-sm); }
-.draft-recovery span { margin-right:auto; overflow-wrap:anywhere; }
+.draft-recovery { padding:var(--space-2) var(--space-5); background:var(--sheet); border-bottom:1px solid var(--rule); font-size:var(--text-sm); }
+.draft-row > span:first-child { margin-right:auto; overflow-wrap:anywhere; }
 .workspace { display:grid; grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr); flex:1; min-height:0; }
 .workspace.original-mode { grid-template-columns:minmax(0,1fr); }
-.workspace.ai-open { grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr) calc(var(--space-7) * 7); }
-.workspace.history-open { grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr) calc(var(--space-7) * 8); }
-.workspace.original-mode.history-open { grid-template-columns:minmax(0,1fr) calc(var(--space-7) * 8); }
+/* 审查 S4：右侧面板统一 --panel-w（400） */
+.workspace.ai-open,
+.workspace.history-open { grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr) var(--panel-w); }
+.workspace.original-mode.history-open { grid-template-columns:minmax(0,1fr) var(--panel-w); }
 .original-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--desk); }
 .preview-state { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); color:var(--ink-secondary); }
 .pdf-viewer { display:flex; flex:1; flex-direction:column; min-height:0; }

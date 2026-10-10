@@ -372,7 +372,7 @@ onBeforeUnmount(() => {
                   <span v-if="doc.mineOpenConflicts" class="tag warning conflict-tag" :title="`你有 ${doc.mineOpenConflicts} 处冲突待处理`">冲突 {{ doc.mineOpenConflicts }}</span>
                   <span v-else-if="doc.memberOpenConflicts" class="tag conflict-tag" :title="`成员共有 ${doc.memberOpenConflicts} 处冲突待处理`">成员冲突 {{ doc.memberOpenConflicts }}</span></td>
                 <td class="time num">{{ formatDateTime(doc.updatedAt) }}</td>
-                <td class="cell-right"><router-link class="link document-open" :to="{ name: 'document', params: { id: projectId, documentId: doc.id } }" :aria-label="`继续编写：${doc.name}`">继续编写</router-link></td>
+                <td class="cell-right"><router-link class="link document-open" :to="{ name: 'document', params: { id: projectId, documentId: doc.id } }" :aria-label="`${canCreate ? '继续编写' : '查看'}：${doc.name}`">{{ canCreate ? "继续编写" : "查看" }}</router-link></td>
               </tr>
             </tbody>
           </table>

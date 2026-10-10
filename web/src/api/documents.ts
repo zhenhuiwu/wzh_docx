@@ -131,9 +131,20 @@ export async function exportDocument(id: string, expectedRevision: number): Prom
   return body.data;
 }
 
-export async function previewDocument(id: string): Promise<{ html: string }> {
-  const body = await apiRequest<{ data: { html: string } }>(`/documents/${id}/preview`);
+export async function previewDocument(id: string): Promise<{ html: string; objectModel?: boolean; revision?: number }> {
+  const body = await apiRequest<{ data: { html: string; objectModel?: boolean; revision?: number } }>(`/documents/${id}/preview`);
   if (!body?.data) throw new Error("预览响应不完整。");
+  return body.data;
+}
+
+/** 他人更新（02 §3.3，界面验收 M6）：sinceRevision 之后变化的对象与修改人汇总。 */
+export interface ObjectsSince {
+  documentRevision: number; objectModel: boolean; changedBy: Array<Person & { objects: number }>;
+  objects: Array<{ id: string; deleted: boolean; markdown?: string; updatedBy?: Person | null; deletedBy?: Person | null }>;
+}
+export async function getObjectsSince(id: string, sinceRevision: number): Promise<ObjectsSince> {
+  const body = await apiRequest<{ data: ObjectsSince }>(`/documents/${id}/objects?sinceRevision=${sinceRevision}`);
+  if (!body?.data) throw new Error("文档更新响应不完整。");
   return body.data;
 }
 
@@ -249,7 +260,7 @@ export interface ConflictItem {
   location: ConflictLocation; base: ConflictSide; theirs: ConflictSide; mine: ConflictSide; status?: "open" | "resolved" | "discarded";
   action?: string | null; actor?: Person | null; createdAt?: string; resolvedAt?: string | null; objectIds?: string[];
 }
-export interface ConflictSummary { mineOpen: number; allOpen: number | null }
+export interface ConflictSummary { mineOpen: number; mineHandled?: number; allOpen: number | null }
 export type ConflictAction = "keep_mine" | "use_theirs" | "manual" | "keep_both" | "restore_as_new" | "discard";
 export interface ResolveRequestItem { itemIndex: number; action: ConflictAction; theirsRevision?: number | null; markdown?: string; placement?: { mode: "after_nearest_live" | "section_end" | "after"; afterObjectId?: string } }
 export interface ResolveResult { documentRevision: number; changeId: string | null; items: Array<{ itemIndex: number; status: string; placementFallback?: boolean }>; conflictStatus: string; mineOpen: number; markdownContent: string }

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /** 冲突面板（02 §3.4；01 §4.4）：按“处”展示，处理动作统一走 resolve 合一接口。 */
 import { computed, onMounted, ref, watch } from "vue";
+import ConflictCompareDialog from "./ConflictCompareDialog.vue";
+import { diffWords } from "../textDiff";
 import { ApiError } from "../api/client";
 import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type ResolveRequestItem, type ResolveResult } from "../api/documents";
 import { ACTION_DONE_TEXT, REASON_TEXT, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
@@ -8,17 +10,22 @@ import { locationText, shortTime } from "../saveModel";
 
 const props = defineProps<{
   documentId: string; documentName: string; revision: number; canViewMembers: boolean; canResolve: boolean;
+  /** 打开时的页签与页签上的数字（界面验收 M2/M3）。 */
+  initialTab?: "mine" | "members"; mineCount?: number; memberCount?: number;
   /** 处理前由工作台先保存正文；返回 false 表示仍有未保存修改，不能处理。 */
   beforeResolve: () => Promise<boolean>;
 }>();
-const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number] }>();
+const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number]; locate: [item: ConflictItem] }>();
 
-const tab = ref<"mine" | "members">("mine");
+const tab = ref<"mine" | "members">(props.initialTab || "mine");
 const items = ref<ConflictItem[]>([]);
 const handled = ref<ConflictItem[]>([]);
 const phase = ref<"loading" | "ready" | "error">("loading");
 const loadError = ref("");
 const busyKey = ref("");
+/** 只在被点击的按钮上显示“正在处理…”（审查 S6）。 */
+const busyLabel = ref("");
+const comparing = ref<ConflictItem | null>(null);
 const cardError = ref<Record<string, string>>({});
 const cardNotice = ref<Record<string, string>>({});
 const manualOpen = ref<Record<string, string>>({});
@@ -35,6 +42,8 @@ async function load() {
     items.value = open;
     handled.value = done;
     phase.value = "ready";
+    // 没有待处理时直接展开“已处理”，处理完的记录仍可查看和下载（界面验收 M2）
+    if (!open.length && done.length) handledOpen.value = true;
     if (tab.value === "mine") emit("count", open.length);
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "冲突列表加载失败";
@@ -64,6 +73,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
   if (choice.placement) request.placement = { mode: choice.placement };
   const key = keys.keyFor(JSON.stringify([item.conflictId, request]));
   busyKey.value = id(item);
+  busyLabel.value = choice.label;
   cardError.value = { ...cardError.value, [id(item)]: "" };
   try {
     if (!(await props.beforeResolve())) {
@@ -102,7 +112,23 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     }
   } finally {
     busyKey.value = "";
+    busyLabel.value = "";
   }
+}
+
+const diffOf = (base: string | null | undefined, changed: string | null | undefined) => diffWords(base || "", changed || "");
+const theirName = (item: ConflictItem) => whoOf(item);
+async function compareMerge(item: ConflictItem, markdown: string) {
+  await apply(item, { action: "manual", label: "采用合并结果" }, markdown);
+  if (!cardError.value[id(item)]) comparing.value = null;
+}
+function compareEdit(item: ConflictItem, markdown: string) {
+  manualOpen.value = { ...manualOpen.value, [id(item)]: markdown };
+  comparing.value = null;
+}
+async function compareAction(item: ConflictItem, action: "keep_mine" | "use_theirs") {
+  comparing.value = null;
+  await apply(item, action === "keep_mine" ? { action, label: "保留我的" } : { action, label: "使用对方的版本" });
 }
 
 function openManual(item: ConflictItem) {
@@ -131,13 +157,13 @@ async function downloadCopy(item: ConflictItem) {
 <template>
   <aside class="conflict-panel" aria-label="冲突处理">
     <header class="conflict-head">
-      <h2>冲突 · {{ items.length }} 处待处理</h2>
+      <h2>{{ phase === 'ready' && !items.length ? "冲突 · 没有待处理" : `冲突 · ${items.length} 处待处理` }}</h2>
       <button type="button" class="subtle icon-close" aria-label="收起冲突面板" @click="emit('close')"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
     </header>
     <p class="conflict-safe" role="note"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" /></svg>冲突内容已单独保存在服务器，不会丢失。其他段落的修改已正常保存。</p>
     <nav v-if="canViewMembers" class="conflict-tabs" role="tablist" aria-label="冲突范围">
-      <button type="button" role="tab" class="subtle" :aria-selected="tab === 'mine'" :class="{ on: tab === 'mine' }" @click="tab = 'mine'">我的冲突</button>
-      <button type="button" role="tab" class="subtle" :aria-selected="tab === 'members'" :class="{ on: tab === 'members' }" @click="tab = 'members'">成员冲突</button>
+      <button type="button" role="tab" class="subtle" :aria-selected="tab === 'mine'" :class="{ on: tab === 'mine' }" @click="tab = 'mine'">我的冲突<span v-if="mineCount" class="count">{{ mineCount }}</span></button>
+      <button type="button" role="tab" class="subtle" :aria-selected="tab === 'members'" :class="{ on: tab === 'members' }" @click="tab = 'members'">成员冲突<span v-if="memberCount" class="count">{{ memberCount }}</span></button>
     </nav>
 
     <div class="conflict-body">
@@ -147,18 +173,20 @@ async function downloadCopy(item: ConflictItem) {
       <article v-for="item in items" v-else :key="id(item)" class="ccard" :data-conflict="id(item)" :aria-busy="busyKey === id(item)">
         <p v-if="cardNotice[id(item)]" class="ccard-notice" role="status">{{ cardNotice[id(item)] }}</p>
         <header class="ccard-head"><strong>{{ REASON_TEXT[item.reason] }}</strong><span class="muted">{{ whenOf(item) }}</span></header>
-        <p class="ccard-loc">{{ locationText(item.location) }}</p>
-        <p v-if="tab === 'members'" class="muted">提交人：{{ item.actor?.name || "未记录" }}（只读，仅本人可以处理）</p>
+        <p class="ccard-loc">{{ locationText(item.location) }}<button type="button" class="text" data-testid="conflict-locate" @click="emit('locate', item)">定位</button></p>
+        <p v-if="tab === 'members'" class="ccard-actor">提交人：{{ item.actor?.name || "未记录" }}（只读，仅本人可以处理）</p>
         <p v-if="item.reason === 'DELETED' && item.theirs?.deleted" class="ccard-desc">{{ whoOf(item) }} 于 {{ whenOf(item) }} 删除了这一段，但你修改过它。</p>
         <p v-else-if="item.reason === 'DELETED'" class="ccard-desc">你删除了这一段，但 {{ whoOf(item) }} 修改过它。</p>
         <p v-else-if="item.reason === 'FORMAT'" class="ccard-desc">合并后的内容无法写回原 Word，正文保持对方的版本。你可以下载自己的副本后手动处理。</p>
         <section class="ccard-side theirs">
           <h3>{{ item.theirs?.deleted ? "删除前的内容" : `${whoOf(item)} 的版本 · 已在正文中` }}</h3>
-          <pre :class="{ gone: item.theirs?.deleted }">{{ item.theirs?.markdown || "（无）" }}</pre>
+          <pre v-if="item.theirs?.deleted || !item.base?.markdown" :class="{ gone: item.theirs?.deleted }">{{ item.theirs?.markdown || "（无）" }}</pre>
+          <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.theirs?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
         </section>
         <section class="ccard-side mine">
-          <h3>我的版本 · 未写入正文</h3>
-          <pre>{{ item.mine?.deleted ? "（我删除了这一段）" : item.mine?.markdown }}</pre>
+          <h3>{{ tab === 'members' ? `${item.actor?.name || "提交人"} 的版本 · 未写入正文` : "我的版本 · 未写入正文" }}</h3>
+          <pre v-if="item.mine?.deleted || !item.base?.markdown">{{ item.mine?.deleted ? "（我删除了这一段）" : item.mine?.markdown }}</pre>
+          <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.mine?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
         </section>
         <details class="ccard-base"><summary>查看修改前的原内容</summary><pre>{{ item.base?.markdown || "（无）" }}</pre></details>
 
@@ -169,19 +197,24 @@ async function downloadCopy(item: ConflictItem) {
           <div class="ccard-actions">
             <button type="button" class="ghost" @click="insertMine(item)">插入我的版本</button>
             <button type="button" class="ghost" @click="delete manualOpen[id(item)]">取消</button>
-            <button type="button" class="primary" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '手动合并' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
+            <button type="button" class="primary" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '采用合并结果' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
           </div>
         </div>
         <div v-else-if="confirmTheirs === item" class="ccard-confirm" role="alertdialog" aria-label="使用对方的版本">
           <p>{{ USE_THEIRS_CONFIRM }}</p>
-          <div class="ccard-actions"><button type="button" class="ghost" @click="confirmTheirs = null">返回</button><button type="button" class="danger" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">使用对方的版本</button></div>
+          <div class="ccard-actions"><button type="button" class="ghost" @click="confirmTheirs = null">返回</button><button type="button" class="primary danger" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">使用对方的版本</button></div>
         </div>
         <div v-else-if="tab === 'mine' && canResolve" class="ccard-actions">
           <template v-for="choice in actionsFor(item)" :key="choice.label">
-            <button v-if="choice.action === 'manual'" type="button" class="ghost" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ choice.label }}</button>
-            <button v-else type="button" :class="choice.action === 'keep_mine' || choice.action === 'restore_as_new' && choice.placement === 'after_nearest_live' ? 'primary' : 'ghost'" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && choice.action !== 'use_theirs' ? "正在处理…" : choice.label }}</button>
+            <button v-if="choice.action === 'manual'" type="button" class="primary" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ choice.label }}</button>
+            <button v-else type="button" :class="!actionsFor(item).some(c => c.action === 'manual') && choice === actionsFor(item)[0] ? 'primary' : 'ghost'" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
           </template>
-          <button type="button" class="link" @click="downloadCopy(item)">下载我的副本</button>
+          <button v-if="item.reason === 'MODIFIED' || item.reason === 'STRUCTURE'" type="button" class="text" data-testid="conflict-compare" @click="comparing = item">并排对比</button>
+          <button type="button" class="text" @click="downloadCopy(item)">下载我的副本</button>
+        </div>
+        <div v-else-if="tab === 'members'" class="ccard-actions">
+          <button v-if="item.reason === 'MODIFIED' || item.reason === 'STRUCTURE'" type="button" class="text" @click="comparing = item">并排对比</button>
+          <button type="button" class="text" @click="downloadCopy(item)">下载提交人的副本</button>
         </div>
         <p v-if="cardError[id(item)]" class="field-error" role="alert">{{ cardError[id(item)] }}</p>
       </article>
@@ -191,11 +224,13 @@ async function downloadCopy(item: ConflictItem) {
         <ul>
           <li v-for="item in handled" :key="id(item)">
             <span>{{ locationText(item.location) }} · {{ ACTION_DONE_TEXT[item.action || ''] || item.action }}<template v-if="item.resolvedAt"> · {{ shortTime(item.resolvedAt) }}</template></span>
-            <button type="button" class="link" @click="downloadCopy(item)">下载我的副本</button>
+            <button type="button" class="text" @click="downloadCopy(item)">{{ tab === 'members' ? "下载提交人的副本" : "下载我的副本" }}</button>
           </li>
         </ul>
       </details>
     </div>
+    <ConflictCompareDialog v-if="comparing" :item="comparing" :theirs-name="theirName(comparing)" :mine-label="tab === 'members' ? `${comparing.actor?.name || '提交人'} 的版本` : undefined" :can-resolve="tab === 'mine' && canResolve" :busy="Boolean(busyKey)"
+      @close="comparing = null" @merge="compareMerge(comparing!, $event)" @edit="compareEdit(comparing!, $event)" @keep-mine="compareAction(comparing!, 'keep_mine')" @use-theirs="compareAction(comparing!, 'use_theirs')" />
   </aside>
 </template>
 
@@ -208,24 +243,27 @@ async function downloadCopy(item: ConflictItem) {
 .conflict-tabs { display:flex; gap:var(--space-1); }
 .conflict-tabs .on { background:var(--bg-active); color:var(--brand-600); }
 .conflict-body { flex:1; min-height:0; overflow:auto; display:flex; flex-direction:column; gap:var(--space-3); }
-.conflict-empty { color:var(--text-tertiary, var(--muted)); text-align:center; padding:var(--space-5) 0; }
+.conflict-empty { color:var(--text-tertiary); text-align:center; padding:var(--space-5) 0; }
 .ccard { display:grid; gap:var(--space-2); padding:var(--space-3); border:1px solid var(--danger-200); border-radius:var(--radius-sheet, var(--radius-control)); background:var(--bg-surface, var(--sheet)); }
 .ccard.skeleton { min-height:calc(var(--space-7) * 3); border-color:var(--border-default, var(--rule)); background:var(--bg-subtle); }
 .ccard-head { display:flex; justify-content:space-between; gap:var(--space-2); color:var(--danger-600); }
-.ccard-loc { margin:0; color:var(--text-secondary, var(--muted)); overflow-wrap:anywhere; }
+.ccard-loc { margin:0; color:var(--text-secondary); overflow-wrap:anywhere; }
 .ccard-desc { margin:0; }
 .ccard-notice { margin:0; padding:var(--space-1) var(--space-2); border-radius:var(--radius-control); background:var(--warning-50); color:var(--warning-600); }
-.ccard-side h3 { margin:0 0 var(--space-1); font-size:var(--text-xs); font-weight:var(--weight-medium, 500); color:var(--text-tertiary, var(--muted)); }
+.ccard-side h3 { margin:0 0 var(--space-1); font-size:var(--text-xs); font-weight:var(--weight-medium, 500); color:var(--text-tertiary); }
 .ccard-side pre, .ccard-base pre { margin:0; padding:var(--space-2); white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; border-radius:var(--radius-control); background:var(--bg-subtle); max-height:calc(var(--space-7) * 5); overflow:auto; }
-.ccard-side.theirs pre { background:var(--diff-ins-bg, var(--bg-subtle)); }
-.ccard-side.mine pre { background:var(--warning-50); }
-.ccard-side pre.gone { text-decoration:line-through; color:var(--text-tertiary, var(--muted)); background:var(--bg-subtle); }
+.ccard-side pre.diff ins { background:var(--diff-ins-bg); text-decoration:none; }
+.ccard-side pre.diff del { background:var(--diff-del-bg); text-decoration:line-through; }
+.ccard-loc { display:flex; justify-content:space-between; gap:var(--space-2); align-items:baseline; }
+.ccard-actor { margin:0; color:var(--text-secondary); }
+.conflict-tabs .count { margin-left:var(--space-1); }
+.ccard-side pre.gone { text-decoration:line-through; color:var(--text-tertiary); background:var(--bg-subtle); }
 .ccard-base summary { cursor:pointer; color:var(--text-link, var(--brand-600)); }
 .ccard-actions { display:flex; flex-wrap:wrap; gap:var(--space-2); align-items:center; }
 .ccard-manual { display:grid; gap:var(--space-2); }
 .ccard-manual textarea { width:100%; resize:vertical; }
 .ccard-confirm p { margin:0 0 var(--space-2); }
-.conflict-handled summary { cursor:pointer; color:var(--text-secondary, var(--muted)); }
+.conflict-handled summary { cursor:pointer; color:var(--text-secondary); }
 .conflict-handled ul { list-style:none; margin:var(--space-2) 0 0; padding:0; display:grid; gap:var(--space-2); }
 .conflict-handled li { display:flex; justify-content:space-between; gap:var(--space-2); overflow-wrap:anywhere; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }

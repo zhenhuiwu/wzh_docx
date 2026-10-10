@@ -869,7 +869,7 @@ td.ops {
   right: 0;
   background: var(--bg-surface);
   /* 表格比容器宽、横向滚动时，固定的“操作”列与被它盖住的列之间有分隔，不再像错位（08 复验 N-S1） */
-  box-shadow: inset 1px 0 0 var(--border-subtle), -6px 0 8px -8px rgba(15, 23, 42, 0.28);
+  box-shadow: inset 1px 0 0 var(--border-subtle), var(--shadow-sticky);
 }
 
 th:last-child {

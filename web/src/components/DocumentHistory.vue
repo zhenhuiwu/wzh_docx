@@ -29,7 +29,7 @@ const html = computed(() => {
 // 112 之前的版本没有操作人与处数，显示“未记录”（01 §4.5）
 const actor = (item: DocumentVersion) => item.createdBy
   ? `${item.createdBy.name}${item.changedObjects ? ` · ${item.changedObjects} 处` : ""}`
-  : (item.kind === "baseline" || item.kind === "created" ? "" : "未记录");
+  : (item.kind === "baseline" || item.kind === "created" ? "" : "修改人未记录");
 const label = (item: DocumentVersion) => ({ created: "新建文档", baseline: "开始记录", edit: "正文修改", restore: "恢复版本", heading: "添加标题", diagram: "插入图表", test_results: "补充测试结果", ai_section: "章节编写", selection: "选区编写", ai_selection: "选区编写", ai_document: "全文编写", ai_undo: "撤回 AI 修改", skill_settings: "编写规范", conflict_resolution: "处理冲突", backfill: "开始记录", realign: "对齐记录" }[item.kind] || "保存文档");
 const time = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 const message = (e: unknown) => e instanceof Error ? e.message : "读取失败，请重试。";
@@ -95,8 +95,8 @@ onMounted(() => void load());
 .history-panel { display:flex; flex-direction:column; gap:var(--space-3); min-height:0; min-width:0; padding:var(--space-5) var(--space-4); background:var(--sheet); border-left:1px solid var(--rule); font-family:var(--font); font-size:var(--text-sm); }
 header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
-.version-actor { display:block; color:var(--muted); font-size:var(--text-sm, 12px); }
-.history-hint { margin:0 0 var(--space-2); color:var(--warning-700, var(--muted)); font-size:var(--text-sm); }
+.version-actor { display:block; color:var(--text-tertiary); font-size:var(--text-sm); }
+.history-hint { margin:0 0 var(--space-2); color:var(--warning-600); font-size:var(--text-sm); }
 p { margin:0; color:var(--ink-secondary); }
 .version-list { display:flex; flex-direction:column; gap:var(--space-1); }
 .version-list button { display:flex; justify-content:space-between; flex-wrap:wrap; gap:var(--space-2); text-align:left; height:auto; min-height:var(--space-6); padding:var(--space-2); font-size:var(--text-sm); font-weight:400; }

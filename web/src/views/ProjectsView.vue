@@ -197,7 +197,8 @@ onMounted(async () => {
         </table>
       </div>
       <!-- 没有加入任何项目时不显示禁用的分页条（08 复验 N-S6） -->
-      <nav v-if="!noAccess" class="pager" aria-label="项目分页">
+      <!-- P0-4 后无项目时列表返回 200 空列表（noAccess 恒为 false），按总数判断（界面验收 S18） -->
+      <nav v-if="!noAccess && !(phase === 'ready' && total === 0)" class="pager" aria-label="项目分页">
         <span class="total">{{ phase === 'ready' ? `共 ${total} 个项目` : "" }}</span>
         <label>每页<select v-model.number="pageSize" class="control" :disabled="phase !== 'ready'" @change="changePageSize"><option :value="10">10 条</option><option :value="20">20 条</option><option :value="50">50 条</option></select></label>
         <span>第 {{ page }} / {{ pageCount }} 页</span>
