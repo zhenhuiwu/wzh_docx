@@ -57,28 +57,48 @@ foreach ($folder in $browserFolders) {
     Copy-Item -LiteralPath $source -Destination $stagingBrowsers -Recurse -Force
 }
 
-# Replace only program files. SQLite, uploads and a local .env stay beside the executable;
-# the zip only ever carries .env.example (no AI key).
-New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
-$oldInternal = Join-Path $packageRoot '_internal'
-if (Test-Path -LiteralPath $oldInternal) {
-    $resolvedInternal = (Resolve-Path -LiteralPath $oldInternal).Path
-    $expectedInternal = [IO.Path]::GetFullPath((Join-Path $releaseRoot '文档工作室/_internal'))
-    if ($resolvedInternal -ne $expectedInternal) { throw '拒绝清理发布目录以外的路径。' }
-    Remove-Item -LiteralPath $resolvedInternal -Recurse -Force
+# Assemble the package from an allowlist in a freshly emptied directory, so files left in
+# release/ by earlier builds or local runs (.env, data, logs, password files) never ship.
+$programEntries = @('文档工作室.exe', '_internal')
+$snapshotEntries = @('data', '.env.example', '使用说明.txt', '部署校验.json')
+
+function Remove-Under([string]$Path, [string]$Parent) {
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetFullPath($Parent).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw "拒绝清理 $Parent 以外的路径：$full" }
+    if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
 }
-Copy-Item -LiteralPath (Join-Path $stagingRoot '文档工作室.exe') -Destination $packageRoot -Force
-Copy-Item -LiteralPath (Join-Path $stagingRoot '_internal') -Destination $packageRoot -Recurse -Force
-Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.md' |
-    Copy-Item -Destination $packageRoot -Force
-if (-not $NoZip) {
-    Invoke-Checked $python @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $packageRoot, '--execute')
-    foreach ($private in @('.env', '初始管理员密码.txt')) {
-        if (Test-Path -LiteralPath (Join-Path $packageRoot $private)) { throw "发布目录含有本机私密文件 $private，拒绝打包。" }
+
+function Assert-Allowlisted([string]$Path, [string[]]$Allowed) {
+    $unexpected = @(Get-ChildItem -LiteralPath $Path -Force | Where-Object { $_.Name -notin $Allowed } | ForEach-Object { $_.Name })
+    if ($unexpected.Count) { throw "发布目录含有不在允许清单中的文件，拒绝打包：$($unexpected -join '、')" }
+}
+
+if ($NoZip) {
+    # Local trial run: refresh program files only; data and .env beside the exe are kept.
+    New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+    Remove-Under (Join-Path $packageRoot '_internal') $packageRoot
+    foreach ($entry in $programEntries) {
+        Copy-Item -LiteralPath (Join-Path $stagingRoot $entry) -Destination $packageRoot -Recurse -Force
     }
-    $zip = Join-Path $releaseRoot '文档工作室-Windows.zip'
-    Compress-Archive -LiteralPath $packageRoot -DestinationPath $zip -Force
-    Write-Host "部署包已生成：$zip"
-} else {
     Write-Host "程序已构建（尚未复制当前数据和配置）：$packageRoot"
+    return
 }
+
+$zipStage = Join-Path $buildRoot 'package'
+Remove-Under $zipStage $buildRoot
+$zipPackage = Join-Path $zipStage '文档工作室'
+New-Item -ItemType Directory -Path $zipPackage -Force | Out-Null
+foreach ($entry in $programEntries) {
+    Copy-Item -LiteralPath (Join-Path $stagingRoot $entry) -Destination $zipPackage -Recurse -Force
+}
+Invoke-Checked $python @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $zipPackage, '--execute')
+Assert-Allowlisted $zipPackage ($programEntries + $snapshotEntries)
+foreach ($private in @('.env', '初始管理员密码.txt', 'logs')) {
+    if (Test-Path -LiteralPath (Join-Path $zipPackage $private)) { throw "发布目录含有本机私密文件 $private，拒绝打包。" }
+}
+New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
+$zip = Join-Path $releaseRoot '文档工作室-Windows.zip'
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+Compress-Archive -LiteralPath $zipPackage -DestinationPath $zip
+Write-Host "部署包已生成：$zip"
