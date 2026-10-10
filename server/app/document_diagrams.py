@@ -245,9 +245,13 @@ def diagram_file(request: Request, document_id: str, diagram_id: str, format: Li
     file = _diagram_path(gid, "diagram." + format)
     if not file.is_file():
         raise AppError(404, "NOT_FOUND", "图表文件不存在，请重新生成。")
+    from app.files import content_disposition
+
+    headers = {"Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"}
+    if format != "png":
+        headers["Content-Disposition"] = content_disposition("attachment", diagram["name"] + ".vsdx")
     return FileResponse(file, media_type="image/png" if format == "png" else "application/vnd.ms-visio.drawing",
-                        filename=None if format == "png" else diagram["name"] + ".vsdx",
-                        headers={"Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"})
+                        headers=headers)
 
 
 @router.post("/documents/{document_id}/diagrams/{diagram_id}/insert")

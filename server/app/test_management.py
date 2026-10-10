@@ -810,7 +810,12 @@ def report(request: Request, task_id: str, runId: str = "", prepare: bool = Fals
         raise AppError(500, "REPORT_FAILED", "测试报告生成失败，请检查原报告 Word 是否完整。") from None
     if prepare:
         return JSONResponse(_envelope(request, {"downloadUrl": f"/api/v1/test-tasks/{task_id}/report?runId={run['id']}"}), headers={"Cache-Control": "private, no-store"})
-    return FileResponse(path, media_type=WORD_MEDIA, filename=f"{task['name']}-测试报告.docx", headers={"Cache-Control": "private, no-store"})
+    from app.files import content_disposition
+
+    return FileResponse(path, media_type=WORD_MEDIA, headers={
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": content_disposition("attachment", f"{task['name']}-测试报告.docx"),
+    })
 
 
 @router.get("/test-tasks/{task_id}/evidence/{file_name}")
