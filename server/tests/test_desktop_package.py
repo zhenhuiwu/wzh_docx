@@ -197,6 +197,50 @@ def test_desktop_reset_keeps_old_password_when_file_cannot_be_written(empty_data
     assert not target.exists()
 
 
+def _windows_user_sid() -> str:
+    import csv
+    import subprocess
+
+    out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=True).stdout
+    return next(csv.reader([out.strip()]))[1]
+
+
+def _icacls_dacl(path) -> tuple[bool, list[tuple[str, str, str]]]:
+    """Independent of pywin32: ``icacls /save`` writes the SDDL (locale-independent)."""
+    import re
+    import subprocess
+
+    saved = path.parent / (path.name + ".acl")
+    subprocess.run(["icacls", str(path), "/save", str(saved)], capture_output=True, check=True)
+    sddl = saved.read_bytes().decode("utf-16").splitlines()[1]
+    saved.unlink()
+    dacl = re.search(r"D:([A-Z]*)((?:\([^)]*\))*)", sddl)
+    assert dacl, sddl
+    aces = []
+    for ace in re.findall(r"\(([^)]*)\)", dacl.group(2)):
+        kind, flags, _rights, _object, _inherit_object, sid = ace.split(";")[:6]
+        aces.append((kind, flags, sid))
+    return "P" in dacl.group(1), aces
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL check")
+def test_windows_acl_seen_by_icacls(tmp_path):
+    from app.bootstrap_admin import write_secret_file
+
+    secret = tmp_path / "secret.txt"
+    write_secret_file(secret, "x")
+    protected, aces = _icacls_dacl(secret)
+    assert protected, aces
+    assert len(aces) == 1, aces
+    kind, flags, sid = aces[0]
+    assert kind == "A" and "ID" not in flags
+    assert sid == _windows_user_sid()
+    ordinary = tmp_path / "ordinary.txt"
+    ordinary.write_text("x", encoding="utf-8")
+    protected, aces = _icacls_dacl(ordinary)
+    assert not protected or len(aces) != 1 or any("ID" in flags for _k, flags, _s in aces)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL check")
 def test_windows_password_file_has_owner_only_protected_dacl(tmp_path):
     from app.bootstrap_admin import owner_only_acl_problem, write_secret_file
@@ -219,3 +263,20 @@ def test_windows_initial_admin_file_is_owner_only(empty_database):
 
     desktop.initialize_admin(empty_database)
     assert owner_only_acl_problem(empty_database / desktop.INITIAL_PASSWORD_FILE) is None
+
+
+def test_desktop_reset_of_unknown_account_keeps_the_password_file(empty_database, monkeypatch, capsys):
+    from app.bootstrap_admin import ResetError
+
+    desktop.initialize_admin(empty_database)
+    target = empty_database / desktop.INITIAL_PASSWORD_FILE
+    original = target.read_bytes()
+    with pytest.raises(ResetError, match="没有账号"):
+        desktop.reset_admin(empty_database, "admln")
+    assert target.read_bytes() == original
+    monkeypatch.chdir(empty_database)
+    monkeypatch.setattr(sys, "argv", ["文档工作室.exe", "--home", str(empty_database), "--reset-admin", "admln"])
+    capsys.readouterr()
+    assert desktop.main() == 1
+    assert "没有账号 admln" in capsys.readouterr().err
+    assert target.read_bytes() == original
