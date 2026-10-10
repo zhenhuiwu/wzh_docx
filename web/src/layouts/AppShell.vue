@@ -131,8 +131,10 @@ const crumbs = computed<Crumb[]>(() => {
   const title = typeof route.meta.title === "string" ? route.meta.title : "";
   if (isProjectRoute.value) {
     const id = String(route.params.id);
-    const projectName = projectCrumb.value?.id === id ? projectCrumb.value.name : "项目";
-    const list: Crumb[] = [{ label: "项目", to: { name: "projects" } }, { label: projectName, to: { name: "project", params: { id } } }];
+    // 项目名未知（加载中或不存在）时省略中间一级，不显示“项目 › 项目”（08 复验 N-S4）。
+    const projectName = projectCrumb.value?.id === id ? projectCrumb.value.name : "";
+    const list: Crumb[] = [{ label: "项目", to: { name: "projects" } }];
+    if (projectName) list.push({ label: projectName, to: { name: "project", params: { id } } });
     if (name === "project") list.push({ label: "项目概述" });
     else list.push({ label: "文档编写", to: name === "document" ? { name: "project-documents", params: { id } } : undefined });
     if (name === "document") list.push({ label: objectName("文档") });

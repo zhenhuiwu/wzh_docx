@@ -329,10 +329,11 @@ onBeforeUnmount(() => {
             </div>
 
             <label v-else class="stacked-label">
-              <span class="required">上传 Word 文件（.docx）</span>
+              <span class="required">上传 Word 文件</span>
               <FilePicker
                 id="doc-file"
                 accept=".docx"
+                empty-text="未选择文件（仅支持 .docx）"
                 :file="uploadedFile"
                 :disabled="submitting"
                 :invalid="Boolean(fields.errors.value.file)"

@@ -8,6 +8,7 @@ import { createSource, getKnowledgeBase, listSources, type KnowledgeBase, type S
 import FilePicker from "../components/FilePicker.vue";
 import { rememberCrumb } from "../crumbs";
 import { hasPermission, readSession } from "../session";
+import { useFieldErrors } from "../fieldErrors";
 
 const route = useRoute();
 const baseId = computed(() => String(route.params.id));
@@ -21,6 +22,7 @@ const file = ref<File | null>(null);
 const submitting = ref(false);
 const tab = ref<"materials" | "search">("materials");
 const notFound = ref(false);
+const fields = useFieldErrors<"name" | "file">("source");
 const canManage = computed(() => hasPermission(readSession(), "knowledge.manage"));
 
 async function load() {
@@ -40,10 +42,11 @@ async function load() {
 
 async function submitFile() {
   notice.value = "";
-  if (!name.value.trim() || !file.value) {
-    notice.value = "请填写资料名称并选择文件";
-    return;
-  }
+  // 字段级校验（08 复验 N-S3）
+  if (await fields.report({
+    name: name.value.trim() ? "" : "请填写资料名称。",
+    file: file.value ? "" : "请选择文件。",
+  }) || !file.value) return;
   const targetBase = baseId.value;
   const targetName = name.value.trim();
   const targetFile = file.value;
@@ -72,10 +75,10 @@ onMounted(() => void load());
         <h1>{{ base?.name || "知识库" }}</h1>
         <p v-if="base" class="page-desc"><span class="tag plain">{{ base.scope === "project" ? "项目知识库" : "单位知识库" }}</span><span v-if="base.summary" class="summary">{{ base.summary }}</span></p>
       </div>
-      <div class="page-actions"><router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link></div>
+      <div v-if="!(phase === 'error' && notFound)" class="page-actions"><router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link></div>
     </header>
     <div v-if="phase === 'loading'" class="card"><StatePanel kind="loading" text="正在读取知识库…" /></div>
-    <div v-else-if="phase === 'error' && notFound" class="card"><StatePanel title="知识库不存在或已删除" text="请从知识库列表重新进入。"><router-link class="ghost" :to="{ name: 'knowledge' }">返回知识库列表</router-link></StatePanel></div>
+    <div v-else-if="phase === 'error' && notFound" class="card"><StatePanel kind="error" title="知识库不存在或已删除。" text="请从知识库列表重新进入。"><router-link class="primary" :to="{ name: 'knowledge' }">返回知识库列表</router-link></StatePanel></div>
     <div v-else-if="phase === 'error'" class="card"><StatePanel kind="error" title="知识库没有载入" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
     <div v-else class="card kb-card">
       <!-- 页签放进卡片顶部，与项目详情一致（08 验收 S5） -->
@@ -88,8 +91,8 @@ onMounted(() => void load());
         <!-- 登记资料按 knowledge.manage 显隐（09 复审 R5） -->
         <form v-if="canManage" class="query upload" @submit.prevent="submitFile">
           <div class="query-fields">
-            <label><span>资料名称</span><input v-model="name" class="control" type="text" :disabled="submitting" /></label>
-            <label><span>文件</span><FilePicker class="file" :file="file" :disabled="submitting" @change="picked => { file = picked; }" /></label>
+            <label><span class="required">资料名称</span><span class="field-stack"><input id="source-name" v-model="name" class="control" v-bind="fields.invalid('name')" type="text" :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></span></label>
+            <label><span class="required">文件</span><span class="field-stack"><FilePicker id="source-file" class="file" :file="file" :invalid="Boolean(fields.errors.value.file)" v-bind="fields.invalid('file')" :disabled="submitting" @change="picked => { file = picked; fields.clear('file'); }" /><span v-if="fields.errors.value.file" :id="fields.errorId('file')" class="field-error" role="alert">{{ fields.errors.value.file }}</span></span></label>
           </div>
           <div class="query-actions"><button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button></div>
         </form>
@@ -130,4 +133,8 @@ onMounted(() => void load());
 .col-state { width: 12%; }
 .kb-table td { white-space: normal; overflow-wrap: anywhere; }
 .upload .file { width: calc(var(--space-7) * 9); }
+.upload label { align-items: flex-start; }
+.upload label > span:first-child { line-height: var(--control-h); }
+.field-stack { display: inline-grid; gap: var(--space-1); }
+.field-stack .field-error { margin: 0; white-space: normal; }
 </style>

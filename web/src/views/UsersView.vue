@@ -30,6 +30,7 @@ const creating = ref(false);
 const submitting = ref(false);
 const formError = ref("");
 const fields = useFieldErrors<"account" | "name" | "password">("user");
+const askFields = useFieldErrors<"password" | "reason">("ask");
 const notice = ref("");
 const account = ref("");
 const password = ref("");
@@ -163,7 +164,7 @@ function ask(user: AccountUser, action: "disable" | "enable" | "reset" | "revoke
   reason.value = "";
   password.value = "";
   formError.value = "";
-  notice.value = "";
+  notice.value = "";  askFields.clear();
 }
 
 function cancelAsk() {
@@ -171,18 +172,16 @@ function cancelAsk() {
   pendingAction.value = "";
   reason.value = "";
   password.value = "";
+  askFields.clear();
 }
 
 async function confirmAsk() {
   if (submitting.value || !pending.value || !pendingAction.value) return;
-  if (pendingAction.value !== "revoke" && !reason.value.trim()) {
-    formError.value = "请填写原因";
-    return;
-  }
-  if (pendingAction.value === "reset" && (password.value.length < 12 || password.value.length > 1024)) {
-    formError.value = "密码需为 12 至 1024 个字符。";
-    return;
-  }
+  // 字段级校验（08 复验 N-S3）：顺序与界面一致，先新密码后原因。
+  if (await askFields.report({
+    password: pendingAction.value === "reset" && (password.value.length < 12 || password.value.length > 1024) ? "密码需为 12 至 1024 个字符。" : "",
+    reason: pendingAction.value !== "revoke" && !reason.value.trim() ? "请填写原因。" : "",
+  })) return;
   submitting.value = true;
   formError.value = "";
   try {
@@ -364,13 +363,15 @@ onMounted(async () => {
             <template v-else>撤销后该账号需要重新登录。</template>
           </p>
           <div v-if="pendingAction === 'reset'" class="field">
-            <label for="reset-password" class="required">新密码</label>
-            <input id="reset-password" v-model="password" class="control" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" aria-describedby="reset-password-hint" :disabled="submitting" />
-            <p id="reset-password-hint" class="hint">至少 12 个字符。</p>
+            <label for="ask-password" class="required">新密码</label>
+            <input id="ask-password" v-model="password" class="control" v-bind="askFields.invalid('password', 'ask-password-hint')" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" :disabled="submitting" @input="askFields.clear('password')" />
+            <span v-if="askFields.errors.value.password" :id="askFields.errorId('password')" class="field-error" role="alert">{{ askFields.errors.value.password }}</span>
+            <p id="ask-password-hint" class="hint">至少 12 个字符。</p>
           </div>
           <div v-if="pendingAction !== 'revoke'" class="field">
-            <label for="user-reason" class="required">原因</label>
-            <input id="user-reason" v-model="reason" class="control" type="text" :disabled="submitting" />
+            <label for="ask-reason" class="required">原因</label>
+            <input id="ask-reason" v-model="reason" class="control" v-bind="askFields.invalid('reason')" type="text" :disabled="submitting" @input="askFields.clear('reason')" />
+            <span v-if="askFields.errors.value.reason" :id="askFields.errorId('reason')" class="field-error" role="alert">{{ askFields.errors.value.reason }}</span>
           </div>
           <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         </div>

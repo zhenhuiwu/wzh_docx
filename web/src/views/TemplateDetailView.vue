@@ -10,6 +10,7 @@ import { getTemplate, listTemplateDocuments, createTemplateDocument, deleteTempl
 import TemplateImportEditor from "../components/TemplateImportEditor.vue";
 import FilePicker from "../components/FilePicker.vue";
 import { rememberCrumb } from "../crumbs";
+import { useFieldErrors } from "../fieldErrors";
 
 // 只读角色（templates.read）不显示导入、核对、移除（09 审查 M2）。
 const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
@@ -24,6 +25,7 @@ const busy = ref(false);
 const docName = ref("");
 const docDescription = ref("");
 const docFile = ref<File | null>(null);
+const fields = useFieldErrors<"name" | "file">("tpldoc");
 const wordFileId = ref("");
 const structure = ref<TemplateImportStructure | null>(null);
 const editingId = ref("");
@@ -63,6 +65,7 @@ function startImport() {
   docDescription.value = "";
   docFile.value = null;
   wordFileId.value = "";
+  fields.clear();
   structure.value = null;
   formError.value = "";
   notice.value = "";
@@ -82,9 +85,12 @@ function chooseFile(event: Event) {
 async function parseWord() {
   if (busy.value) return;
   formError.value = "";
-  if (!docName.value.trim() || docName.value.trim().length > 120) { formError.value = "模板文档名称应为 1–120 个字符。"; return; }
   const file = docFile.value;
-  if (!file || !/\.docx$/i.test(file.name)) { formError.value = "请选择 Word .docx 文件。"; return; }
+  // 字段级校验（08 复验 N-S3）
+  if (await fields.report({
+    name: !docName.value.trim() || docName.value.trim().length > 120 ? "模板文档名称应为 1–120 个字符。" : "",
+    file: !file ? "请选择 Word 文件。" : !/\.docx$/i.test(file.name) ? "请选择 .docx 格式的 Word 文件。" : "",
+  }) || !file) return;
   busy.value = true;
   try {
     if (!wordFileId.value) wordFileId.value = (await uploadFile(file, "template", { idempotencyKey: crypto.randomUUID() })).id;
@@ -181,8 +187,8 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       <p v-if="errorText" class="notice" role="alert">{{ errorText }}</p>
       <template v-if="adding">
         <form v-if="!editingId" class="import-form" @submit.prevent="parseWord">
-          <label>模板文档名称<input v-model="docName" type="text" class="control" :disabled="busy" @input="dirty = true" /></label>
-          <label>Word 文件<FilePicker accept=".docx" :file="docFile" :disabled="busy || Boolean(structure)" @change="(_file, event) => chooseFile(event)" /></label>
+          <label><span class="required">模板文档名称</span><input id="tpldoc-name" v-model="docName" type="text" class="control" v-bind="fields.invalid('name')" :disabled="busy" @input="dirty = true; fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></label>
+          <label><span class="required">Word 文件</span><FilePicker id="tpldoc-file" accept=".docx" :file="docFile" :invalid="Boolean(fields.errors.value.file)" v-bind="fields.invalid('file')" :disabled="busy || Boolean(structure)" @change="(_file, event) => { fields.clear('file'); chooseFile(event); }" /><span v-if="fields.errors.value.file" :id="fields.errorId('file')" class="field-error" role="alert">{{ fields.errors.value.file }}</span></label>
           <button v-if="!structure" class="primary" type="submit" :disabled="busy">{{ busy ? '正在解析…' : '解析并核对' }}</button>
           <button v-if="!structure" class="ghost" type="button" :disabled="busy" @click="cancel">取消</button>
         </form>
@@ -212,9 +218,10 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
 .col-review { width:14%; }
 .col-ops { width:16%; }
 .doc-name { font-weight:var(--weight-medium); }
-.import-form { display:flex; flex:none; align-items:flex-end; gap:var(--space-4); padding:var(--space-4); border-bottom:1px solid var(--border-subtle); }
+.import-form { display:flex; flex:none; align-items:flex-start; gap:var(--space-4); padding:var(--space-4); border-bottom:1px solid var(--border-subtle); }
 .import-form label { display:grid; flex:1; min-width:0; gap:6px; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
 .import-form .control { width:100%; }
+.import-form > button { margin-top:calc(var(--leading-sm) + 6px); }   /* 与输入框顶端对齐；字段下方出现校验提示时按钮不下沉 */
 .editing-name { flex:none; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-subtle); }
 .editing-name h2 { margin:0; font-size:var(--text-md); font-weight:var(--weight-semibold); overflow-wrap:anywhere; }
 .editing-name p { margin:var(--space-1) 0 0; color:var(--text-secondary); font-size:var(--text-sm); }

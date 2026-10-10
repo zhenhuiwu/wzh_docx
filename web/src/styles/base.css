@@ -50,8 +50,11 @@
   --border-default: var(--gray-200);
   --border-strong:  var(--gray-300);
   --focus-ring:     rgba(36, 87, 197, 0.28);          /* 旧代码按颜色使用，保持为颜色 */
-  --focus-shadow:   0 0 0 3px var(--focus-ring);
+  /* 焦点（08 复验 N-S2）：实线部分用 brand-600 / danger-700（对白底 6.5:1 / 6.8:1，满足非文本 3:1），浅色光环只作辅助。 */
+  --focus-shadow:   0 0 0 2px var(--brand-600);                                   /* 无边框元素：2px 实线环 */
+  --focus-shadow-control: inset 0 0 0 1px var(--brand-600), 0 0 0 3px var(--focus-ring); /* 输入框：1px 边框 + 1px 内描边 = 2px 实线 */
   --focus-ring-danger: rgba(201, 58, 50, 0.32);   /* 标红字段聚焦（08 验收 M3） */
+  --focus-shadow-danger: inset 0 0 0 1px var(--danger-700), 0 0 0 3px var(--focus-ring-danger);
   --focus-outline:  2px solid var(--brand-600);  /* 按钮/链接焦点：对白底 6.5:1，满足非文本 3:1（08 验收 S1） */
   --diff-ins-bg:    #e3f4e9;
   --diff-del-bg:    #fbe4e2;
