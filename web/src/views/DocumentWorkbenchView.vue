@@ -11,7 +11,8 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel } from "../conflictModel";
 import { otherTabOpen } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
-import { listDrafts, recoverySummary, removeDraft, tabId as makeTabId, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
+import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
+import { browserTabId, pageInstance } from "../tabIdentity";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -93,7 +94,9 @@ const lastPresenceTabs = new Set<string>();
 const capabilities = ref<Capabilities | null>(null);
 // 打开文档时的账号：会话失效后 readSession() 为空，草稿仍要写到原账号名下（G1）。
 let draftAccount = "";
-const browserTab = makeTabId(window.sessionStorage, () => crypto.randomUUID());
+// 审查 M1：tabId 经 BroadcastChannel 声明去重（复制标签页会带着同一个 sessionStorage 值）。
+let browserTab = "";
+let draftTimer: number | undefined;
 const selectedHeading = ref<number | null>(null);
 const headingTitle = ref("");
 const headingPlacement = ref<"child" | "sibling">("child");
@@ -200,6 +203,7 @@ async function load() {
   loadErrorStatus.value = 0;
   try {
     draftAccount = readSession()?.staffId || draftAccount;
+    browserTab = await browserTabId();
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const record = await getDocument(id);
     const preview = await previewDocument(id);
@@ -250,25 +254,36 @@ function findLocalDrafts(record: DocumentRecord) {
   const drafts = listDrafts(window.localStorage, account(), record.id)
     .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent));
   for (const draft of listDrafts(window.localStorage, account(), record.id)) {
-    if (draft.wholeDocument && draft.markdown === record.markdownContent) removeDraft(window.localStorage, account(), record.id, draft.tabId);
+    // 与服务器正文相同的草稿没有恢复价值；按读到的版本删除（期间被别的标签改写就不删）。
+    if (draft.wholeDocument && draft.markdown === record.markdownContent) removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
   }
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
   void settlePendingSaves(record);
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
-async function settlePendingSaves(record: DocumentRecord) {
+async function settlePendingSaves(record: DocumentRecord, retried = false) {
+  let waiting = false;
   for (const draft of [...localDrafts.value]) {
     const key = draft.pendingSave?.clientSaveKey;
     if (!key) continue;
     let landed = false;
     try { landed = await findChangeBySaveKey(record.id, key); } catch { continue; }
+    if (!landed) {
+      // 审查 S5 / 测试 L7：关页时的 keepalive 保存可能比重新打开还晚落库，或合并后与服务器正文相同（不记键）。
+      try {
+        const latest = await getDocument(record.id);
+        landed = draft.wholeDocument && latest.markdownContent === draft.markdown;
+      } catch { /* 查不到就按未落库处理 */ }
+      if (!landed && !retried) { waiting = true; continue; }
+    }
     if (!landed || document.value !== record) continue;
-    removeDraft(window.localStorage, account(), record.id, draft.tabId);
+    if (!removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt })) continue;
     localDrafts.value = localDrafts.value.filter(item => item !== draft);
     localDraft.value = localDrafts.value[0] ?? null;
     noteAction("上次关闭页面前的修改已保存到服务器。");
   }
+  if (waiting && !retried) window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, true); }, 1500);
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
 async function refreshFromServer(): Promise<boolean> {
@@ -313,6 +328,11 @@ function openPresence(docId: string) {
     const message = event.data as { type?: string; tabId?: string };
     if (!otherTabOpen(message, self)) return;
     lastPresenceTabs.add(String(message.tabId));
+    // 审查 M1：仍打开着的其他标签的草稿由它自己管理，本标签不显示为“恢复条”，也就不会被这里舍弃。
+    if (message.type !== "bye" && localDrafts.value.some(draft => draft.tabId === message.tabId)) {
+      localDrafts.value = localDrafts.value.filter(draft => draft.tabId !== message.tabId);
+      localDraft.value = localDrafts.value[0] ?? null;
+    }
     if (message.type === "presence") presence?.postMessage({ type: "presence-reply", ...self });
     // “知道了”后本标签不再为同一个标签提示；新的标签页出现时重新提示
     if (!dismissedTabs(docId).includes(String(message.tabId))) multiTab.value = true;
@@ -868,7 +888,7 @@ function onEditorInput(event?: Event) {
   copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
   const html = copy.innerHTML;
   markdownContent.value = editorMarkdown(turndown, DOMPurify.sanitize(html, { RETURN_DOM: true }) as HTMLElement);
-  persistLocalDraft();
+  scheduleDraftWrite();
   editorVersion.value += 1;
   if (event instanceof InputEvent && ["insertParagraph", "insertFromDrop"].includes(event.inputType)) layoutNeedsRefresh = true;
   if (aiDraft.value) aiError.value = "文档已变化，请重新生成草稿。";
@@ -879,6 +899,29 @@ function scheduleAutoSave(delay = 3000) {
   window.clearTimeout(autoSaveTimer);
   autoSaveTimer = window.setTimeout(() => void save(), delay);
 }
+/** 审查 S4：大文档每次按键都整篇序列化写 localStorage 太慢，改为 400ms 去抖；保存、离开、隐藏、关页前强制写。 */
+function scheduleDraftWrite() {
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(() => { draftTimer = undefined; persistLocalDraft(); }, 400);
+}
+function flushDraft() {
+  if (draftTimer === undefined) return;
+  persistLocalDraft();
+}
+function onVisibilityChange() {
+  if (window.document.visibilityState === "hidden") flushDraft();
+}
+const storageUsage = computed(() => storageFailed.value ? draftUsage(window.localStorage, account()) : []);
+const otherDocDrafts = computed(() => storageUsage.value.filter(item => item.docId !== document.value?.id));
+/** 配额不足时：把其他文档的本机草稿打包下载后再从浏览器中移除（先下载，不丢稿）。 */
+function exportAndClearOtherDrafts() {
+  const items = otherDocDrafts.value;
+  if (!items.length) return;
+  const bundle = items.map(item => readDraft(window.localStorage, account(), item.docId, item.tabId)).filter(Boolean);
+  download(`本机草稿备份-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.json`, JSON.stringify(bundle, null, 2), "application/json;charset=utf-8");
+  for (const item of items) removeDraft(window.localStorage, account(), item.docId, item.tabId);
+  persistLocalDraft();
+}
 function currentDraft(): DraftV2 | null {
   const record = document.value;
   if (!record) return null;
@@ -886,14 +929,18 @@ function currentDraft(): DraftV2 | null {
     v: 2, docId: record.id, tabId: browserTab, docRevision: record.revision, mergeBase: mergeBase ?? record.revision, savedAt: Date.now(),
     wholeDocument: true, markdown: markdownContent.value, blocks: [], changed: pendingCount.value,
     headingPaths: headingPathsOf(markdownContent.value), conflictsEdits: [], pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
+    writer: pageInstance,
   };
 }
 /** 每次输入同步写本机草稿；没有未保存修改时删除本标签页的草稿。写入失败进入 blocked（01 §6.5 第7条）。 */
 function persistLocalDraft(): boolean {
   const record = document.value;
-  if (!record) return false;
+  if (!record || !browserTab) return false;
+  window.clearTimeout(draftTimer);
+  draftTimer = undefined;
   if (!isDirty.value) {
-    removeDraft(window.localStorage, account(), record.id, browserTab);
+    // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
+    removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
     storageFailed.value = false;
     return true;
   }
@@ -927,13 +974,15 @@ async function restoreLocalDraft() {
   if (!draft || !record || draftBusy.value || readonly.value || !draft.markdown) return;
   draftBusy.value = true;
   try {
+    // 审查 S6：先等在途的保存结束，保持单飞。
+    if (savePromise) await savePromise.catch(() => undefined);
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = draft.markdown;
     await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
     // 编辑区按服务器正文重绘（草稿条存在时 refreshEditorFormatting 会被锁住）。
     if (!blocked.value && !isDirty.value && document.value === record) await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
     if (!blocked.value) {
-      removeDraft(window.localStorage, account(), record.id, draft.tabId);
+      removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
       localDrafts.value = localDrafts.value.filter(item => item !== draft);
       localDraft.value = localDrafts.value[0] ?? null;
     }
@@ -945,7 +994,7 @@ function discardLocalDraft() {
   const draft = localDraft.value;
   if (!draft || !document.value) return;
   if (!window.confirm("舍弃后这份本机修改将无法恢复，确定舍弃？")) return;
-  removeDraft(window.localStorage, account(), document.value.id, draft.tabId);
+  removeDraft(window.localStorage, account(), document.value.id, draft.tabId, { savedAt: draft.savedAt });
   localDrafts.value = localDrafts.value.filter(item => item !== draft);
   localDraft.value = localDrafts.value[0] ?? null;
 }
@@ -981,6 +1030,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
   savingTimer = window.setTimeout(() => { if (saving.value) showSaving.value = true; }, 400);
   if (!pendingKey || pendingKey.content !== content) pendingKey = { content, key: crypto.randomUUID() };
   const key = pendingKey.key;
+  flushDraft();
   savePromise = (async () => {
     try {
       const base = baseRevision ?? mergeBase ?? record.revision;
@@ -1405,6 +1455,7 @@ onBeforeRouteUpdate(leaveDocument);
 onMounted(() => {
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener("pagehide", onPageHide);
+  window.document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
@@ -1414,6 +1465,7 @@ onUnmounted(() => {
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener("pagehide", onPageHide);
+  window.document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("online", onOnline);
   window.removeEventListener("offline", onOffline);
   window.clearInterval(clockTimer);
@@ -1475,8 +1527,11 @@ onUnmounted(() => {
         </span>
       </div>
       <div v-else-if="storageFailed" class="notice danger save-blocked" role="alert">
-        <span>浏览器存储已满，修改未能保存在本机。服务器保存仍在继续，建议先下载你的修改。</span>
-        <span class="acts"><button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button></span>
+        <span>浏览器存储已满，修改未能保存在本机。服务器保存仍在继续，建议先下载你的修改。<template v-if="storageUsage.length">本机共有 {{ storageUsage.length }} 份文档草稿，约 {{ (storageUsage.reduce((sum, item) => sum + item.bytes, 0) / 1048576).toFixed(1) }} MB。</template></span>
+        <span class="acts">
+          <button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button>
+          <button v-if="otherDocDrafts.length" type="button" class="ghost" data-testid="clear-other-drafts" @click="exportAndClearOtherDrafts">下载并清理其他文档的草稿（{{ otherDocDrafts.length }} 份）</button>
+        </span>
       </div>
       <p v-if="exportError" class="notice info" role="status">{{ exportError }} <button type="button" class="ghost" @click="exportError = ''">知道了</button></p>
       <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftKey, indexKey, legacyKey, listDrafts, readDraft, recoverySummary, removeDraft, tabId, verifyDraft, writeDraft, type DraftV2, type StorageLike } from "./draftStore";
+import { draftKey, draftUsage, indexKey, legacyKey, listDrafts, readDraft, recoverySummary, removeDraft, tabId, verifyDraft, writeDraft, type DraftV2, type StorageLike } from "./draftStore";
 
 class Memory implements StorageLike {
   data = new Map<string, string>();
@@ -35,6 +35,28 @@ describe("draftStore", () => {
     storage.limit = 10;
     expect(writeDraft(storage, "u1", draft())).toBe("quota");
     expect(verifyDraft(storage, "u1", draft())).toBe(false);
+  });
+  it("审查 M1：只删本页面写的、且未被改写的草稿", () => {
+    const storage = new Memory();
+    writeDraft(storage, "u1", draft({ writer: "page-A", savedAt: 5 }));
+    expect(removeDraft(storage, "u1", "d1", "t1", { writer: "page-B" })).toBe(false);
+    expect(readDraft(storage, "u1", "d1", "t1")?.markdown).toBe("# A\n\nmine");
+    expect(removeDraft(storage, "u1", "d1", "t1", { savedAt: 4 })).toBe(false);
+    expect(removeDraft(storage, "u1", "d1", "t1", { writer: "page-A", savedAt: 5 })).toBe(true);
+    expect(readDraft(storage, "u1", "d1", "t1")).toBeNull();
+  });
+  it("审查 S4：列出本账号草稿占用", () => {
+    const storage = new (class extends Memory {
+      get length() { return this.data.size; }
+      key(index: number) { return [...this.data.keys()][index] ?? null; }
+    })();
+    writeDraft(storage, "u1", draft({ markdown: "x".repeat(100) }));
+    writeDraft(storage, "u1", draft({ docId: "d2", tabId: "t9", markdown: "y" }));
+    writeDraft(storage, "u2", draft({ docId: "d3" }));
+    const usage = draftUsage(storage, "u1");
+    expect(usage.map(item => item.docId)).toEqual(["d1", "d2"]);
+    expect(usage[0].tabId).toBe("t1");
+    expect(usage[0].bytes).toBeGreaterThan(usage[1].bytes);
   });
   it("removes a tab draft and its index entry", () => {
     const storage = new Memory();

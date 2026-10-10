@@ -1,4 +1,8 @@
-"""阶段2 浏览器验收（S8）：1920×1080，非管理员账号，服务只用 8041/5211，数据库在 /tmp/wzh_phase2_run/live。
+"""阶段2 浏览器验收（S8）：1920×1080，非管理员账号。
+
+环境变量（测试 L5）：E2E_API（默认 http://127.0.0.1:8041/api/v1）、E2E_WEB（默认 http://127.0.0.1:5211）、
+E2E_SHOTS（验收截图目录）、E2E_OUT（失败截图与下载，默认系统临时目录/e2e_phase2）；
+DATABASE_URL / FILE_DATA_DIR 必须指向被测服务的同一个库（脚本直接建账号）。
 
 运行（先用 /tmp/wzh_phase2_run/live/start.sh 起服务）：
     DATABASE_URL=sqlite:////tmp/wzh_phase2_run/live/app.db FILE_DATA_DIR=/tmp/wzh_phase2_run/live/files \
@@ -12,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -19,9 +24,11 @@ import httpx
 from playwright.sync_api import Page, expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-API = "http://127.0.0.1:8041/api/v1"
-WEB = "http://127.0.0.1:5211"
+# 测试 L5：地址与输出目录都可配置（默认值是开发机的 8041/5211）。
+API = os.environ.get("E2E_API", "http://127.0.0.1:8041/api/v1")
+WEB = os.environ.get("E2E_WEB", "http://127.0.0.1:5211")
 SHOTS = Path(os.environ.get("E2E_SHOTS", "/workspace/wzh_collab/screens/phase2"))
+OUT = Path(os.environ.get("E2E_OUT", str(Path(tempfile.gettempdir()) / "e2e_phase2")))
 PASSWORD = "E2e-phase2-pass-1"
 RUN = uuid.uuid4().hex[:6]
 results: list[tuple[str, bool, str]] = []
@@ -40,7 +47,8 @@ def step(name: str):
                 print(f"FAIL {name}: {error}", flush=True)
                 for index, page in enumerate(open_pages):
                     if not page.is_closed():
-                        page.screenshot(path=f"/tmp/wzh_phase2_run/live/fail-{index}.png")
+                        OUT.mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=str(OUT / f"fail-{index}.png"))
                 raise
         return run
     return wrap

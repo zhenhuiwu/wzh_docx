@@ -33,7 +33,11 @@ export interface DraftV2 {
   headingPaths: string[][];   // 涉及章节（去重，最多 5 个）
   conflictsEdits: ConflictEdit[];
   pendingSave: { clientSaveKey: string; sentAt: number } | null;
+  writer?: string;            // 写入这份草稿的页面实例（审查 M1：删除前核对）
 }
+
+/** 删除条件（审查 M1）：writer——只删本页面写的；savedAt——只删读到的那一版（期间被别的标签改写就不删）。 */
+export interface RemoveGuard { writer?: string; savedAt?: number }
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -88,13 +92,39 @@ export function verifyDraft(storage: StorageLike, account: string, draft: DraftV
     && JSON.stringify(stored.conflictsEdits) === JSON.stringify(draft.conflictsEdits);
 }
 
-export function removeDraft(storage: StorageLike, account: string, docId: string, tabId: string): void {
+export function removeDraft(storage: StorageLike, account: string, docId: string, tabId: string, guard?: RemoveGuard): boolean {
+  if (guard) {
+    const stored = readDraft(storage, account, docId, tabId);
+    if (stored && guard.writer !== undefined && stored.writer !== guard.writer) return false;
+    if (stored && guard.savedAt !== undefined && stored.savedAt !== guard.savedAt) return false;
+  }
   try {
     storage.removeItem(draftKey(account, docId, tabId));
     const index = readIndex(storage, account, docId).filter(item => item.tabId !== tabId);
     if (index.length) storage.setItem(indexKey(account, docId), JSON.stringify(index));
     else storage.removeItem(indexKey(account, docId));
   } catch { /* 删除失败只会多出一条恢复提示，不会丢稿。 */ }
+  return true;
+}
+
+export interface DraftUsage { docId: string; tabId: string; bytes: number; savedAt: number }
+
+/** 本账号所有本机草稿的占用（审查 S4：配额不足时列出，供用户清理）。按占用从大到小。 */
+export function draftUsage(storage: StorageLike & { length: number; key(index: number): string | null }, account: string): DraftUsage[] {
+  const prefix = `doc-workbench.draft.v2:${account}:`;
+  const found: DraftUsage[] = [];
+  try {
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (!key?.startsWith(prefix)) continue;
+      const raw = storage.getItem(key) || "";
+      const [docId, tabId] = key.slice(prefix.length).split(":");
+      let savedAt = 0;
+      try { savedAt = Number(JSON.parse(raw).savedAt) || 0; } catch { /* 损坏的草稿也计入占用 */ }
+      found.push({ docId, tabId, bytes: raw.length * 2, savedAt });
+    }
+  } catch { /* 读不到就当没有 */ }
+  return found.sort((a, b) => b.bytes - a.bytes);
 }
 
 /** 列出本文档的所有本机草稿（含旧 v1 转换），按时间新到旧。 */
