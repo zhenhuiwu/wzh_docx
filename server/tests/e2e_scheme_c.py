@@ -794,9 +794,63 @@ def s_reopen_self_edit(ctx: Run, page):
     return {"notice": notice.inner_text()[:80]}
 
 
+@scenario("M2 隐形框存不上 先记草稿 联网补发 关页重开补发")
+def s_sink_offline(ctx: Run, page):
+    """审查员 M2（p9-b2b）：/mine 失败时隐形框里的字先进本机草稿；online 后补发；关页后重开从草稿补发；框可见。"""
+    selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+    doc_id = selfconf.make_doc(ctx.data, f"方案C隐形框断网-{time.strftime('%H%M%S')}", 0)
+    ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + LIST)
+    ctx.open(page, doc_id)
+    page.locator(".paper-content li", has_text="列表项一").first.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    ctx.zhang_edit(doc_id, "列表项一", "列表项一（对方改）")
+    page.keyboard.press("Control+s")
+    page.keyboard.type("，续零】", delay=150)
+    sink = page.get_by_test_id("caret-sink")
+    expect(sink).to_be_visible(timeout=20000)
+    box = sink.bounding_box() or {}
+    style = sink.evaluate("el => getComputedStyle(el).opacity")
+    assert box.get("width", 0) > 100 and style == "1", f"隐形框不可见：{box} opacity={style}"
+    page.wait_for_timeout(1500)
+    page.route("**/conflicts/*/mine", lambda route: route.abort())
+    page.keyboard.type("〔存不上〕", delay=60)
+    page.wait_for_timeout(2500)
+    latest = lambda: "\n".join((item.get("mineLatest") or {}).get("markdown") or "" for item in ctx.items(doc_id))  # noqa: E731
+    assert "〔存不上〕" not in latest()
+    drafts = page.evaluate("() => Object.keys(localStorage).map(k => localStorage.getItem(k) || '').join('\\n')")
+    assert "〔存不上〕" in drafts, "存不上时没先记进本机草稿"
+    expect(page.get_by_test_id("sink-note")).to_contain_text("暂时没存上", timeout=5000)
+    page.unroute("**/conflicts/*/mine")
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
+    deadline = time.time() + 15
+    while "〔存不上〕" not in latest() and time.time() < deadline:
+        time.sleep(0.5)
+    assert "〔存不上〕" in latest(), "联网后没补发"
+    # 关页前存不上：重开后从本机草稿补发
+    page.route("**/conflicts/*/mine", lambda route: route.abort())
+    page.keyboard.type("〔关页前〕", delay=60)
+    page.wait_for_timeout(1500)
+    url = page.url
+    other = page.context.new_page()
+    page.close(run_before_unload=False)
+    try:
+        other.goto(url)
+        expect(other.locator(".paper-content")).to_be_visible(timeout=90000)
+        deadline = time.time() + 40
+        while "〔关页前〕" not in latest() and time.time() < deadline:
+            time.sleep(0.5)
+        got = latest()
+        assert "〔关页前〕" in got and "〔存不上〕" in got and "【我改的" in got, got
+        assert "〔关页前〕" not in ctx.server(doc_id)["markdownContent"]
+    finally:
+        other.context.close()
+    return {"latest": got[-60:]}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit]
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline]
 
 
 def main() -> int:
