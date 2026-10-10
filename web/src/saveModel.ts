@@ -144,3 +144,9 @@ export function changedBlockCount(base: string, mine: string): number {
   // 替换一个块记 1 处；纯增删各记 1 处。
   return Math.max(x.length, y.length) - common;
 }
+
+/** 界面复验 N10：本机草稿占用。小于 0.1 MB 时不写“约 0.0 MB”。 */
+export function draftSizeText(bytes: number): string {
+  const mb = bytes / 1048576;
+  return mb < 0.1 ? "不到 0.1 MB" : `约 ${mb.toFixed(1)} MB`;
+}

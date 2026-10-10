@@ -1,5 +1,6 @@
 /** 冲突面板的纯逻辑（01 §6.4、02 §3.4–3.7；vitest ⑧ ⑪ ⑫）。 */
 import type { ConflictAction, ConflictItem, ConflictSummary, Person } from "./api/documents";
+import { isTable } from "./textDiff";
 
 /** “冲突 N”：只用服务器的 mineOpen；summary 请求失败时才用本地计数兜底。 */
 export function conflictCount(summary: ConflictSummary | null, localFallback = 0): number {
@@ -45,8 +46,9 @@ export interface ActionChoice { action: ConflictAction; label: string; placement
 export function actionsFor(item: Pick<ConflictItem, "reason" | "mine" | "theirs">): ActionChoice[] {
   switch (item.reason) {
     case "MODIFIED":
+      // 界面复验 N7：表格冲突写“两张表都保留”
       return [{ action: "manual", label: "手动合并" }, { action: "keep_mine", label: "保留我的" },
-        { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: "两段都保留" }];
+        { action: "use_theirs", label: "使用对方的版本" }, { action: "keep_both", label: isTable(item.theirs?.markdown || "") || isTable(item.mine?.markdown || "") ? "两张表都保留" : "两段都保留" }];
     case "STRUCTURE":
       return [{ action: "keep_mine", label: "保留我的" }, { action: "use_theirs", label: "使用对方的版本" }];
     case "FORMAT":
@@ -85,11 +87,12 @@ export function othersUpdatedText(names: string[], objects: number, refreshed: b
 }
 
 /** 冲突按钮（界面验收 M2/M3）：自己有待处理 → “冲突 N”；只有成员冲突（负责人/管理员）→ “成员冲突 M”；都处理完但有记录 → “冲突”，仍可进入“已处理”。 */
-export function conflictToggle(summary: ConflictSummary | null, local = 0): { label: string; tone: "danger" | "warning" | "neutral"; tab: "mine" | "members" } | null {
+export interface ConflictToggle { label: string; name: string; count: number; tone: "danger" | "warning" | "neutral"; tab: "mine" | "members" }
+export function conflictToggle(summary: ConflictSummary | null, local = 0): ConflictToggle | null {
   const mine = conflictCount(summary, local);
-  if (mine > 0) return { label: `冲突 ${mine}`, tone: "danger", tab: "mine" };
+  if (mine > 0) return { label: `冲突 ${mine}`, name: "冲突", count: mine, tone: "danger", tab: "mine" };
   const members = summary?.allOpen != null ? Math.max(0, summary.allOpen - (summary.mineOpen || 0)) : 0;
-  if (members > 0) return { label: `成员冲突 ${members}`, tone: "warning", tab: "members" };
-  if ((summary?.mineHandled || 0) > 0) return { label: "冲突", tone: "neutral", tab: "mine" };
+  if (members > 0) return { label: `成员冲突 ${members}`, name: "成员冲突", count: members, tone: "warning", tab: "members" };
+  if ((summary?.mineHandled || 0) > 0) return { label: "冲突", name: "冲突", count: 0, tone: "neutral", tab: "mine" };
   return null;
 }

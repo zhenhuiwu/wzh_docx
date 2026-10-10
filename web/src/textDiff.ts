@@ -52,8 +52,10 @@ export function isTable(text: string): boolean {
 export interface CompareRow { base: string; theirs: string; mine: string; differs: boolean }
 
 /** 三栏按句对齐：以“对方 ↔ 我的”的句子级 LCS 为主轴，原内容按同样方式挂到对方一侧。 */
-export function alignRows(base: string, theirs: string, mine: string): CompareRow[] {
-  const t = sentences(theirs), m = sentences(mine), b = sentences(base);
+export function alignRows(base: string, theirs: string, mine: string, byBlock = false): CompareRow[] {
+  // 界面复验 N7：STRUCTURE（段落被拆分/合并）按块对齐，避免逐句对齐出现多行“（无）”。
+  const units = (text: string) => byBlock ? blocksOf(text) : sentences(text);
+  const t = units(theirs), m = units(mine), b = units(base);
   // 原内容挂到对方一侧：相同的句子一一对应；被对方改掉的原句挂到紧随其后的对方新句上
   const baseOf = new Map<number, string>();
   let ti = 0, pending = "";
@@ -84,9 +86,46 @@ export function alignRows(base: string, theirs: string, mine: string): CompareRo
 }
 
 /** 按每行选择拼出合并结果（表格按行换行连接，正文直接相连）。 */
-export function mergeRows(rows: CompareRow[], picks: Array<"theirs" | "mine">, table: boolean): string {
+export function mergeRows(rows: CompareRow[], picks: Array<"theirs" | "mine">, table: boolean, byBlock = false): string {
   const chosen = rows.map((row, index) => row.differs ? row[picks[index] ?? "theirs"] : row.theirs).filter(Boolean);
-  return chosen.join(table ? "\n" : "");
+  return chosen.join(byBlock ? "\n\n" : table ? "\n" : "");
+}
+
+/** 按空行分块（Markdown 顶层块）。 */
+export function blocksOf(text: string): string[] {
+  return text.replace(/\r\n/g, "\n").split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+}
+
+/** 两张表格不同的单元格数（界面复验 N7：表格冲突卡片写“表格 · N 处单元格不同”）。 */
+export function tableCellDiffs(a: string, b: string): number {
+  const x = tableCells(a), y = tableCells(b);
+  let count = 0;
+  for (let r = 0; r < Math.max(x.length, y.length); r++) {
+    for (let c = 0; c < Math.max(x[r]?.length ?? 0, y[r]?.length ?? 0); c++) if ((x[r]?.[c] ?? "") !== (y[r]?.[c] ?? "")) count++;
+  }
+  return count;
+}
+
+export interface BlockDiffRow { type: "eq" | "ins" | "del" | "mod"; text: string; parts?: DiffPart[] }
+/** 界面验收 S12：两个版本之间按块比较；相邻的删+增配成“修改”，块内再逐词标出增删。 */
+export function blockDiff(before: string, after: string): BlockDiffRow[] {
+  const rows: BlockDiffRow[] = [];
+  const steps = lcsDiff(blocksOf(before), blocksOf(after), (x, y) => x === y);
+  let dels: string[] = [], inss: string[] = [];
+  const flush = () => {
+    const paired = Math.min(dels.length, inss.length);
+    for (let k = 0; k < paired; k++) rows.push({ type: "mod", text: inss[k], parts: diffWords(dels[k], inss[k]) });
+    for (const text of dels.slice(paired)) rows.push({ type: "del", text });
+    for (const text of inss.slice(paired)) rows.push({ type: "ins", text });
+    dels = []; inss = [];
+  };
+  for (const step of steps) {
+    if (step.type === "eq") { flush(); rows.push({ type: "eq", text: step.a as string }); }
+    else if (step.type === "del") dels.push(step.a as string);
+    else inss.push(step.b as string);
+  }
+  flush();
+  return rows;
 }
 
 export function tableCells(text: string): string[][] {
