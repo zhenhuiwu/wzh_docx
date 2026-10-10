@@ -27,6 +27,11 @@ export function writeSession(session: Session) {
   cache = session;
 }
 
+/** 服务端要求改密（例如管理员刚重置了密码），在下一次路由检查前就生效。 */
+export function markPasswordChangeRequired() {
+  if (cache) cache = { ...cache, mustChangePassword: true };
+}
+
 export function loginDestination(value: unknown): string {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/projects";
   try {

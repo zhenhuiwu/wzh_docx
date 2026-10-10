@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { defineAsyncComponent, h } from "vue";
 import AppShell from "./layouts/AppShell.vue";
-import { endSession, ensureSession, loginDestination } from "./session";
+import { onPasswordChangeRequired } from "./api/client";
+import { endSession, ensureSession, loginDestination, markPasswordChangeRequired } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
@@ -138,6 +139,13 @@ router.beforeEach(async (to) => {
     return { name: "change-password", query: { redirect: to.fullPath } };
   }
   return true;
+});
+
+onPasswordChangeRequired(() => {
+  markPasswordChangeRequired();
+  const current = router.currentRoute.value;
+  if (current.name === "change-password" || current.meta.public) return;
+  void router.replace({ name: "change-password", query: { redirect: current.fullPath } });
 });
 
 router.afterEach((to, _from, failure) => {
