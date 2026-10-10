@@ -62,3 +62,22 @@ def test_refusal_reason_names_the_actual_cause(tmp_path):
         reasons.append(str(error.value))
     assert "书签" in reasons[0] and "图片" not in reasons[0] and "标题行" not in reasons[0]
     assert "标题行" in reasons[1] and "书签" in reasons[1]
+
+
+def test_preview_object_ids_match_tables_ignoring_whitespace(monkeypatch):
+    """工作台重塑轮：表格单元格在预览里有空白分隔，不能因此判为对不上（否则几乎所有模板文档都显示“整篇保存”）。"""
+    from uuid import uuid4
+
+    import app.document_objects as objects
+
+    rows = [{"id": uuid4(), "revision": 1, "body": "正文一段。"},
+            {"id": uuid4(), "revision": 2, "body": "| 密 级： | 内部 |\n|---|---|\n| 阶 段： | A 版 |"}]
+    monkeypatch.setattr(objects, "live_objects", lambda connection, document_id: rows)
+    html = "<p>正文一段。</p><table><tr><td>密 级：</td><td>内部</td></tr><tr><td>阶 段：</td><td>A 版</td></tr></table>"
+    decorated, ok = objects.decorate_object_ids(None, uuid4(), html)
+    assert ok and decorated.count("data-object-id") == 2
+    # 嵌套列表：预览顶层 li 与对象数对不上，仍按整篇保存
+    nested = [{"id": uuid4(), "revision": 1, "body": "- 一\n  - 一点一\n- 二"}]
+    monkeypatch.setattr(objects, "live_objects", lambda connection, document_id: nested)
+    _, ok = objects.decorate_object_ids(None, uuid4(), "<ul><li>一<ul><li>一点一</li></ul></li><li>二</li></ul>")
+    assert ok is False

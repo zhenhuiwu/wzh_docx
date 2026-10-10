@@ -514,8 +514,13 @@ def decorate_object_ids(connection, document_id: UUID, html: str) -> tuple[str, 
             nodes.append(child)
     if len(nodes) != len(rows):
         return html, False
+    # 工作台重塑轮：比较时去掉全部空白。表格单元格在预览里以空白分隔、plain_text 里直接相连，
+    # 原先按“空白归一”比较，含表格的模板文档（几乎全部）都会被判为对不上，工作台误显示“整篇保存”。
+    def bare(text: str) -> str:
+        return "".join(text.split())
+
     for node, row in zip(nodes, rows):
-        if " ".join("".join(node.itertext()).split()) != plain_text(row["body"]):
+        if bare("".join(node.itertext())) != bare(plain_text(row["body"])):
             return html, False
     for node, row in zip(nodes, rows):
         node.set("data-object-id", str(row["id"]))
