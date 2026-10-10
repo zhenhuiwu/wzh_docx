@@ -57,7 +57,8 @@ foreach ($folder in $browserFolders) {
     Copy-Item -LiteralPath $source -Destination $stagingBrowsers -Recurse -Force
 }
 
-# Replace only program files. SQLite, uploads and .env stay beside the executable.
+# Replace only program files. SQLite, uploads and a local .env stay beside the executable;
+# the zip only ever carries .env.example (no AI key).
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 $oldInternal = Join-Path $packageRoot '_internal'
 if (Test-Path -LiteralPath $oldInternal) {
@@ -72,6 +73,9 @@ Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter '*.md' |
     Copy-Item -Destination $packageRoot -Force
 if (-not $NoZip) {
     Invoke-Checked $python @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $packageRoot, '--execute')
+    foreach ($private in @('.env', '初始管理员密码.txt')) {
+        if (Test-Path -LiteralPath (Join-Path $packageRoot $private)) { throw "发布目录含有本机私密文件 $private，拒绝打包。" }
+    }
     $zip = Join-Path $releaseRoot '文档工作室-Windows.zip'
     Compress-Archive -LiteralPath $packageRoot -DestinationPath $zip -Force
     Write-Host "部署包已生成：$zip"

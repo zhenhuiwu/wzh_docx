@@ -48,7 +48,9 @@ def check() -> None:
         inspection = snapshot(database, files, env_file, root / "inspect", execute=False)
         assert inspection["file_count"] == 2 and not (root / "inspect").exists()
         output = root / "package"
-        metadata = snapshot(database, files, env_file, output, execute=True)
+        metadata = snapshot(database, files, env_file, output, execute=True,
+                            env_updates={"AI_MODEL": "model-x", "AI_REASONING_EFFORT": "high",
+                                         "AI_API_KEY": "do-not-print-this", "BOOTSTRAP_ADMIN_PASSWORD": "do-not-print-this"})
         assert database.read_bytes() == original_database and env_file.read_bytes() == original_env
         assert (output / "data/files/test-runs/screenshot.png").read_bytes() == b"test evidence"
         assert not (output / "data/files/tmp").exists()
@@ -60,9 +62,14 @@ def check() -> None:
             assert copied.execute("PRAGMA foreign_key_check").fetchall() == []
         assert metadata["discarded_orphan_user_roles"] == 1
         assert metadata["source_business_counts"]["user_roles"] == 2 and metadata["business_counts"]["user_roles"] == 1
-        env_copy = (output / ".env").read_text(encoding="utf-8")
-        assert "do-not-print-this" in env_copy and "sqlite:///./data/app.db" in env_copy and "./data/files" in env_copy
-        assert "AI_REASONING_EFFORT='high'" in env_copy
+        assert not (output / ".env").exists()
+        env_copy = (output / ".env.example").read_text(encoding="utf-8")
+        assert "do-not-print-this" not in env_copy
+        assert "sqlite:///./data/app.db" in env_copy and "./data/files" in env_copy
+        assert "AI_REASONING_EFFORT='high'" in env_copy and "AI_MODEL='model-x'" in env_copy
+        assert "AI_API_KEY=''" in env_copy
+        assert not any("do-not-print-this" in path.read_text(encoding="utf-8", errors="ignore")
+                       for path in output.rglob("*") if path.is_file() and path.suffix != ".db")
         assert "do-not-print-this" not in json.dumps(metadata)
         try:
             snapshot(database, files, env_file, output, execute=True)
@@ -86,7 +93,7 @@ def check() -> None:
                 assert "发生变化" in str(error)
             else:
                 raise AssertionError("Concurrent edits must prevent publishing")
-        assert not (changed / "data").exists() and not (changed / ".env").exists()
+        assert not (changed / "data").exists() and not (changed / ".env.example").exists()
         with closing(sqlite3.connect(database)) as connection:
             connection.execute("UPDATE test_task_runs SET status='running'")
             connection.commit()
@@ -96,7 +103,7 @@ def check() -> None:
             assert "任务正在运行" in str(error)
         else:
             raise AssertionError("Running tests must prevent snapshotting")
-    print("snapshot check passed: preserved data/config/evidence, cleared copied sessions, refused overwrite/concurrent writes/running tasks")
+    print("snapshot check passed: preserved data/evidence, shipped .env.example without secrets, cleared copied sessions, refused overwrite/concurrent writes/running tasks")
 
 
 if __name__ == "__main__":

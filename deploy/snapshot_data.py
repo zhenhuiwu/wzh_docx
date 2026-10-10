@@ -21,16 +21,23 @@ TRANSIENT_TABLES = {
 README = """文档工作室 · 一键启动说明
 
 1. 将整个文件夹解压到可写目录，双击“文档工作室.exe”。
-2. 在浏览器打开 http://localhost:5173 。账号 admin，密码 admin123。
+2. 在浏览器打开 http://localhost:5173 ，用原有账号登录。
+   仍在使用旧版固定初始密码的 admin 账号，登录后会被要求先修改密码。
+   全新安装（没有任何账号）时，首次启动会生成随机初始密码，
+   显示在启动窗口并保存到“初始管理员密码.txt”；登录改密后请删除该文件。
 3. 使用结束后，可在启动窗口按 Ctrl+C 停止；再次双击即可启动。
 
-无需安装 Python、Node.js 或 Docker。请勿只复制 exe：_internal、data、.env 必须一起保留。
+无需安装 Python、Node.js 或 Docker。请勿只复制 exe：_internal 与 data 必须一起保留。
 当前项目、Word 原稿、编辑内容、历史版本、AI 记忆、Skill、测试记录与截图均已迁移。
-原电脑登录会话不迁移，请重新登录。AI 配置已携带，部署包含密钥，请妥善保存。
-部署包根目录 .env 保持现有 AI 配置，数据库与文件目录已改为相对路径，可整体移动。
+原电脑登录会话不迁移，请重新登录。
+
+部署包不包含 AI 密钥。需要 AI 编写时：
+  把 .env.example 复制为 .env，在 AI_API_KEY= 后填写本机使用的密钥，然后重启程序。
+  .env.example 已带上原环境的 AI 服务地址、模型和思考强度，数据库与文件目录为相对路径。
 
 数据与配置：
-  .env                    AI 服务地址、模型和 API Key
+  .env.example            配置模板（不含密钥）
+  .env                    本机配置，自行创建，含 API Key，请勿外传
   data/app.db             SQLite 业务数据库
   data/files/             Word 文档、截图与其他业务文件
   logs/                   启动与服务日志
@@ -41,11 +48,26 @@ README = """文档工作室 · 一键启动说明
 已有测试截图与文档可继续查看；被测项目的源码、Python/Node 单元测试环境需自行准备。
 需要 AI 编写时，电脑须能访问 .env 中的 AI 服务。
 AI_REASONING_EFFORT 配置思考强度；留空使用模型默认值。可选 none、minimal、low、medium、high、xhigh、max，支持范围以模型服务为准。
-当前模型 deepseek-flash 建议使用 low、high 或 max；none 关闭思考。修改 .env 后须关闭程序并重新启动。
+修改 .env 后须关闭程序并重新启动。
 精确 Word 版式预览需安装 Microsoft Word；Visio 原生生成需安装 Microsoft Visio。
 
 部署校验.json 记录迁移时间、业务数量和文件校验值，不包含 AI Key。
 """
+
+# Never ship these from the source environment, whatever the caller passes.
+SECRET_KEYS = frozenset({"AI_API_KEY", "BOOTSTRAP_ADMIN_PASSWORD"})
+
+
+def env_example(values: dict[str, str]) -> str:
+    """A configuration template carrying non-secret settings only."""
+    lines = ["# 文档工作室配置模板：复制为 .env 后填写 AI_API_KEY，再重启程序。"]
+    for key, value in values.items():
+        if key in SECRET_KEYS:
+            continue
+        escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+        lines.append(f"{key}='{escaped}'")
+    lines.append("AI_API_KEY=''")
+    return "\n".join(lines) + "\n"
 
 
 def digest(path: Path) -> str:
@@ -116,7 +138,7 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
         }
         if not execute:
             return metadata
-        if any((target / name).exists() for name in ("data", ".env", "部署校验.json", "使用说明.txt")):
+        if any((target / name).exists() for name in ("data", ".env", ".env.example", "部署校验.json", "使用说明.txt")):
             raise RuntimeError("目标已含部署数据或配置，拒绝覆盖；请使用新的部署目录。")
         before, env_digest = business_fingerprint(source), digest(env_file)
         target.mkdir(parents=True, exist_ok=True)
@@ -167,16 +189,14 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
             ensure_idle(source)
             if business_fingerprint(source) != before or file_manifest(files) != manifest or digest(env_file) != env_digest:
                 raise RuntimeError("迁移期间数据或配置发生变化，请重试。")
-            shutil.copy2(env_file, stage / ".env")
-            from dotenv import set_key
+            # The source .env holds secrets; ship a template instead of copying it.
             updates = {**(env_updates or {}), "DATABASE_URL": "sqlite:///./data/app.db", "FILE_DATA_DIR": "./data/files"}
-            for key, value in updates.items():
-                set_key(stage / ".env", key, value, quote_mode="always", encoding="utf-8")
+            (stage / ".env.example").write_text(env_example(updates), encoding="utf-8")
             (stage / "使用说明.txt").write_text(README, encoding="utf-8-sig")
             metadata.update(database_bytes=destination.stat().st_size,
                             database_sha256=digest(destination), files_sha256=hashes)
             (stage / "部署校验.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-            for name in ("data", ".env", "使用说明.txt", "部署校验.json"):
+            for name in ("data", ".env.example", "使用说明.txt", "部署校验.json"):
                 (stage / name).replace(target / name)
         return metadata
 
@@ -198,7 +218,7 @@ def main() -> int:
                           server / settings.file_data_dir, server / ".env", args.target,
                           execute=args.execute, env_updates={
                               "AI_BASE_URL": settings.ai_base_url, "AI_MODEL": settings.ai_model,
-                              "AI_API_KEY": settings.ai_api_key, "AI_CONTEXT_TOKENS": str(settings.ai_context_tokens),
+                              "AI_CONTEXT_TOKENS": str(settings.ai_context_tokens),
                               "AI_REASONING_EFFORT": settings.ai_reasoning_effort,
                               "FILE_MAX_BYTES": str(settings.file_max_bytes),
                           })
