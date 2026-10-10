@@ -30,10 +30,10 @@ onMounted(() => void nextTick(() => first.value?.focus()));
 </template>
 
 <style scoped>
-.dialog-backdrop { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--ink) 32%, transparent); }
-.dialog { display:grid; gap:var(--space-3); width:min(480px, calc(100vw - var(--space-7))); padding:var(--space-5); background:var(--bg-surface, var(--sheet)); border:1px solid var(--border-default, var(--rule)); border-radius:var(--radius-sheet); box-shadow:var(--shadow-3, 0 var(--space-4) var(--space-6) var(--rule-strong)); font-family:var(--font); }
-h2 { margin:0; font-size:var(--text-lg, var(--text-md)); font-weight:600; color:var(--text-primary, var(--ink)); }
-p { margin:0; font-size:var(--text-sm); line-height:1.6; color:var(--text-secondary, var(--ink-secondary)); }
+.dialog-backdrop { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--text-primary) 32%, transparent); }
+.dialog { display:grid; gap:var(--space-3); width:min(480px, calc(100vw - var(--space-7))); padding:var(--space-5); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sheet); box-shadow:var(--shadow-3); font-family:var(--font); }
+h2 { margin:0; font-size:var(--text-lg); font-weight:600; color:var(--text-primary); }
+p { margin:0; font-size:var(--text-sm); line-height:1.6; color:var(--text-secondary); }
 footer { display:flex; justify-content:flex-end; gap:var(--space-2); margin-top:var(--space-2); }
 button:focus-visible { outline:var(--space-1) solid var(--focus-ring); outline-offset:var(--space-1); }
 </style>

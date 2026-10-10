@@ -12,9 +12,11 @@ const base = props.item.base?.markdown || "";
 const theirs = props.item.theirs?.markdown || "";
 const mine = props.item.mine?.deleted ? "" : props.item.mine?.markdown || "";
 const table = isTable(theirs) || isTable(mine);
-const rows = alignRows(base, theirs, mine);
+// 界面复验 N7：STRUCTURE（拆分/合并段落）按块对齐
+const byBlock = props.item.reason === "STRUCTURE";
+const rows = alignRows(base, theirs, mine, byBlock);
 const picks = ref<Array<"theirs" | "mine">>(rows.map(() => "mine"));
-const merged = computed(() => mergeRows(rows, picks.value, false));
+const merged = computed(() => mergeRows(rows, picks.value, false, byBlock));
 const grids = table ? { base: tableCells(base), theirs: tableCells(theirs), mine: tableCells(mine) } : null;
 const changed = (grid: string[][], r: number, c: number) => (grids?.base[r]?.[c] ?? "") !== (grid[r]?.[c] ?? "");
 const when = props.item.theirs?.updatedAt ? shortTime(props.item.theirs.updatedAt) : "";
@@ -48,20 +50,20 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
             <span role="cell" class="compare-cell base">{{ row.base }}</span>
             <label role="cell" class="compare-cell" :class="{ picked: row.differs && picks[index] === 'theirs' }">
               <span>{{ row.theirs || "（无）" }}</span>
-              <span v-if="row.differs" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="theirs" /> 采用这一句</span>
+              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="theirs" /> {{ byBlock ? "采用这一段" : "采用这一句" }}</span>
             </label>
             <label role="cell" class="compare-cell" :class="{ picked: row.differs && picks[index] === 'mine' }">
               <span>{{ row.mine || "（无）" }}</span>
-              <span v-if="row.differs" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="mine" /> 采用这一句</span>
+              <span v-if="row.differs && canResolve" class="pick"><input v-model="picks[index]" type="radio" :name="`pick-${index}`" value="mine" /> {{ byBlock ? "采用这一段" : "采用这一句" }}</span>
             </label>
           </div>
         </template>
       </div>
-      <section v-if="!grids" class="compare-preview" aria-label="合并结果预览">
+      <section v-if="!grids && canResolve" class="compare-preview" aria-label="合并结果预览">
         <h3>合并结果预览</h3>
         <p data-testid="compare-merged">{{ merged || "（空）" }}</p>
       </section>
-      <p v-else class="compare-note">表格按整张处理：可保留我的、使用对方的版本，或在卡片里选择“两段都保留”。</p>
+      <p v-else-if="grids" class="compare-note">表格按整张处理：可保留我的、使用对方的版本，或在卡片里选择“两张表都保留”。</p>
     </div>
     <footer class="dialog-actions">
       <button type="button" class="ghost" @click="emit('close')">取消</button>
@@ -84,7 +86,8 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
 .compare-row.head { position:sticky; top:0; background:var(--bg-surface); color:var(--text-tertiary); font-size:var(--text-xs); font-weight:var(--weight-medium); padding-bottom:var(--space-1); }
 .compare-cell { display:grid; gap:var(--space-1); align-content:start; padding:var(--space-2); border-radius:var(--radius-control); background:var(--bg-subtle); font-size:var(--text-sm); line-height:var(--leading-sm); overflow-wrap:anywhere; }
 .compare-cell.base { color:var(--text-secondary); }
-.compare-row.differs .compare-cell:not(.base) { background:var(--warning-50); cursor:pointer; }
+.compare-row.differs .compare-cell:not(.base) { background:var(--warning-50); }
+.compare-row.differs label.compare-cell:has(input) { cursor:pointer; }
 .compare-row.differs .compare-cell.picked { background:var(--diff-ins-bg); box-shadow:inset 0 0 0 1px var(--brand-200); }
 .pick { color:var(--text-secondary); font-size:var(--text-xs); }
 .compare-table { width:100%; border-collapse:collapse; }

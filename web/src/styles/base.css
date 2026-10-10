@@ -84,6 +84,15 @@
   --sidenav-w-collapsed: 56px;
   --panel-w: 400px;       /* 工作台右侧面板 */
   --outline-w: 264px;     /* 工作台目录 */
+  --docbar-h: 52px;       /* 工作台文档栏 */
+  --etool-h: 44px;        /* 工作台格式工具栏、目录头、面板头 */
+  --notice-h: 40px;       /* 工作台提示条 */
+  --status-h: 28px;       /* 工作台底部状态栏 */
+  --paper-w: 794px;       /* 纸张（A4 宽）；有 Word 页面信息时按 Word 页宽 */
+  --doc-text: 16px;       /* 纸张正文字号（Word 行内样式优先） */
+  --pill-h: 24px;         /* 保存胶囊、整篇保存标签 */
+  --icon: 16px;
+  --icon-sm: 14px;
   --content-pad: var(--space-5);  /* 内容区内边距 */
   --content-h: calc(100vh - var(--topbar-h) - var(--content-pad) * 2);  /* 内容区可用高度 */
   --dialog-w-confirm: 480px;
@@ -126,12 +135,6 @@
   --spine: var(--gray-900);
   --spine-ink: var(--gray-100); --spine-muted: var(--gray-300);
   --overlay: rgba(16, 24, 40, 0.45);   /* 弹窗遮罩 */
-}
-
-/* 迁移期：工作台纸张沿用旧字号（14/16），阶段2 合并后由文档格式模板（formatTemplate）接管纸张字号。 */
-.paper-content {
-  --text-sm: 14px;
-  --text-md: 16px;
 }
 
 *,

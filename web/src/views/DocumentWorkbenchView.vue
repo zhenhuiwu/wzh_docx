@@ -10,7 +10,8 @@ import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
-import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { countChars, mergedInBlocks, outlineEntries } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
@@ -20,6 +21,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, type Capabilities, type ConflictItem, type ConflictSummary, type ResolveResult } from "../api/documents";
+import { listDocumentVersions } from "../api/documents";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -79,6 +81,8 @@ const exporting = ref(false);
 const exportMenu = ref(false);
 const exportError = ref("");
 const actionNote = ref("");
+/** 审查员第 2 条：“他人更新”类短提示（已显示/已合并）与常驻提示条互斥，提示条优先。 */
+let actionNoteKind: "others" | "" = "";
 let actionNoteTimer: number | undefined;
 // 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
 const readonly = ref(false);
@@ -108,7 +112,7 @@ const conflictEntry = computed(() => conflictToggle(conflictSummary.value));
 const memberConflicts = computed(() => conflictSummary.value?.allOpen != null ? Math.max(0, conflictSummary.value.allOpen - conflictSummary.value.mineOpen) : 0);
 // 界面验收 M5：本人待处理冲突在正文和目录上的标记
 const openConflictItems = ref<ConflictItem[]>([]);
-const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem; approx?: boolean }>>([]);
+const conflictMarks = ref<Array<{ key: string; top: number; label: string; item: ConflictItem; approx?: boolean; gap?: boolean }>>([]);
 const conflictHeadings = computed(() => new Set(openConflictItems.value.map(item => item.location?.headingPath?.at(-1)).filter(Boolean) as string[]));
 // 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
 const autoConflict = ref<{ count: number; name: string } | null>(null);
@@ -117,8 +121,24 @@ const othersUpdated = ref<{ names: string[]; objects: number } | null>(null);
 const updatedHeadings = ref<Set<string>>(new Set());
 let updateTimer: number | undefined;
 let checkingUpdates = false;
-// 审查 S14：对象模型不可用（往返校验失败的旧文档）时按整篇提交
+// 审查 S14：对象模型不可用（往返校验失败的旧文档）时按整篇提交。
+// 重塑轮：/objects 的 objectModel 对真实内容总是 true（拆块是全覆盖切分），真正会退化的是预览块与对象对不上
+// （嵌套列表、列表项带续行段落、链接引用定义、只有注释的块），这时冲突与更新只能按整段/整篇对照，同样显示“整篇保存”。
 const objectModel = ref<boolean | null>(null);
+const previewModel = ref<boolean | null>(null);
+const wholeSave = computed(() => objectModel.value === false || previewModel.value === false);
+// 底部状态栏：最近一次修改（取版本记录第一条）
+const lastEditor = ref<{ name: string; at: string } | null>(null);
+let lastEditorTimer: number | undefined;
+// 目录：搜索与“添加标题”浮层
+const outlineSearch = ref("");
+const outlineSearchOpen = ref(false);
+const addHeadingOpen = ref(false);
+// 格式工具栏：段落样式下拉，按光标所在块显示；下拉抢走焦点后用最近一次的光标位置执行
+const paraStyle = ref("p");
+let lastCaret: Range | null = null;
+// 冲突标记里“大致位置”的冲突（卡片位置后加“（大致）”）
+const approxConflicts = ref<string[]>([]);
 const draftConfirmDiscard = ref(false);
 const draftDiffOpen = ref(false);
 const conflictPanel = ref<InstanceType<typeof DocumentConflictPanel> | null>(null);
@@ -160,6 +180,7 @@ const memoryOffset = ref(0);
 const memoryHasMore = ref(false);
 const memoryLoading = ref(false);
 const memoryError = ref("");
+const memoryCount = ref(0);
 const aiRevision = ref<number | null>(null);
 const aiBusy = ref(false);
 const aiInserting = ref(false);
@@ -176,7 +197,7 @@ let layoutNeedsRefresh = false;
 
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
-const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : "");
+const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 const pendingCount = computed(() => isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: offline.value && isDirty.value,
@@ -195,10 +216,60 @@ const capsuleDetail = computed(() => {
   return "";
 });
 const outline = computed(() => documentHeadings(markdownContent.value));
+const outlineInfo = computed(() => outlineEntries(markdownContent.value));
+const outlineShown = computed(() => {
+  const query = outlineSearch.value.trim();
+  return outline.value.map((item, index) => ({ item, index, info: outlineInfo.value[index] })).filter(entry => !query || entry.item.text.includes(query));
+});
+const pendingSections = computed(() => outlineInfo.value.filter(item => item.empty).length);
+const totalChars = computed(() => countChars(markdownContent.value));
+const sectionChars = computed(() => selectedHeading.value === null ? null : outlineInfo.value[selectedHeading.value]?.chars ?? null);
+const currentSection = computed(() => selectedHeading.value === null ? "" : outline.value[selectedHeading.value]?.text || "");
+// 重塑：右侧面板（原稿/版式预览时只保留版本记录）
+const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value)));
+const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
+const aiTargetHint = computed(() => {
+  if (aiScope.value === "document") return "按全文给出逐处修改，确认后应用";
+  if (aiScope.value === "selection") return `已选 ${countChars(selectedText.value)} 字，生成后替换选中内容`;
+  const info = outlineInfo.value[selectedHeading.value ?? -1];
+  return info?.empty ? "当前为空章节，将按模板要求生成正文" : `本节约 ${info?.chars ?? 0} 字，生成后可替换或追加`;
+});
+const skillLabel = computed(() => {
+  const value = document.value?.formatTemplate?.writingSkill as { mode?: string; name?: string } | undefined;
+  return value?.mode === "selected" ? value.name || "已指定" : value?.mode === "none" ? "不使用编写规范" : "按文档类型自动选择";
+});
+function toggleOutlineSearch() {
+  outlineSearchOpen.value = !outlineSearchOpen.value;
+  if (!outlineSearchOpen.value) outlineSearch.value = "";
+}
+// S17：编辑区比纸张窄时（1366 打开右侧面板）按比例缩小纸张，不出现横向滚动
+const desk = ref<HTMLElement | null>(null);
+const paperZoom = ref(1);
+let deskObserver: ResizeObserver | undefined;
+function fitPaper() {
+  const host = desk.value;
+  if (!host || !host.clientWidth) return;
+  // 纸张自然宽度：Word 页面宽 + 左右页边距（pt），没有页面信息时用 --paper-w（794px）
+  const pt = (value?: string) => value ? parseFloat(value) * 4 / 3 : 0;
+  const style = paperStyle.value;
+  const natural = style.width ? pt(style.width) + pt(style.paddingLeft) + pt(style.paddingRight) : 794;
+  const room = host.clientWidth - 32;
+  const zoom = natural > 0 && room < natural ? Math.max(0.6, Math.floor((room / natural) * 100) / 100) : 1;
+  if (zoom !== paperZoom.value) { paperZoom.value = zoom; scheduleMarks(); }
+}
+watch(desk, (host) => {
+  deskObserver?.disconnect();
+  if (host && typeof ResizeObserver !== "undefined") { deskObserver = new ResizeObserver(() => fitPaper()); deskObserver.observe(host); }
+});
+watch(paperStyle, () => void nextTick(fitPaper), { deep: true });
+const templateTag = computed(() => document.value?.sourceType === "template" ? document.value.templateDocumentName || "" : "");
 const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdownContent.value.trim()) : aiScope.value === "selection" ? Boolean(selectedText.value) : selectedHeading.value !== null);
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
 const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
+// 8.2 第 7 条：aiLocked 仍是“编辑区锁”（版本记录打开、AI 预览、本机草稿未处理、重绘中都不能编辑正文），只锁编辑区与格式工具栏。
 const aiLocked = computed(() => skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value));
+// 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
+const opBusy = computed(() => skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
 const canUndoAi = computed(() => Boolean(aiUndo.value) && aiUndo.value?.id === document.value?.id && aiUndo.value?.revision === document.value?.revision && !isDirty.value && !aiLocked.value && !saving.value && !addingHeading.value);
 const canStartAi = computed(() => !skillOpen.value && !skillBusy.value && !historyOpen.value && !historyBusy.value && !aiBusy.value && !aiInserting.value && !saving.value && !refreshingEditor.value && !undoingAi.value && !addingHeading.value && !diagramBusy.value && !localDraft.value);
 const turndown = createTurndown(storedImageRule(() => document.value?.formatTemplate.images || []));
@@ -219,6 +290,12 @@ async function load() {
   othersUpdated.value = null;
   updatedHeadings.value = new Set();
   objectModel.value = null;
+  previewModel.value = null;
+  lastEditor.value = null;
+  approxConflicts.value = [];
+  outlineSearch.value = "";
+  outlineSearchOpen.value = false;
+  addHeadingOpen.value = false;
   draftConfirmDiscard.value = false;
   draftDiffOpen.value = false;
   mergeBase = null;
@@ -271,8 +348,9 @@ async function load() {
     phase.value = "ready";
     await nextTick();
     if (id !== documentId.value || version !== loadVersion) return;
-    showEditorHtml(preview.html);
+    showEditorHtml(preview.html, preview.objectModel);
     savedAt.value = Date.parse(record.updatedAt) || null;
+    void refreshLastEditor();
     // 复审 M1：先上线、等其他标签回答，再列本机草稿，避免另一个仍打开着的标签的草稿短暂闪现为恢复条。
     openPresence(record.id);
     void refreshMemory();
@@ -363,7 +441,8 @@ function mergeRequest() { return { allowMerge: true, clientSaveKey: crypto.rando
 function noteMerged(result: { merged?: boolean; changedBy?: Array<{ id: string; name: string; objects: number }> }): boolean {
   if (!result.merged) return false;
   const text = changedByText(result.changedBy);
-  if (text) noteAction(text, 6000);
+  // 审查员第 2 条：提示条显示期间不再弹“已合并…”短提示
+  if (text && !othersUpdated.value) noteAction(text, 6000, "others");
   return true;
 }
 /** 派生写入 409 OBJECT_CONFLICT：冲突已存为副本，按主动保存处理（打开面板 + 重交可合并部分）。 */
@@ -506,12 +585,39 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
   return target;
 }
 /** 复审：冲突在正文里的位置。exact=false 表示只按章节路径+序号推测（大致位置）。
- * 对方删段的冲突按“我的”文字找（我的版本仍在编辑区），找不到时不把标记落到标题上。 */
-function findConflictBlock(item: ConflictItem): { block?: HTMLElement; exact: boolean } {
+ * 对方删段的冲突按“我的”文字找（我的版本仍在编辑区）；找不到时返回被删段原位置的前一个块（anchor），标记画在它的下边缘。 */
+function findConflictBlock(item: ConflictItem): { block?: HTMLElement; exact: boolean; anchor?: HTMLElement | null } {
   const deleted = Boolean(item.theirs?.deleted);
   const exact = findBlock(null, item.objectIds, deleted ? item.mine?.markdown : item.theirs?.markdown);
   if (exact) return { block: exact, exact: true };
+  if (deleted) {
+    const anchor = deletedAnchor(item.location);
+    return { block: anchor || editor.value?.firstElementChild as HTMLElement | undefined, exact: false, anchor };
+  }
   return { block: findBlock(item.location), exact: false };
+}
+/** 审查员第 3 条：被删段原来位置的前一个块：章节内第 N 个同类块现在的前一个块；章节内已没有第 N 个时取章节最后一块。 */
+function deletedAnchor(location: LocationInfo | null | undefined): HTMLElement | null {
+  const root = editor.value;
+  if (!root || !location) return null;
+  const blocks = ([...root.children] as HTMLElement[]).filter(block => !block.hasAttribute("data-ai-preview"));
+  const path = location.headingPath || [];
+  let start = -1;
+  if (path.length) {
+    start = blocks.findIndex(block => isHeading(block) && (block.textContent || "").trim() === path[path.length - 1]);
+    if (start < 0) return null;
+  }
+  let end = blocks.length;
+  for (let i = start + 1; i < blocks.length; i++) if (isHeading(blocks[i])) { end = i; break; }
+  const tags: Record<string, RegExp> = { paragraph: /^(P|DIV|BLOCKQUOTE)$/, list_item: /^(UL|OL)$/, table: /^TABLE$/, image: /^(P|FIGURE|IMG)$/, code: /^PRE$/ };
+  let seen = 0;
+  for (let i = start + 1; i < end; i++) {
+    if ((tags[location.kind || ""] || /./).test(blocks[i].tagName) && ++seen === (location.ordinal || 1)) return blocks[i - 1] ?? null;
+  }
+  return end - 1 >= 0 && end - 1 >= start ? blocks[end - 1] : null;
+}
+function sectionName(item: ConflictItem) {
+  return item.location?.headingPath?.at(-1) || "文档开头";
 }
 const isHeading = (block: HTMLElement) => /^H[1-6]$/.test(block.tagName);
 function conflictName(item: ConflictItem) {
@@ -523,24 +629,32 @@ function applyConflictMarks() {
   if (!root) { conflictMarks.value = []; return; }
   root.querySelectorAll(".blk-conflict").forEach(node => node.classList.remove("blk-conflict"));
   const marks: typeof conflictMarks.value = [];
+  const approx: string[] = [];
   if (mode.value === "edit") {
     for (const item of openConflictItems.value) {
-      const { block, exact } = findConflictBlock(item);
-      if (!block) continue;
+      const { block, exact, anchor } = findConflictBlock(item);
       const deleted = Boolean(item.theirs?.deleted);
       const key = `${item.conflictId}:${item.itemIndex}`;
-      if (exact) {
+      if (exact && block) {
         block.classList.add("blk-conflict");
         marks.push({ key, top: block.offsetTop, label: deleted ? `该段已被 ${conflictName(item)} 删除` : `与 ${conflictName(item)} 的修改冲突`, item });
         continue;
       }
-      // 大致位置：不给推测出来的块（尤其是标题）加冲突底色，只画一条虚线插入位标记
+      approx.push(key);
+      if (deleted) {
+        // 审查员第 3 条：对方删段——红色虚线画在原位置前一个块的下边缘，标签“该段已被 X 删除”
+        const top = anchor ? anchor.offsetTop + anchor.offsetHeight : 0;
+        marks.push({ key, top, label: `该段已被 ${conflictName(item)} 删除`, item, approx: true, gap: true });
+        continue;
+      }
+      if (!block) continue;
+      // 审查员第 4 条：按章节/序号推测的位置，不给块加底色，标签写“大致位置：{章节名}”
       const top = isHeading(block) ? block.offsetTop + block.offsetHeight : block.offsetTop;
-      const what = deleted ? `${conflictName(item)} 删除了这附近的一段` : `与 ${conflictName(item)} 的修改冲突`;
-      marks.push({ key, top, label: `大致位置：${what}`, item, approx: true });
+      marks.push({ key, top, label: `大致位置：${sectionName(item)}`, item, approx: true });
     }
   }
   conflictMarks.value = marks;
+  approxConflicts.value = approx;
 }
 let marksFrame = 0;
 function scheduleMarks() {
@@ -550,12 +664,13 @@ function scheduleMarks() {
 }
 /** 卡片“定位”/正文标签：滚到正文中的块并闪一下；从正文标签进入时打开面板并滚到卡片。 */
 function locateConflict(item: ConflictItem) {
-  const { block, exact } = findConflictBlock(item);
-  if (!block) { noteAction("没能在正文中找到这一段，可能已被删除或移动。"); return; }
-  if (!exact) noteAction("这一段在正文中已找不到，已滚到它原来所在的大致位置。");
-  block.scrollIntoView({ behavior: "smooth", block: "center" });
-  block.classList.add("blk-flash");
-  window.setTimeout(() => block.classList.remove("blk-flash"), 1600);
+  const { block, exact, anchor } = findConflictBlock(item);
+  const target = anchor || block;
+  if (!target) { noteAction("没能在正文中找到这一段，可能已被删除或移动。"); return; }
+  if (!exact) noteAction(item.theirs?.deleted ? "这一段已被删除，已跳到它原来所在的位置。" : "没能精确定位，已跳到所在章节。");
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.add("blk-flash");
+  window.setTimeout(() => target.classList.remove("blk-flash"), 1600);
 }
 function openConflictCard(key: string) {
   autoConflict.value = null;
@@ -563,7 +678,8 @@ function openConflictCard(key: string) {
   let tries = 0;
   const find = () => {
     const card = window.document.querySelector<HTMLElement>(`.conflict-panel [data-conflict="${CSS.escape(key)}"]`);
-    if (card) { card.scrollIntoView({ behavior: "smooth", block: "nearest" }); card.focus?.(); return; }
+    // 界面复验 N6：卡片带 tabindex="-1"，焦点跟到卡片上
+    if (card) { card.scrollIntoView({ behavior: "smooth", block: "nearest" }); card.focus({ preventScroll: true }); return; }
     if (++tries < 20) window.setTimeout(find, 150);
   };
   window.setTimeout(find, 0);
@@ -578,18 +694,20 @@ async function checkOthersUpdated() {
     if (document.value !== record) return;
     objectModel.value = since.objectModel;
     if (since.documentRevision <= record.revision) return;
+    void refreshLastEditor();
     const names = since.changedBy.map(person => person.name);
     const objects = since.changedBy.reduce((sum, person) => sum + person.objects, 0);
     const changed = since.objects.filter(item => !item.deleted);
     const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value;
     if (quiet || (readonly.value && !isDirty.value)) {
-      const scroll = editor.value?.closest(".page-scroll");
+      const scroll = editor.value?.closest(".desk");
       const top = scroll?.scrollTop || 0;
       if (!(await refreshFromServer())) { othersUpdated.value = { names, objects }; return; }
       if (scroll) scroll.scrollTop = top;
+      // 审查员第 2 条：本地干净、自动刷新时，先清掉提示条，再显示 5 秒短提示
       othersUpdated.value = null;
       markUpdated(changed);
-      noteAction(names.length ? othersUpdatedText(names, objects, true) : "已显示最新内容。", 5000);
+      noteAction(names.length ? othersUpdatedText(names, objects, true) : "已显示最新内容。", 5000, "others");
     } else {
       othersUpdated.value = { names, objects };
     }
@@ -600,12 +718,12 @@ async function checkOthersUpdated() {
   }
 }
 /** 被他人更新、尚未看过的块：左侧蓝色竖线，目录标题右侧蓝点；点击或编辑该块后消失。 */
-function markUpdated(objects: Array<{ id: string; markdown?: string }>) {
+function markUpdated(objects: Array<{ id: string; markdown?: string }>, keep = false) {
   const root = editor.value;
   if (!root) return;
-  const headings = new Set<string>();
+  const headings = new Set<string>(keep ? updatedHeadings.value : []);
   for (const object of objects) {
-    const node = root.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(object.id)}"]`);
+    const node = object.id ? root.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(object.id)}"]`) : null;
     const block = (node?.closest(".paper-content > *") as HTMLElement | null) || node || findBlockByText(object.markdown);
     if (!block) continue;
     block.classList.add("blk-updated");
@@ -668,6 +786,7 @@ async function refreshMemory(offset = 0) {
     const memory = await getWritingMemory(id, offset);
     if (documentId.value === id) {
       writingMemory.value = memory.items.map(item => `${item.target}：${item.instruction}`).join("\n\n");
+      memoryCount.value = offset + memory.items.length;
       memoryOffset.value = offset;
       memoryHasMore.value = memory.hasMore;
     }
@@ -696,8 +815,10 @@ function chooseAiScope(scope: WritingMemory["scope"]) {
   aiScope.value = scope;
   aiOpen.value = true;
 }
-function showEditorHtml(html: string) {
+function showEditorHtml(html: string, mapped?: boolean) {
+  if (mapped !== undefined) previewModel.value = mapped;
   layoutNeedsRefresh = false;
+  lastCaret = null;
   selectionNeedsRefresh.value = false;
   selectedText.value = "";
   selectedRange = null;
@@ -735,7 +856,7 @@ async function acceptContent(result: DocumentContentResult) {
   persistLocalDraft();
   try {
     const preview = await previewDocument(record.id);
-    if (document.value === record && documentId.value === record.id) showEditorHtml(preview.html);
+    if (document.value === record && documentId.value === record.id) showEditorHtml(preview.html, preview.objectModel);
   } catch (error) {
     if (document.value === record) {
       errorText.value = `内容已保存，编辑视图加载失败：${messageOf(error)}`;
@@ -765,6 +886,7 @@ async function addHeading() {
     noteMerged(result);
     selectedHeading.value = result.headingIndex ?? null;
     headingTitle.value = "";
+    addHeadingOpen.value = false;
     aiDraft.value = "";
     aiRevision.value = null;
     await nextTick();
@@ -798,13 +920,15 @@ function clearAiDraft() {
   targetVersion += 1;
 }
 function selectHeading(index: number) {
-  if (aiLocked.value) return;
-  if (selectedHeading.value !== index || aiScope.value !== "section") clearAiDraft();
-  selectedText.value = "";
-  selectedRange = null;
-  aiScope.value = "section";
+  if (opBusy.value) return;
+  // 重塑：点目录只定位章节，不再强行打开写作助手（写作助手在文档栏）；编辑区锁定时不改 AI 范围
+  if (!aiLocked.value) {
+    if (selectedHeading.value !== index || aiScope.value !== "section") clearAiDraft();
+    selectedText.value = "";
+    selectedRange = null;
+    aiScope.value = "section";
+  }
   selectedHeading.value = index;
-  aiOpen.value = true;
   if (outline.value[index]?.level >= 6) headingPlacement.value = "sibling";
   scrollToHeading(index);
 }
@@ -843,6 +967,10 @@ function captureEditorTarget() {
   if (!editor.value || !selection?.rangeCount) return;
   const range = selection.getRangeAt(0).cloneRange();
   if (!editor.value.contains(range.startContainer) || !editor.value.contains(range.endContainer)) return;
+  lastCaret = range.cloneRange();
+  const startElement = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  const blockTag = startElement?.closest("h1,h2,h3,h4,h5,h6,p,li,td,th,pre")?.tagName.toLowerCase() || "p";
+  paraStyle.value = /^h[1-3]$/.test(blockTag) ? blockTag : /^h[4-6]$/.test(blockTag) ? "h3" : "p";
   // A selection ending at the next paragraph's start must not consume that paragraph break.
   if (!range.collapsed && range.endOffset === 0) {
     const walker = window.document.createTreeWalker(editor.value, NodeFilter.SHOW_TEXT);
@@ -867,7 +995,7 @@ function captureEditorTarget() {
     selectedText.value = "";
     selectedRange = null;
     aiScope.value = "selection";
-    aiOpen.value = true;
+    // 重塑：选区不合适时只在写作助手里说明，不再自动打开面板
     aiError.value = text.length > 8000 ? "每次最多选择 8000 字。" : "请选择连续的正文段落，不要包含标题、表格或图片。";
   } else {
     if (aiScope.value === "document" && range.collapsed) {
@@ -888,6 +1016,7 @@ async function resolveSelection(): Promise<DocumentSelection> {
   const { blocks, firstIndex, lastIndex, start, end, text } = parts;
   // Refresh source anchors after autosaving; never guess between repeated paragraphs.
   const preview = await previewDocument(document.value.id);
+  previewModel.value = preview.objectModel ?? previewModel.value;
   const canonical = new DOMParser().parseFromString(DOMPurify.sanitize(preview.html), "text/html");
   const expected = [...canonical.querySelectorAll("p,li")];
   if (blocks.length !== expected.length || blocks.some((item, i) => item.tagName !== expected[i].tagName || item.textContent !== expected[i].textContent)) {
@@ -1148,7 +1277,7 @@ async function goPage(change: number) {
   pageCanvas.value?.parentElement?.scrollTo({ top: 0 });
 }
 async function switchMode(next: "original" | "edit" | "layout") {
-  if (aiLocked.value) return;
+  if (opBusy.value) return;
   if (next !== "edit" && isDirty.value) await save();
   if (next !== "edit" && isDirty.value) return;
   mode.value = next;
@@ -1306,11 +1435,30 @@ function downloadLocalDraft() {
   if (!localDraft.value?.markdown || !document.value) return;
   download(myChangesFileName(document.value.name, new Date(localDraft.value.savedAt || Date.now())), localDraft.value.markdown);
 }
-function noteAction(message: string, ms = 4000) {
+function noteAction(message: string, ms = 4000, kind: "others" | "" = "") {
   actionNote.value = message;
+  actionNoteKind = kind;
   window.clearTimeout(actionNoteTimer);
-  actionNoteTimer = window.setTimeout(() => { actionNote.value = ""; }, ms);
+  actionNoteTimer = window.setTimeout(() => { actionNote.value = ""; actionNoteKind = ""; }, ms);
 }
+// 审查员第 2 条：提示条出现时，立即清掉正在显示的“已显示/已合并”短提示
+watch(othersUpdated, (value) => {
+  if (value && actionNoteKind === "others") { actionNote.value = ""; actionNoteKind = ""; window.clearTimeout(actionNoteTimer); }
+});
+/** 底部状态栏“最近由 X 修改于 HH:mm”：取版本记录第一条（修订号变化后 1 秒内去抖刷新）。 */
+function refreshLastEditor() {
+  window.clearTimeout(lastEditorTimer);
+  const record = document.value;
+  if (!record) return;
+  lastEditorTimer = window.setTimeout(async () => {
+    try {
+      const page = await listDocumentVersions(record.id, 0);
+      const latest = page.items[0];
+      if (document.value === record) lastEditor.value = latest?.createdBy ? { name: latest.createdBy.name, at: latest.createdAt } : null;
+    } catch { /* 取不到时不显示 */ }
+  }, 600);
+}
+watch(() => document.value?.revision, (value, previous) => { if (value !== undefined && previous !== undefined && value !== previous) refreshLastEditor(); });
 function save(trigger: "auto" | "manual" = "auto"): Promise<void> {
   if (savePromise) return savePromise.then(() => (isDirty.value && !retrying.value && !blockedFor(markdownContent.value) ? save(trigger) : undefined));
   if (!document.value || !isDirty.value || aiPreviewHost.value || readonly.value) return Promise.resolve();
@@ -1359,10 +1507,13 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       } else {
         mergeBase = null;
       }
-      if (result.merged) {
+      // 审查员第 2 条：提示条显示期间（含点了“立即刷新”的这次保存）不再补发“已合并”短提示
+      if (result.merged && !othersUpdated.value) {
         const text = changedByText(result.changedBy);
-        if (text) noteAction(text, 6000);
+        if (text) noteAction(text, 6000, "others");
       }
+      // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
+      const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
       if (!typedNewer) othersUpdated.value = null;
       pendingKey = null;
       blocked.value = null;
@@ -1372,8 +1523,10 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       savedAt.value = Date.now();
       persistLocalDraft();
       if (memory === pendingMemory && memory) { pendingMemory = undefined; void refreshMemory(); }
-      if (rerender && !isDirty.value) await acceptContent({ markdownContent: serverText, revision: record.revision, status: record.status });
-      else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
+      if (rerender && !isDirty.value) {
+        await acceptContent({ markdownContent: serverText, revision: record.revision, status: record.status });
+        if (mergedIn.length && document.value === record) markUpdated(mergedIn.map(markdown => ({ id: "", markdown })), true);
+      } else if (layoutNeedsRefresh && !isDirty.value) await refreshEditorFormatting(false);
     } catch (error) {
       if (current()) handleSaveError(error, content, trigger, baseRevision ?? mergeBase ?? record.revision);
     } finally {
@@ -1466,7 +1619,7 @@ async function revertBlockedBlock() {
     await saveContent(reverted, "manual");
     if (document.value?.id !== record.id) return;
     if (!blocked.value && markdownContent.value === savedContent.value) {
-      const scroller = editor.value?.closest(".page-scroll");
+      const scroller = editor.value?.closest(".desk");
       const top = scroller?.scrollTop ?? 0;
       await acceptContent({ markdownContent: savedContent.value, revision: record.revision, status: record.status });
       rendered = true;
@@ -1560,9 +1713,15 @@ async function openDiagrams() {
   if (!isDirty.value) await diagrams.value?.open();
 }
 async function openHistory() {
-  // 有未保存修改也能查看历史，只是不能恢复（02 P1）。
-  if ((aiLocked.value && !historyOpen.value) || addingHeading.value) return;
+  // 有未保存修改也能查看历史，只是不能恢复（02 P1）。界面复验 N9：其他面板打开时可以直接切换过来。
+  if (opBusy.value) return;
   openPanel("history");
+}
+/** 文档栏的面板按钮：再点一次收起；有操作进行时不切换。 */
+function togglePanel(name: "ai" | "history") {
+  if (rightPanel.value === name) { rightPanel.value = null; return; }
+  if (opBusy.value) return;
+  openPanel(name);
 }
 function openConflicts(tab?: "mine" | "members") {
   conflictTab.value = tab || (conflictCount(conflictSummary.value) > 0 ? "mine" : conflictEntry.value?.tab || "mine");
@@ -1674,7 +1833,7 @@ async function refreshEditorFormatting(saveFirst = true) {
       positions.push({ index: blocks.indexOf(block), offset: (before.cloneContents().textContent || "").length });
     }
   }
-  const scroll = root.closest(".page-scroll");
+  const scroll = root.closest(".desk");
   const scrollTop = scroll?.scrollTop || 0;
   refreshingEditor.value = true;
   root.contentEditable = "false";
@@ -1684,7 +1843,7 @@ async function refreshEditorFormatting(saveFirst = true) {
     if (isDirty.value || document.value !== record) return;
     const preview = await previewDocument(record.id);
     if (document.value !== record || documentId.value !== record.id) return;
-    showEditorHtml(preview.html);
+    showEditorHtml(preview.html, preview.objectModel);
     if (positions.length === 2) {
       const restored = window.document.createRange();
       const currentBlocks = [...root.querySelectorAll(selector)];
@@ -1719,7 +1878,11 @@ async function refreshEditorFormatting(saveFirst = true) {
 }
 async function format(command: string, value?: string) {
   if (aiLocked.value || addingHeading.value) return;
+  // 段落样式下拉会抢走焦点：编辑区里没有选区时，回到最近一次的光标位置再执行
+  const selection = window.getSelection();
+  const inside = Boolean(selection?.rangeCount && editor.value?.contains(selection.getRangeAt(0).startContainer));
   editor.value?.focus();
+  if (!inside && lastCaret && editor.value?.contains(lastCaret.startContainer)) { selection?.removeAllRanges(); selection?.addRange(lastCaret); }
   window.document.execCommand(command, false, value);
   onEditorInput();
   await refreshEditorFormatting();
@@ -1729,7 +1892,7 @@ function scrollToHeading(index: number) {
 }
 async function handleExport() {
   exportMenu.value = false;
-  if (!document.value || exporting.value || aiLocked.value) return;
+  if (!document.value || exporting.value || opBusy.value) return;
   window.clearTimeout(autoSaveTimer);
   if (isDirty.value && !readonly.value) await save("manual");
   if (isDirty.value) {
@@ -1782,7 +1945,7 @@ async function exportServerVersion() {
   }
 }
 async function goBack() {
-  if (aiLocked.value) return;
+  if (opBusy.value) return;
   void router.push({ name: "project-documents", params: { id: projectId.value } });
 }
 function onKeydown(event: KeyboardEvent) {
@@ -1822,6 +1985,8 @@ onUnmounted(() => {
   window.clearTimeout(retryTimer);
   window.clearTimeout(savingTimer);
   window.clearTimeout(actionNoteTimer);
+  window.clearTimeout(lastEditorTimer);
+  deskObserver?.disconnect();
   clearAiDraft();
   window.clearTimeout(autoSaveTimer);
   originalController?.abort();
@@ -1831,357 +1996,500 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="workbench" @keydown="onKeydown">
-    <div v-if="phase === 'loading'" class="state">正在加载文档...</div>
+  <div class="ws" @keydown="onKeydown">
+    <div v-if="phase === 'loading'" class="state" role="status">正在加载文档...</div>
     <div v-else-if="phase === 'error'" class="state" data-testid="load-error"><p>{{ errorText }}</p>
       <router-link v-if="loadErrorStatus === 404" class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link>
       <button v-else type="button" class="ghost" @click="load">重试</button></div>
     <template v-else-if="document">
-      <header class="toolbar">
-        <div class="toolbar-left">
-          <button type="button" class="ghost" :disabled="aiLocked || addingHeading" @click="goBack">← 文档列表</button>
-          <span class="toolbar-separator" aria-hidden="true"></span>
-          <div class="document-heading"><h1>{{ document.name }}</h1></div>
+      <!-- 12 §8.1 第 3 步：文档栏（返回、标题、模板标签、胶囊紧跟标题；右侧视图切换、冲突、版本记录、写作助手、下载） -->
+      <header class="docbar">
+        <button type="button" class="subtle icon-btn" aria-label="返回文档列表" title="返回文档列表" :disabled="opBusy" @click="goBack"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg></button>
+        <div class="doctitle">
+          <h1 :title="document.name">{{ document.name }}</h1>
+          <span v-if="templateTag" class="tag plain">{{ templateTag }}</span>
+          <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
+          <span v-if="wholeSave" class="whole-tag" data-testid="whole-save" tabindex="0" aria-describedby="whole-save-tip">整篇保存<span id="whole-save-tip" class="tip" role="tooltip">这份文档暂时只能整篇保存。和他人同时编辑时，冲突按整段对比，不影响保存。</span></span>
         </div>
-        <div class="toolbar-right">
-          <button v-if="mode === 'edit' && conflictEntry" type="button" class="ghost conflict-toggle" :class="conflictEntry.tone" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts(conflictEntry.tab)">{{ conflictEntry.label }}</button>
-          <button v-if="mode === 'edit'" type="button" class="ghost" :disabled="aiLocked || addingHeading" @click="openHistory">版本记录</button>
-          <button v-if="mode === 'edit' && aiUndo" type="button" class="ghost" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
-          <div class="mode-switch" role="group" aria-label="文档视图">
-            <button type="button" class="ghost" :class="{ active: mode === 'original' }" :disabled="aiLocked || addingHeading" @click="switchMode('original')">查看原稿</button>
-            <button type="button" class="ghost" :class="{ active: mode === 'edit' }" :disabled="aiLocked || addingHeading" @click="switchMode('edit')">编辑稿</button>
-            <button type="button" class="ghost" :class="{ active: mode === 'layout' }" :disabled="aiLocked || addingHeading || saving" @click="switchMode('layout')">版式预览</button>
+        <div class="spacer"></div>
+        <div class="seg" role="group" aria-label="文档视图">
+          <button type="button" :class="{ on: mode === 'edit' }" :aria-pressed="mode === 'edit'" :disabled="opBusy" @click="switchMode('edit')">编辑稿</button>
+          <button type="button" :class="{ on: mode === 'original' }" :aria-pressed="mode === 'original'" :disabled="opBusy" @click="switchMode('original')">查看原稿</button>
+          <button type="button" :class="{ on: mode === 'layout' }" :aria-pressed="mode === 'layout'" :disabled="opBusy || saving" @click="switchMode('layout')">版式预览</button>
+        </div>
+        <span class="divider-v" aria-hidden="true"></span>
+        <button v-if="mode === 'edit' && conflictEntry" type="button" class="conflict-toggle" :class="[conflictEntry.tone, { on: conflictOpen }]" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts(conflictEntry.tab)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg><span>{{ conflictEntry.name }}</span> <span v-if="conflictEntry.count" class="count">{{ conflictEntry.count }}</span></button>
+        <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: historyOpen }" :aria-pressed="historyOpen" :disabled="opBusy && !historyOpen" @click="togglePanel('history')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" /><path d="M3 4v4h4" /><path d="M12 8v4.5l3 2" /></svg>版本记录</button>
+        <button v-if="mode === 'edit' && aiUndo" type="button" class="subtle" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
+        <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: aiOpen }" :aria-pressed="aiOpen" :disabled="readonly || Boolean(aiUnavailable('writing')) || (opBusy && !aiOpen)" :title="aiUnavailable('writing') || undefined" @mousedown.prevent @click="togglePanel('ai')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></svg>写作助手</button>
+        <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>下载原稿</a>
+        <div v-else class="export-group">
+          <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || opBusy || document.permissions?.canExport === false" :title="document.permissions?.canExport === false ? '你在该项目中没有导出权限' : undefined" @click="handleExport"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
+          <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
+          <div v-if="exportMenu" class="export-menu" role="menu" @keydown.esc="exportMenu = false">
+            <button type="button" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
+            <button type="button" role="menuitem" @click="exportMenu = false; downloadMyChanges()">我的修改（.md）</button>
           </div>
-          <span class="toolbar-separator" aria-hidden="true"></span>
-          <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download>下载原稿</a>
-          <template v-else>
-            <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
-            <span v-if="objectModel === false" class="tag plain whole-tag" data-testid="whole-save" tabindex="0" title="本文档结构较复杂，修改按整篇提交；发生冲突时按整篇对比">整篇保存</span>
-            <div class="export-group">
-              <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || aiLocked || document.permissions?.canExport === false" :title="document.permissions?.canExport === false ? '你在该项目中没有导出权限' : undefined" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
-              <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu">▾</button>
-              <div v-if="exportMenu" class="export-menu card" role="menu" @keydown.esc="exportMenu = false">
-                <button type="button" class="ghost" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
-                <button type="button" class="ghost" role="menuitem" @click="exportMenu = false; downloadMyChanges()">我的修改（.md）</button>
-              </div>
-              <!-- 界面验收 S9：导出失败只在导出按钮旁说明（危险色），不占通栏 -->
-              <div v-if="exportError" class="export-error" role="alert" data-testid="export-error">
-                <p>{{ exportError }}</p>
-                <span class="acts"><button type="button" class="text" @click="downloadMyChanges">下载我的修改</button><button type="button" class="text neutral" @click="exportError = ''">知道了</button></span>
-              </div>
-            </div>
-          </template>
+          <!-- 界面验收 S9：导出失败只在导出按钮旁说明（危险色），不占通栏 -->
+          <div v-if="exportError" class="export-error" role="alert" data-testid="export-error">
+            <p>{{ exportError }}</p>
+            <span class="acts"><button type="button" class="text" @click="downloadMyChanges">下载我的修改</button><button type="button" class="text neutral" @click="exportError = ''">知道了</button></span>
+          </div>
         </div>
       </header>
-      <p v-if="errorText" class="error-notice" role="alert">{{ errorText }}</p>
-      <div v-if="blocked" class="notice danger save-blocked" role="alert" data-testid="save-blocked">
-        <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
-        <span class="acts">
-          <button v-if="blocked.location" type="button" class="ghost" @click="locateBlocked">定位</button>
-          <button v-if="blocked.blockText && !readonly" type="button" class="ghost" data-testid="revert-block" :disabled="revertingBlock" @click="revertBlockedBlock">{{ revertingBlock ? '正在撤销…' : '撤销这一段的修改' }}</button>
-          <button v-if="!readonly" type="button" class="ghost" @click="retryNow">重试保存</button>
-          <button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button>
-        </span>
-      </div>
-      <div v-else-if="storageFailed" class="notice danger save-blocked" role="alert">
-        <span>浏览器存储已满，修改未能保存在本机。服务器保存仍在继续，建议先下载你的修改。<template v-if="storageUsage.length">本机共有 {{ storageUsage.length }} 份文档草稿，约 {{ (storageUsage.reduce((sum, item) => sum + item.bytes, 0) / 1048576).toFixed(1) }} MB。</template></span>
-        <span class="acts">
-          <button type="button" class="ghost" @click="downloadMyChanges">下载我的修改</button>
-          <button v-if="otherDocDrafts.length" type="button" class="ghost" data-testid="clear-other-drafts" @click="exportAndClearOtherDrafts">下载并清理其他文档的草稿（{{ otherDocDrafts.length }} 份）</button>
-        </span>
-      </div>
-      <div v-if="autoConflict && !conflictOpen" class="notice warning" role="status" data-testid="auto-conflict">
-        <span>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
-        <span class="acts"><button type="button" class="ghost" @click="openConflicts('mine')">查看冲突</button></span>
-      </div>
-      <div v-if="othersUpdated" class="notice info" role="status" data-testid="others-updated">
-        <span>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
-        <span class="acts">
-          <button type="button" class="ghost" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
-          <button type="button" class="ghost" @click="openHistory">查看修改记录</button>
-          <button type="button" class="subtle" aria-label="关闭提示" @click="othersUpdated = null">×</button>
-        </span>
-      </div>
-      <p v-if="actionNote" class="notice info" role="status">{{ actionNote }}</p>
-      <p v-if="multiTab && !localDraft && !blocked" class="notice info" role="status" data-testid="multi-tab">此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。 <button type="button" class="ghost" @click="dismissMultiTab">知道了</button></p>
-      <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
-        <div class="draft-row">
-          <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}</span>
-          <label v-if="localDrafts.length > 1" class="draft-pick">本机共 {{ localDrafts.length }} 份
-            <select class="control" :value="localDrafts.indexOf(localDraft)" :disabled="draftBusy" @change="chooseLocalDraft(Number(($event.target as HTMLSelectElement).value))">
-              <option v-for="(item, index) in localDrafts" :key="item.tabId" :value="index">{{ draftTime(item) }}（{{ item.changed || 1 }} 处）</option>
-            </select>
-          </label>
-          <template v-if="draftConfirmDiscard">
-            <span class="draft-confirm">舍弃后这份本机修改将无法恢复。</span>
-            <button type="button" class="ghost" @click="draftConfirmDiscard = false">返回</button>
-            <button type="button" class="primary danger" data-testid="draft-discard-confirm" @click="discardLocalDraft">舍弃</button>
-          </template>
-          <template v-else>
-            <button type="button" class="ghost" :aria-expanded="draftDiffOpen" @click="draftDiffOpen = !draftDiffOpen">查看差异</button>
-            <button type="button" class="primary" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
-            <button type="button" class="ghost" @click="downloadLocalDraft">下载</button>
-            <button type="button" class="ghost" @click="discardLocalDraft">舍弃</button>
-          </template>
+
+      <!-- 第 2 步：提示条统一放在文档栏下方、三栏上方 -->
+      <div class="notices">
+        <p v-if="errorText" class="wb-notice danger" role="alert">{{ errorText }}</p>
+        <div v-if="blocked" class="wb-notice danger save-blocked" role="alert" data-testid="save-blocked">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
+          <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
+          <span class="acts">
+            <button v-if="blocked.location" type="button" class="ghost sm" @click="locateBlocked">定位</button>
+            <button v-if="blocked.blockText && !readonly" type="button" class="ghost sm" data-testid="revert-block" :disabled="revertingBlock" @click="revertBlockedBlock">{{ revertingBlock ? '正在撤销…' : '撤销这一段的修改' }}</button>
+            <button v-if="!readonly" type="button" class="ghost sm" @click="retryNow">重试保存</button>
+            <button type="button" class="subtle sm" @click="downloadMyChanges">下载我的修改</button>
+          </span>
         </div>
-        <p class="draft-hint">先处理本机草稿（恢复、下载或舍弃），再继续编辑；处理前编辑区暂时锁定，避免两份修改互相覆盖。</p>
-        <div v-if="draftDiffOpen" class="draft-diff" aria-label="本机草稿与服务器正文的差异">
-          <p v-if="!draftDiff.added.length && !draftDiff.removed.length">与服务器正文相同。</p>
-          <pre v-for="(block, index) in draftDiff.added" :key="`a${index}`" class="ins">{{ block }}</pre>
-          <pre v-for="(block, index) in draftDiff.removed" :key="`r${index}`" class="del">{{ block }}</pre>
+        <div v-else-if="storageFailed" class="wb-notice danger save-blocked" role="alert">
+          <span>浏览器存储已满，修改未能保存在本机。服务器保存仍在继续，建议先下载你的修改。<template v-if="storageUsage.length">本机共有 {{ storageUsage.length }} 份文档草稿，{{ draftSizeText(storageUsage.reduce((sum, item) => sum + item.bytes, 0)) }}。</template></span>
+          <span class="acts">
+            <button type="button" class="ghost sm" @click="downloadMyChanges">下载我的修改</button>
+            <button v-if="otherDocDrafts.length" type="button" class="ghost sm" data-testid="clear-other-drafts" @click="exportAndClearOtherDrafts">下载并清理其他文档的草稿（{{ otherDocDrafts.length }} 份）</button>
+          </span>
+        </div>
+        <div v-if="autoConflict && !conflictOpen" class="wb-notice warning" role="status" data-testid="auto-conflict">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
+          <span>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
+          <span class="acts"><button type="button" class="ghost sm" @click="openConflicts('mine')">查看冲突</button></span>
+        </div>
+        <div v-if="othersUpdated" class="wb-notice info" role="status" data-testid="others-updated">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
+          <span>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
+          <span class="acts">
+            <button type="button" class="ghost sm" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
+            <button type="button" class="subtle sm" :disabled="opBusy" @click="openHistory">查看修改记录</button>
+            <button type="button" class="subtle icon-btn" aria-label="关闭提示" @click="othersUpdated = null"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+          </span>
+        </div>
+        <p v-if="actionNote" class="wb-notice info" role="status"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ actionNote }}</span></p>
+        <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
+        <!-- S11：草稿恢复条只锁编辑区；顶栏、目录和面板照常可用 -->
+        <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
+          <div class="draft-row">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z" /><path d="M14 3v5h5" /><path d="M9 13h7M9 17h5" /></svg>
+            <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}</span>
+            <label v-if="localDrafts.length > 1" class="draft-pick">本机共 {{ localDrafts.length }} 份
+              <select class="control" :value="localDrafts.indexOf(localDraft)" :disabled="draftBusy" @change="chooseLocalDraft(Number(($event.target as HTMLSelectElement).value))">
+                <option v-for="(item, index) in localDrafts" :key="item.tabId" :value="index">{{ draftTime(item) }}（{{ item.changed || 1 }} 处）</option>
+              </select>
+            </label>
+            <span class="acts">
+              <template v-if="draftConfirmDiscard">
+                <span class="draft-confirm">舍弃后这份本机修改将无法恢复。</span>
+                <button type="button" class="ghost sm" @click="draftConfirmDiscard = false">返回</button>
+                <button type="button" class="primary danger sm" data-testid="draft-discard-confirm" @click="discardLocalDraft">舍弃</button>
+              </template>
+              <template v-else>
+                <button type="button" class="subtle sm" :aria-expanded="draftDiffOpen" @click="draftDiffOpen = !draftDiffOpen">查看差异</button>
+                <button type="button" class="primary sm" :disabled="draftBusy || readonly" @click="restoreLocalDraft">{{ draftBusy ? '恢复中…' : '恢复并保存' }}</button>
+                <button type="button" class="ghost sm" @click="downloadLocalDraft">下载</button>
+                <button type="button" class="ghost sm" @click="discardLocalDraft">舍弃</button>
+              </template>
+            </span>
+          </div>
+          <p class="draft-hint">处理本机草稿（恢复、下载或舍弃）之前，正文暂时不能编辑，避免两份修改互相覆盖；目录、版本记录和下载照常可用。</p>
+          <div v-if="draftDiffOpen" class="draft-diff" aria-label="本机草稿与服务器正文的差异">
+            <p v-if="!draftDiff.added.length && !draftDiff.removed.length">与服务器正文相同。</p>
+            <pre v-for="(block, index) in draftDiff.added" :key="`a${index}`" class="ins">{{ block }}</pre>
+            <pre v-for="(block, index) in draftDiff.removed" :key="`r${index}`" class="del">{{ block }}</pre>
+          </div>
         </div>
       </div>
       <DocumentDiagrams ref="diagrams" :document="document" :headings="outline" :heading-index="selectedHeading" @inserted="acceptDiagram" @busy="diagramBusy = $event" @conflict="derivedConflict" />
-      <div class="workspace" :class="{ 'original-mode': mode !== 'edit', 'ai-open': mode === 'edit' && aiOpen, 'history-open': historyOpen || (mode === 'edit' && conflictOpen) }">
+
+      <!-- 第 1 步：三栏（目录 / 编辑区 / 右侧面板），同一时间只开一个面板 -->
+      <div class="main3" :class="{ 'no-outline': mode !== 'edit', 'has-panel': panelShown }">
         <div v-if="mode !== 'edit'" class="original-viewer">
-          <div v-if="originalPhase === 'loading'" class="preview-state">正在使用 Word 生成{{ mode === 'layout' ? '编辑稿' : '原稿' }}预览...</div>
+          <div v-if="originalPhase === 'loading'" class="preview-state" role="status">正在使用 Word 生成{{ mode === 'layout' ? '编辑稿' : '原稿' }}预览...</div>
           <div v-else-if="originalPhase === 'error'" class="preview-state" role="alert">
             <p>{{ originalError }}</p>
             <button type="button" class="ghost" @click="loadOriginal()">重试预览</button>
           </div>
           <div v-else class="pdf-viewer">
             <div class="page-controls" aria-label="Word 翻页">
-              <button type="button" class="ghost" :disabled="pageNumber <= 1 || renderingPage" @click="goPage(-1)">上一页</button>
+              <button type="button" class="ghost sm" :disabled="pageNumber <= 1 || renderingPage" @click="goPage(-1)">上一页</button>
               <span>第 {{ pageNumber }} / {{ pageCount }} 页</span>
-              <button type="button" class="ghost" :disabled="pageNumber >= pageCount || renderingPage" @click="goPage(1)">下一页</button>
+              <button type="button" class="ghost sm" :disabled="pageNumber >= pageCount || renderingPage" @click="goPage(1)">下一页</button>
             </div>
             <div class="pdf-scroll"><canvas ref="pageCanvas" role="img" :aria-label="`Word ${mode === 'layout' ? '编辑稿' : '原稿'}第 ${pageNumber} 页`"></canvas></div>
           </div>
         </div>
-        <aside v-show="mode === 'edit'" class="outline-panel" aria-label="文档大纲">
-          <h2>文档大纲</h2>
-          <p v-if="outline.length === 0" class="empty-outline">暂无标题</p>
-          <nav v-else class="outline-tree">
-            <button v-for="(item, index) in outline" :key="index" type="button" class="ghost outline-item" :disabled="aiLocked || addingHeading" :class="{ selected: selectedHeading === index }" :aria-current="selectedHeading === index ? 'true' : undefined" :style="{ paddingLeft: `calc(var(--space-2) + (var(--space-3) * ${item.level - 1}))` }" @click="selectHeading(index)">{{ item.text }}<span v-if="conflictHeadings.has(item.text)" class="outline-dot conflict" title="本章节有冲突待处理" aria-label="有冲突"></span><span v-else-if="updatedHeadings.has(item.text)" class="outline-dot updated" title="他人更新了本章节" aria-label="有更新"></span></button>
-          </nav>
-          <form class="outline-form" @submit.prevent="addHeading">
-            <h3>添加标题</h3>
+
+        <!-- 第 4 步：目录 -->
+        <nav v-show="mode === 'edit'" class="outline" aria-label="文档目录">
+          <div class="ohead">
+            <span>目录</span>
+            <div class="acts">
+              <button type="button" class="subtle icon-btn" aria-label="搜索标题" :aria-pressed="outlineSearchOpen" @click="toggleOutlineSearch"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg></button>
+              <button type="button" class="subtle icon-btn" aria-label="添加标题" aria-haspopup="dialog" :aria-expanded="addHeadingOpen" :disabled="readonly || opBusy" @click="addHeadingOpen = !addHeadingOpen"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            </div>
+          </div>
+          <div v-if="outlineSearchOpen" class="osearch"><input v-model="outlineSearch" class="control" type="search" placeholder="搜索标题" aria-label="搜索标题" /></div>
+          <form v-if="addHeadingOpen" class="add-heading" aria-label="添加标题" @submit.prevent="addHeading" @keydown.esc="addHeadingOpen = false">
             <label for="new-heading">标题名称</label>
             <input id="new-heading" v-model="headingTitle" class="control" type="text" maxlength="120" :disabled="addingHeading || saving || aiLocked || readonly" required />
-            <label v-if="selectedHeading !== null" for="heading-placement">标题层级</label>
-            <select v-if="selectedHeading !== null" id="heading-placement" v-model="headingPlacement" class="control" :disabled="addingHeading || saving || aiLocked || readonly">
-              <option value="child" :disabled="(outline[selectedHeading]?.level || 0) >= 6">下级标题</option>
-              <option value="sibling">同级标题</option>
-            </select>
+            <template v-if="selectedHeading !== null">
+              <label for="heading-placement">位置（相对“{{ outline[selectedHeading]?.text }}”）</label>
+              <select id="heading-placement" v-model="headingPlacement" class="control" :disabled="addingHeading || saving || aiLocked || readonly">
+                <option value="child" :disabled="(outline[selectedHeading]?.level || 0) >= 6">下级标题</option>
+                <option value="sibling">同级标题</option>
+              </select>
+            </template>
+            <p v-if="aiLocked && !addingHeading" class="hint">{{ localDraft ? '请先处理本机草稿。' : '正文暂时锁定（版本记录或写作助手的草稿正在使用），收起后再添加。' }}</p>
             <p v-if="headingError" class="form-error" role="alert">{{ headingError }}</p>
-            <button type="submit" class="primary" :disabled="addingHeading || saving || aiLocked || readonly || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到大纲" }}</button>
+            <div class="add-acts">
+              <button type="button" class="ghost sm" :disabled="addingHeading" @click="addHeadingOpen = false">取消</button>
+              <button type="submit" class="primary sm" :disabled="addingHeading || saving || aiLocked || readonly || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到目录" }}</button>
+            </div>
           </form>
-        </aside>
-        <main v-show="mode === 'edit'" class="editor-area">
-          <fieldset class="editor-toolbar" aria-label="文字格式" :disabled="aiLocked || addingHeading || readonly">
-            <button type="button" class="ghost" title="一级标题" @mousedown.prevent @click="format('formatBlock', 'h1')">标题 1</button>
-            <button type="button" class="ghost" title="二级标题" @mousedown.prevent @click="format('formatBlock', 'h2')">标题 2</button>
-            <button type="button" class="ghost" title="正文" @mousedown.prevent @click="format('formatBlock', 'p')">正文</button>
-            <span class="toolbar-separator" aria-hidden="true"></span>
-            <button type="button" class="ghost" title="加粗" @mousedown.prevent @click="format('bold')"><strong>B</strong></button>
-            <button type="button" class="ghost" title="斜体" @mousedown.prevent @click="format('italic')"><em>I</em></button>
-            <span class="toolbar-separator" aria-hidden="true"></span>
-            <button type="button" class="ghost" title="项目符号" @mousedown.prevent @click="format('insertUnorderedList')">项目符号</button>
-            <button type="button" class="ghost" title="编号列表" @mousedown.prevent @click="format('insertOrderedList')">编号列表</button>
-            <button type="button" class="primary" :aria-expanded="aiOpen" :disabled="readonly || Boolean(aiUnavailable('writing'))" :title="aiUnavailable('writing') || undefined" @mousedown.prevent @click="aiOpen = !aiOpen">写作助手</button>
-            <button type="button" class="ghost" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
-            <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
+          <p v-if="outline.length === 0" class="oempty">暂无标题</p>
+          <p v-else-if="!outlineShown.length" class="oempty">没有匹配的标题</p>
+          <div v-else class="olist">
+            <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: selectedHeading === entry.index, empty: entry.info?.empty }]" :aria-current="selectedHeading === entry.index ? 'true' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
+              <span class="otext">{{ entry.item.text }}</span>
+              <i v-if="conflictHeadings.has(entry.item.text)" class="omark danger outline-dot conflict" role="img" title="本章节有冲突待处理" aria-label="有冲突"></i>
+              <i v-else-if="updatedHeadings.has(entry.item.text)" class="omark info outline-dot updated" role="img" title="他人更新了本章节" aria-label="有更新"></i>
+              <span v-else-if="entry.info?.empty" class="ostate">待编写</span>
+            </button>
+          </div>
+          <div class="ofoot"><span><i class="omark danger" aria-hidden="true"></i>冲突</span><span><i class="omark info" aria-hidden="true"></i>他人更新</span><span>待编写 {{ pendingSections }} 节</span></div>
+        </nav>
+
+        <section v-show="mode === 'edit'" class="editor" aria-label="编辑区">
+          <!-- 第 5 步：格式工具栏（段落样式下拉 + 图标按钮），fieldset 与 disabled 绑定不变 -->
+          <fieldset class="etool" aria-label="文字格式" :disabled="aiLocked || addingHeading || readonly">
+            <select class="control" aria-label="段落样式" :value="paraStyle" @change="format('formatBlock', ($event.target as HTMLSelectElement).value)">
+              <option value="p">正文</option><option value="h1">标题 1</option><option value="h2">标题 2</option><option value="h3">标题 3</option>
+            </select>
+            <span class="divider-v" aria-hidden="true"></span>
+            <button type="button" class="subtle tool" title="加粗" aria-label="加粗" @mousedown.prevent @click="format('bold')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z" /></svg></button>
+            <button type="button" class="subtle tool" title="斜体" aria-label="斜体" @mousedown.prevent @click="format('italic')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5h8M6 19h8M14 5l-4 14" /></svg></button>
+            <span class="divider-v" aria-hidden="true"></span>
+            <button type="button" class="subtle tool" title="项目符号" aria-label="项目符号" @mousedown.prevent @click="format('insertUnorderedList')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r=".8" /><circle cx="4.5" cy="12" r=".8" /><circle cx="4.5" cy="18" r=".8" /></svg></button>
+            <button type="button" class="subtle tool" title="编号列表" aria-label="编号列表" @mousedown.prevent @click="format('insertOrderedList')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10" /><path d="M4 5l1.5-1v5M3.5 14.5a1.5 1.5 0 1 1 2.5 1.2L3.5 19H6" /></svg></button>
+            <span class="divider-v" aria-hidden="true"></span>
+            <button type="button" class="subtle tool" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="7" height="6" rx="1" /><rect x="13.5" y="14" width="7" height="6" rx="1" /><path d="M7 10v4.5a2 2 0 0 0 2 2h4.5" /></svg>Visio 图表</button>
+            <button type="button" class="subtle tool" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>编写规范</button>
+            <span class="spacer"></span>
+            <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
-          <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
+          <div ref="desk" class="desk page-scroll"><div class="paper" :style="paperZoom < 1 ? { ...paperStyle, zoom: String(paperZoom) } : paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
-                <div v-if="mark.approx" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
-                <button type="button" class="conflict-mark" :class="{ approx: mark.approx }" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)">{{ mark.label }}</button>
+                <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
+                <button type="button" class="conflict-mark" :class="{ approx: mark.approx, gap: mark.gap }" data-testid="conflict-mark" :style="{ top: `${mark.top}px` }" @click="openConflictCard(mark.key)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>{{ mark.label }}</button>
               </template>
             </div></div></div>
-        </main>
-        <aside v-if="mode === 'edit' && aiOpen" class="ai-panel" aria-label="写作助手">
-          <div class="ai-panel-head"><h2>写作助手</h2><button type="button" class="ghost" aria-label="关闭写作助手" @click="aiOpen = false">收起</button></div>
-          <div class="scope-switch" role="group" aria-label="编写范围">
-            <button type="button" class="ghost" :aria-pressed="aiScope === 'section'" :disabled="aiLocked" @click="chooseAiScope('section')">章节</button>
-            <button type="button" class="ghost" :aria-pressed="aiScope === 'selection'" :disabled="aiLocked || !selectedText" @click="chooseAiScope('selection')">选中文字</button>
-            <button type="button" class="ghost" :aria-pressed="aiScope === 'document'" :disabled="aiLocked" @click="chooseAiScope('document')">全文</button>
-          </div>
-          <p v-if="!canGenerate" class="empty-outline">选择标题或选中正文。</p>
-          <p v-if="!canGenerate && aiError" class="form-error" role="alert">{{ aiError }}</p>
-          <template v-if="canGenerate">
-            <p class="ai-target">{{ aiScope === 'document' ? document.name : aiScope === 'selection' ? '选中内容' : outline[selectedHeading!]?.text }}</p>
-            <blockquote v-if="aiScope === 'selection'" class="selected-text">{{ selectedText }}</blockquote>
-            <form class="ai-form" @submit.prevent="generateSection">
-              <label for="ai-instruction">编写要求（选填）</label>
-              <textarea id="ai-instruction" v-model="aiInstruction" class="control" rows="4" maxlength="2000" :disabled="!canStartAi"></textarea>
-              <button type="submit" class="primary" :disabled="!canStartAi">{{ aiBusy ? "正在编写…" : aiDraft ? "重新生成" : "生成草稿" }}</button>
-            </form>
-            <section v-if="aiProgress.length" class="ai-progress" aria-label="编写进度">
-              <p class="ai-progress-head"><strong role="status" aria-live="polite">{{ aiProgressLabel }}</strong><span>已用 {{ aiElapsed }} 秒</span></p>
-              <details :open="aiBusy">
-                <summary>执行步骤</summary>
-                <ol><li v-for="(step, index) in aiProgress" :key="index" :class="{ current: aiBusy && index === aiProgress.length - 1 }">{{ step.message }}</li></ol>
-              </details>
-            </section>
-            <p v-if="aiError" class="form-error" role="alert">{{ aiError }}</p>
-            <button v-if="selectionNeedsRefresh" type="button" class="ghost" :disabled="!canStartAi || isDirty" @click="refreshSelectionEditor">刷新编辑稿</button>
-          </template>
-          <details class="writing-memory">
-            <summary>编写记忆</summary>
-            <p v-if="memoryLoading" class="empty-outline" role="status">正在读取…</p>
-            <div v-else-if="memoryError"><p class="form-error" role="alert">{{ memoryError }}</p><button type="button" class="ghost" @click="refreshMemory(memoryOffset)">重试</button></div>
-            <template v-else-if="writingMemory">
-              <pre class="memory-content">{{ writingMemory }}</pre>
-              <nav v-if="memoryOffset > 0 || memoryHasMore" class="memory-pages" aria-label="编写记忆分页">
-                <button type="button" class="ghost" :disabled="memoryLoading || memoryOffset === 0" @click="refreshMemory(memoryOffset - 10)">上一页</button>
-                <button type="button" class="ghost" :disabled="memoryLoading || !memoryHasMore" @click="refreshMemory(memoryOffset + 10)">下一页</button>
-              </nav>
-              <button type="button" class="ghost" :disabled="aiLocked" @click="removeMemory">清除记忆</button>
+        </section>
+
+        <!-- 第 8 步：写作助手面板 -->
+        <aside v-if="mode === 'edit' && aiOpen" class="panel ai-panel" aria-label="写作助手">
+          <div class="phead"><h2>写作助手</h2><button type="button" class="subtle icon-btn" aria-label="关闭" @click="aiOpen = false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button></div>
+          <div class="pbody">
+            <div class="seg scope" role="group" aria-label="编写范围">
+              <button type="button" :class="{ on: aiScope === 'section' }" :aria-pressed="aiScope === 'section'" :disabled="aiLocked" @click="chooseAiScope('section')">本章节</button>
+              <button type="button" :class="{ on: aiScope === 'selection' }" :aria-pressed="aiScope === 'selection'" :disabled="aiLocked || !selectedText" @click="chooseAiScope('selection')">选中文字</button>
+              <button type="button" :class="{ on: aiScope === 'document' }" :aria-pressed="aiScope === 'document'" :disabled="aiLocked" @click="chooseAiScope('document')">全文</button>
+            </div>
+            <p v-if="!canGenerate" class="pnote">在目录中选择章节，或在正文中选中文字。</p>
+            <p v-if="!canGenerate && aiError" class="form-error" role="alert">{{ aiError }}</p>
+            <template v-if="canGenerate">
+              <div class="target"><b>{{ aiTargetTitle }}</b><span>{{ aiTargetHint }}</span></div>
+              <blockquote v-if="aiScope === 'selection'" class="selected-text">{{ selectedText }}</blockquote>
+              <div class="field">
+                <span class="flabel">编写规范</span>
+                <div class="skill-row"><span>{{ skillLabel }}</span><button type="button" class="text" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @click="openSkillSettings">修改</button></div>
+              </div>
+              <form class="ai-form" @submit.prevent="generateSection">
+                <div class="field">
+                  <label for="ai-instruction">补充要求（选填）</label>
+                  <textarea id="ai-instruction" v-model="aiInstruction" class="control" rows="3" maxlength="2000" :disabled="!canStartAi"></textarea>
+                </div>
+                <button type="submit" class="primary" :disabled="!canStartAi">{{ aiBusy ? "正在编写…" : aiDraft ? "重新生成" : "生成草稿" }}</button>
+              </form>
+              <section v-if="aiProgress.length || aiDraft" class="draft ai-progress" aria-label="编写进度">
+                <div class="dh"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg><strong role="status" aria-live="polite">{{ aiDraft && aiComplete && !aiBusy ? '草稿已生成' : aiProgressLabel }}</strong><span>用时 {{ aiElapsed }} 秒<template v-if="aiDraft"> · 约 {{ countChars(aiDraft) }} 字</template></span></div>
+                <div class="db">
+                  <p v-if="aiDraft && !aiBusy">草稿显示在正文中（浅蓝底），在正文里的工具条上替换、追加或取消。</p>
+                  <details v-if="aiProgress.length" :open="aiBusy">
+                    <summary>执行步骤</summary>
+                    <ol><li v-for="(step, index) in aiProgress" :key="index" :class="{ current: aiBusy && index === aiProgress.length - 1 }">{{ step.message }}</li></ol>
+                  </details>
+                </div>
+              </section>
+              <p v-if="aiError" class="form-error" role="alert">{{ aiError }}</p>
+              <button v-if="selectionNeedsRefresh" type="button" class="ghost" :disabled="!canStartAi || isDirty" @click="refreshSelectionEditor">刷新编辑稿</button>
             </template>
-            <p v-else class="empty-outline">暂无编写记忆</p>
-          </details>
+            <details class="mem writing-memory">
+              <summary><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" /><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5" /></svg>编写记忆<span>{{ memoryCount ? `本文档 ${memoryCount}${memoryHasMore ? '+' : ''} 条` : '暂无' }}</span></summary>
+              <p v-if="memoryLoading" class="hint" role="status">正在读取…</p>
+              <div v-else-if="memoryError"><p class="form-error" role="alert">{{ memoryError }}</p><button type="button" class="ghost sm" @click="refreshMemory(memoryOffset)">重试</button></div>
+              <template v-else-if="writingMemory">
+                <pre class="memory-content">{{ writingMemory }}</pre>
+                <nav v-if="memoryOffset > 0 || memoryHasMore" class="memory-pages" aria-label="编写记忆分页">
+                  <button type="button" class="ghost sm" :disabled="memoryLoading || memoryOffset === 0" @click="refreshMemory(memoryOffset - 10)">上一页</button>
+                  <button type="button" class="ghost sm" :disabled="memoryLoading || !memoryHasMore" @click="refreshMemory(memoryOffset + 10)">下一页</button>
+                </nav>
+                <button type="button" class="ghost sm" :disabled="aiLocked" @click="removeMemory">清除记忆</button>
+              </template>
+              <p v-else class="hint">暂无编写记忆</p>
+            </details>
+          </div>
         </aside>
         <DocumentSkillSettings v-if="skillOpen" :key="document.id" :document-id="document.id" :revision="document.revision" :configuration="document.formatTemplate.writingSkill" :refresh="refreshFromServer" @close="skillOpen = false" @busy="skillBusy = $event" @saved="acceptSkill" />
+        <!-- 第 7 步：冲突面板 -->
         <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="`${document.id}:${conflictTab}`" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
-          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts"
+          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts"
           @close="conflictOpen = false" @resolved="acceptResolution" @count="onConflictCount" @locate="locateConflict" />
-        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
+        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
-          <section class="ai-preview" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
+          <section class="ai-preview ai-ghost" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
               <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiComplete ? 'AI 草稿' : '生成未完成' }}</span>
-              <button v-if="aiBusy" type="button" class="ghost" @click="stopAi">停止</button>
+              <button v-if="aiBusy" type="button" class="ghost sm" @click="stopAi">停止</button>
               <template v-else>
-                <button type="button" class="primary" :disabled="!canApplyDraft || (aiScope === 'section' && !aiAllowedModes.includes('replace'))" @click="insertSection('replace')">{{ aiInserting ? '写入中…' : aiScope === 'document' ? '应用全文修改' : aiScope === 'selection' ? '替换选中内容' : '替换本节正文' }}</button>
-                <button v-if="aiScope === 'section'" type="button" class="ghost" :disabled="!canApplyDraft || !aiAllowedModes.includes('append')" @click="insertSection('append')">追加到本节</button>
+                <button type="button" class="primary sm" :disabled="!canApplyDraft || (aiScope === 'section' && !aiAllowedModes.includes('replace'))" @click="insertSection('replace')">{{ aiInserting ? '写入中…' : aiScope === 'document' ? '应用全文修改' : aiScope === 'selection' ? '替换选中内容' : '替换本节正文' }}</button>
+                <button v-if="aiScope === 'section'" type="button" class="ghost sm" :disabled="!canApplyDraft || !aiAllowedModes.includes('append')" @click="insertSection('append')">追加到本节</button>
                 <p v-if="aiComplete && aiScope === 'section' && !aiAllowedModes.includes('replace')" class="form-error" role="status">本节包含特殊 Word 格式，可追加正文。</p>
-                <button type="button" class="ghost" :disabled="aiInserting" @click="clearAiDraft">取消</button>
+                <button type="button" class="subtle sm" :disabled="aiInserting" @click="clearAiDraft">取消</button>
               </template>
             </div>
             <div class="ai-preview-body" :class="{ writing: aiBusy }" aria-label="AI 正文" v-html="aiPreviewHtml"></div>
           </section>
         </Teleport>
       </div>
+
+      <!-- 第 9 步：底部状态栏 -->
+      <footer class="ws-status">
+        <span class="cur">当前：{{ currentSection || '未选择章节' }}</span><span class="sep" aria-hidden="true"></span><span class="num">全文 {{ totalChars.toLocaleString('zh-CN') }} 字</span>
+        <span class="spacer"></span>
+        <template v-if="lastEditor"><span>最近由 {{ lastEditor.name }} 修改于 {{ shortTime(lastEditor.at) }}</span><span class="sep" aria-hidden="true"></span></template>
+        <span>Ctrl+S 立即保存</span>
+      </footer>
       <LeaveDialog v-if="leaveDialog" :mode="leaveDialog.mode" :count="leaveDialog.count" @download="downloadMyChanges" @stay="leaveDialog = null" @leave="confirmLeave(false)" @download-leave="confirmLeave(true)" />
     </template>
   </div>
 </template>
 
 <style scoped>
-.workbench { display:flex; flex-direction:column; height:calc(100vh - var(--space-7) - var(--space-3) - var(--space-5) * 2); min-height:0; background:var(--desk); font-family:var(--font); border:1px solid var(--rule); }
-.state { display:flex; flex:1; align-items:center; justify-content:center; flex-direction:column; gap:var(--space-3); color:var(--ink-secondary); }
-.toolbar { display:flex; justify-content:space-between; align-items:center; min-height:calc(var(--space-7) + var(--space-5)); padding:var(--space-2) var(--space-5); background:var(--sheet); border-bottom:1px solid var(--rule); }
-.toolbar-left,.toolbar-right { display:flex; align-items:center; gap:var(--space-3); min-width:0; }
-.mode-switch { display:flex; gap:var(--space-1); }
-.mode-switch .active { border-color:var(--stamp); background:var(--stamp-wash); color:var(--stamp); }
-.toolbar-separator { display:block; width:1px; align-self:stretch; background:var(--rule-strong); }
-.document-heading { min-width:0; }
-.document-heading h1 { margin:0; font-size:var(--text-md); font-weight:600; overflow-wrap:anywhere; }
-.error-notice { margin:0; padding:var(--space-2) var(--space-5); background:var(--fault-wash); color:var(--fault-ink); border-bottom:1px solid var(--fault); }
-.notice { display:flex; align-items:center; gap:var(--space-2); min-height:40px; margin:0; padding:var(--space-1) var(--space-4); font-size:var(--text-sm); border-bottom:1px solid var(--border-default, var(--rule)); }
-.notice.info { background:var(--info-50, var(--sheet)); color:var(--gray-800, var(--ink)); }
-.notice.danger { background:var(--danger-50, var(--fault-wash)); color:var(--danger-700, var(--fault-ink)); }
-.notice.warning { background:var(--warning-50); color:var(--gray-800); }
-.whole-tag { cursor:help; }
+/* 工作台重塑（12 §8.1）：对照 mockups/文档编辑工作台*.html；只用 base.css 的语义变量。 */
+.ws { display:grid; grid-template-rows:auto auto minmax(0,1fr) var(--status-h); height:calc(100vh - var(--topbar-h)); min-width:0; min-height:0; background:var(--bg-page); color:var(--text-primary); font-family:var(--font); }
+.ws > .state { grid-row:1 / -1; }
+.state { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:var(--space-3); color:var(--text-secondary); }
+.ico { width:var(--icon); height:var(--icon); }
+
+/* 文档栏 */
+.docbar { grid-row:1; display:flex; align-items:center; gap:var(--space-3); height:var(--docbar-h); min-width:0; padding:0 var(--space-4) 0 var(--space-3); background:var(--bg-surface); border-bottom:1px solid var(--border-default); }
+.doctitle { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
+.doctitle h1 { margin:0; min-width:0; font-size:var(--text-lg); line-height:var(--leading-lg); font-weight:var(--weight-semibold); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.doctitle .tag { flex:none; }
+.spacer { flex:1; }
+.icon-btn { width:var(--control-h-sm); height:var(--control-h-sm); padding:0; flex:none; }
+.docbar .subtle, .docbar .primary, .conflict-toggle { flex:none; }
+.divider-v { width:1px; height:var(--space-5); background:var(--border-default); flex:none; }
+.seg { display:inline-flex; flex:none; padding:2px; background:var(--gray-100); border-radius:var(--radius-control); }
+.seg button { height:var(--control-h-sm); padding:0 var(--space-3); border:0; border-radius:calc(var(--radius-control) - 2px); background:transparent; color:var(--text-secondary); font-family:var(--font); font-size:var(--text-sm); white-space:nowrap; cursor:pointer; }
+.seg button:hover:not(:disabled):not(.on) { color:var(--text-primary); }
+.seg button.on { background:var(--bg-surface); color:var(--text-primary); font-weight:var(--weight-medium); box-shadow:var(--shadow-1); }
+.seg button:disabled { cursor:not-allowed; opacity:.45; }
+.seg button:focus-visible { outline:var(--focus-outline); outline-offset:1px; }
+.conflict-toggle { display:inline-flex; align-items:center; gap:6px; height:var(--control-h); padding:0 var(--space-3); border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--bg-surface); color:var(--text-secondary); font-family:var(--font); font-size:var(--text-md); font-weight:var(--weight-medium); white-space:nowrap; cursor:pointer; }
+.conflict-toggle.danger { background:var(--danger-50); border-color:var(--danger-200); color:var(--danger-600); }
+.conflict-toggle.danger .count { background:var(--danger-600); color:var(--text-on-brand); }
+.conflict-toggle.danger.on { border-color:var(--danger-600); }
+.conflict-toggle.warning { background:var(--warning-50); border-color:var(--warning-200); color:var(--warning-600); }
+.conflict-toggle.warning .count { background:var(--warning-600); color:var(--text-on-brand); }
+.conflict-toggle.neutral.on, .conflict-toggle.warning.on { border-color:currentColor; }
+.conflict-toggle:focus-visible { outline:var(--focus-outline); outline-offset:2px; }
+.whole-tag { position:relative; display:inline-flex; align-items:center; flex:none; height:var(--pill-h); padding:0 var(--space-2); border-radius:var(--radius-pill); background:var(--gray-100); color:var(--text-secondary); font-size:var(--text-xs); white-space:nowrap; cursor:help; }
+.whole-tag:focus-visible { outline:var(--focus-outline); outline-offset:2px; }
+.whole-tag .tip { position:absolute; top:calc(100% + var(--space-2)); left:0; z-index:30; display:none; width:calc(var(--space-7) * 6); padding:var(--space-2) var(--space-3); border-radius:var(--radius-control); background:var(--gray-800); color:var(--text-on-brand); font-size:var(--text-xs); line-height:var(--leading-xs); white-space:normal; box-shadow:var(--shadow-2); }
+.whole-tag:hover .tip, .whole-tag:focus .tip { display:block; }
+.export-group { position:relative; display:flex; gap:1px; flex:none; }
+.export-more { padding-inline:var(--space-2); }
+.export-menu { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:20; display:flex; flex-direction:column; min-width:calc(var(--space-7) * 4); padding:var(--space-1); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sheet); box-shadow:var(--shadow-2); }
+.export-menu button { height:var(--control-h); padding:0 var(--space-3); border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font-family:var(--font); font-size:var(--text-sm); text-align:left; cursor:pointer; }
+.export-menu button:hover { background:var(--bg-hover); }
+.export-menu button:focus-visible { outline:var(--focus-outline); }
 .export-error { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:21; display:grid; gap:var(--space-2); width:calc(var(--space-7) * 8); padding:var(--space-3); background:var(--bg-surface); border:1px solid var(--danger-200); border-radius:var(--radius-control); box-shadow:var(--shadow-2); color:var(--danger-600); font-size:var(--text-sm); }
 .export-error p { margin:0; overflow-wrap:anywhere; }
 .export-error .acts { display:flex; gap:var(--space-3); justify-content:flex-end; }
-.conflict-toggle.warning { color:var(--warning-600); }
-.conflict-toggle.neutral { color:var(--text-secondary); }
-.outline-dot { display:inline-block; width:6px; height:6px; margin-left:var(--space-1); border-radius:var(--radius-pill); vertical-align:middle; }
-.outline-dot.conflict { background:var(--danger-600); }
-.outline-dot.updated { background:var(--info-600); }
-.paper { position:relative; }
-.conflict-marks { position:absolute; inset:0; pointer-events:none; }
-.conflict-gap { position:absolute; left:0; right:0; border-top:2px dashed var(--danger-600); }
-.conflict-mark.approx { background:var(--bg-surface); border:1px dashed var(--danger-600); }
-.conflict-mark { position:absolute; right:var(--space-2); transform:translateY(-100%); height:auto; padding:0 var(--space-2); border:0; border-radius:var(--radius-control); background:var(--danger-50); color:var(--danger-600); font-size:var(--text-xs); line-height:var(--leading-sm, 1.6); pointer-events:auto; cursor:pointer; }
-.paper-content :deep(.blk-conflict) { box-shadow:inset 3px 0 0 var(--danger-600); background:var(--danger-50); padding-left:var(--space-2); }
-.paper-content :deep(.blk-updated) { box-shadow:inset 3px 0 0 var(--info-200); padding-left:var(--space-2); }
-.paper-content :deep(.blk-flash) { outline:2px solid var(--brand-200); outline-offset:2px; }
-.draft-row { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-3); }
+
+/* 提示条 */
+.notices { grid-row:2; min-width:0; }
+.wb-notice { display:flex; align-items:center; gap:var(--space-2); min-height:var(--notice-h); margin:0; padding:var(--space-1) var(--space-4); border-bottom:1px solid var(--border-default); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.wb-notice > span:not(.acts) { min-width:0; overflow-wrap:anywhere; }
+.wb-notice .acts, .draft-row .acts { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; flex-shrink:0; }
+.wb-notice.info { background:var(--info-50); color:var(--gray-800); }
+.wb-notice.info > .ico { color:var(--info-600); }
+.wb-notice.danger { background:var(--danger-50); color:var(--danger-700); }
+.wb-notice.warning { background:var(--warning-50); color:var(--gray-800); }
+.wb-notice.warning > .ico { color:var(--warning-600); }
+.draft-recovery { padding:var(--space-2) var(--space-4); background:var(--warning-50); border-bottom:1px solid var(--warning-200); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.draft-row { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2) var(--space-3); }
+.draft-row > .ico { color:var(--warning-600); }
+.draft-row > span:not(.acts) { min-width:0; overflow-wrap:anywhere; }
 .draft-pick { display:flex; align-items:center; gap:var(--space-1); color:var(--text-secondary); }
-.draft-pick .control { width:auto; }
+.draft-pick .control { width:auto; height:var(--control-h-sm); font-size:var(--text-sm); }
 .draft-confirm { color:var(--danger-600); }
-.draft-hint { margin:var(--space-1) 0 0; color:var(--text-secondary); font-size:var(--text-xs); }
+.draft-hint { margin:var(--space-1) 0 0 calc(var(--icon) + var(--space-3)); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .draft-diff { display:grid; gap:var(--space-1); margin-top:var(--space-2); max-height:calc(var(--space-7) * 6); overflow:auto; }
 .draft-diff p { margin:0; color:var(--text-secondary); }
 .draft-diff pre { margin:0; padding:var(--space-1) var(--space-2); white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; border-radius:var(--radius-control); }
 .draft-diff pre.ins { background:var(--diff-ins-bg); }
 .draft-diff pre.del { background:var(--diff-del-bg); text-decoration:line-through; }
-.notice .acts { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; flex-shrink:0; }
-.notice > span:first-child { overflow-wrap:anywhere; }
-.export-group { position:relative; display:flex; gap:1px; }
-.export-more { padding-inline:var(--space-2); }
-.export-menu { position:absolute; top:calc(100% + var(--space-1)); right:0; z-index:20; display:flex; flex-direction:column; min-width:180px; padding:var(--space-1); background:var(--bg-surface, var(--sheet)); border:1px solid var(--border-default, var(--rule)); }
-.export-menu button { justify-content:flex-start; text-align:left; border:0; }
-.draft-recovery { padding:var(--space-2) var(--space-5); background:var(--sheet); border-bottom:1px solid var(--rule); font-size:var(--text-sm); }
-.draft-row > span:first-child { margin-right:auto; overflow-wrap:anywhere; }
-.workspace { display:grid; grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr); flex:1; min-height:0; }
-.workspace.original-mode { grid-template-columns:minmax(0,1fr); }
-/* 审查 S4：右侧面板统一 --panel-w（400） */
-.workspace.ai-open,
-.workspace.history-open { grid-template-columns:calc(var(--space-7) * 5 + var(--space-5)) minmax(0,1fr) var(--panel-w); }
-.workspace.original-mode.history-open { grid-template-columns:minmax(0,1fr) var(--panel-w); }
-.original-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--desk); }
-.preview-state { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); color:var(--ink-secondary); }
+
+/* 三栏 */
+.main3 { grid-row:3; position:relative; display:grid; grid-template-columns:var(--outline-w) minmax(0,1fr); min-width:0; min-height:0; }
+.main3.has-panel { grid-template-columns:var(--outline-w) minmax(0,1fr) var(--panel-w); }
+.main3.no-outline { grid-template-columns:minmax(0,1fr); }
+.main3.no-outline.has-panel { grid-template-columns:minmax(0,1fr) var(--panel-w); }
+.original-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg-sunken); }
+.preview-state { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); color:var(--text-secondary); }
 .pdf-viewer { display:flex; flex:1; flex-direction:column; min-height:0; }
-.page-controls { display:flex; align-items:center; justify-content:center; gap:var(--space-3); padding:var(--space-2); background:var(--sheet); border-bottom:1px solid var(--rule); color:var(--ink-secondary); font-size:var(--text-sm); }
+.page-controls { display:flex; align-items:center; justify-content:center; gap:var(--space-3); height:var(--etool-h); background:var(--bg-surface); border-bottom:1px solid var(--border-default); color:var(--text-secondary); font-size:var(--text-sm); }
 .pdf-scroll { flex:1; min-height:0; overflow:auto; padding:var(--space-5); text-align:center; }
-.pdf-scroll canvas { display:block; max-width:100%; height:auto; margin:0 auto; background:var(--sheet); border:1px solid var(--rule); box-shadow:0 var(--space-1) var(--space-4) var(--rule); }
-.outline-panel { display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:var(--space-5) var(--space-3); background:var(--sheet); border-right:1px solid var(--rule); }
-.outline-panel h2 { margin:0 0 var(--space-4); padding:0 var(--space-2); color:var(--ink-secondary); font-size:var(--text-sm); font-weight:600; }
-.empty-outline { padding:0 var(--space-2); color:var(--ink-tertiary); font-size:var(--text-sm); }
-.outline-tree { display:flex; flex:1; min-height:0; flex-direction:column; gap:var(--space-1); overflow-y:auto; scrollbar-color:var(--rule-strong) transparent; }
-.outline-item { width:100%; height:auto; min-height:var(--space-6); border:0; background:transparent; font-weight:400; text-align:left; white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
-.outline-item:hover { color:var(--stamp); background:var(--stamp-wash); }
-.outline-item.selected { color:var(--stamp); background:var(--stamp-wash); font-weight:600; }
-.outline-form { display:flex; flex-direction:column; gap:var(--space-2); margin-top:var(--space-5); padding:var(--space-4) var(--space-2) 0; border-top:1px solid var(--rule); }
-.outline-form h3 { margin:0; font-size:var(--text-sm); }
-.outline-form label,.ai-form label { color:var(--ink-secondary); font-size:var(--text-sm); font-weight:600; }
-.outline-form .primary,.ai-form .primary { align-self:flex-start; }
-.form-error { margin:0; color:var(--fault-ink); font-size:var(--text-sm); overflow-wrap:anywhere; }
-.ai-panel { display:flex; flex-direction:column; gap:var(--space-4); min-height:0; overflow-y:auto; padding:var(--space-5) var(--space-4); background:var(--sheet); border-left:1px solid var(--rule); }
-.ai-panel-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
-.ai-panel-head h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
-.scope-switch { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-1); }
-.scope-switch .ghost { padding:var(--space-1); }
-.scope-switch [aria-pressed="true"] { color:var(--stamp); border-color:var(--stamp); background:var(--stamp-wash); }
-.writing-memory { margin-top:auto; padding-top:var(--space-4); border-top:1px solid var(--rule); font-size:var(--text-sm); }
-.writing-memory summary { cursor:pointer; font-weight:600; }
-.writing-memory summary:focus-visible { outline:var(--space-1) solid var(--focus-ring); }
-.memory-content { margin:var(--space-3) 0; max-height:calc(var(--space-7) * 6); overflow-y:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font); font-size:var(--text-sm); line-height:1.6; color:var(--ink-secondary); }
-.memory-pages { display:flex; gap:var(--space-2); margin-bottom:var(--space-3); }
-.ai-target { margin:0; padding-bottom:var(--space-3); border-bottom:1px solid var(--rule); color:var(--ink); font-size:var(--text-sm); font-weight:600; overflow-wrap:anywhere; }
-.selected-text { margin:0; padding:var(--space-3); max-height:calc(var(--space-7) * 3); overflow-y:auto; background:var(--desk); border-left:var(--space-1) solid var(--stamp); color:var(--ink-secondary); font-size:var(--text-sm); white-space:pre-wrap; overflow-wrap:anywhere; }
-.ai-form { display:flex; flex-direction:column; gap:var(--space-3); }
-.ai-progress { border-top:1px solid var(--rule); padding-top:var(--space-3); font-size:var(--text-sm); }
-.ai-progress-head { display:flex; align-items:baseline; gap:var(--space-2); margin:0 0 var(--space-2); }
-.ai-progress-head strong { flex:1; min-width:0; color:var(--ink); overflow-wrap:anywhere; }
-.ai-progress-head span { flex:none; color:var(--ink-secondary); }
-.ai-progress summary { width:fit-content; cursor:pointer; color:var(--ink-secondary); }
-.ai-progress summary:focus-visible { outline:var(--space-1) solid var(--focus-ring); }
-.ai-progress ol { display:flex; flex-direction:column; gap:var(--space-2); margin:var(--space-3) 0 0; padding-left:var(--space-5); max-height:calc(var(--space-7) * 4); overflow-y:auto; color:var(--ink-secondary); }
-.ai-progress li { padding-left:var(--space-1); overflow-wrap:anywhere; }
-.ai-progress li.current { color:var(--stamp); font-weight:600; }
-.ai-panel textarea.control { width:100%; min-height:calc(var(--space-7) * 2); resize:vertical; }
-.ai-preview { margin:var(--space-4) 0; padding-left:var(--space-4); border-left:var(--space-1) solid var(--stamp); }
-.ai-preview-tools { position:sticky; top:0; z-index:1; display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); padding:var(--space-2) 0; background:var(--sheet); border-bottom:1px solid var(--rule); }
-.ai-preview-status { margin-right:auto; color:var(--stamp); font-size:var(--text-sm); font-weight:600; }
-.ai-preview-body { padding-top:var(--space-3); min-height:var(--space-7); }
-.ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--stamp); }
-.editor-area { display:flex; flex-direction:column; min-width:0; min-height:0; }
-.editor-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); min-width:0; margin:0; padding:var(--space-2) var(--space-5); background:var(--sheet); border:0; border-bottom:1px solid var(--rule); }
-.editor-toolbar .ghost { min-width:var(--space-6); }
-.page-scroll { flex:1; min-height:0; overflow:auto; padding:var(--space-5) var(--space-4); }
-.paper { width:calc(var(--space-7) * 18); min-height:calc(var(--space-7) * 24); margin:0 auto var(--space-7); padding:var(--space-7) calc(var(--space-7) * 1.5); background:var(--sheet); border:1px solid var(--rule); box-shadow:0 var(--space-1) var(--space-4) var(--rule); }
-.paper-content { min-height:calc(var(--space-7) * 20); outline:none; color:var(--ink); font-family:var(--font); font-size:var(--text-sm); line-height:1.85; overflow-wrap:anywhere; }
-.paper-content:focus-visible { box-shadow:0 0 0 var(--space-1) var(--focus-ring); }
-.paper-content:empty::before { content:attr(data-placeholder); color:var(--ink-tertiary); }
-.paper-content :deep(h1),.paper-content :deep(h2),.paper-content :deep(h3),.paper-content :deep(h4) { color:var(--ink); font-family:var(--font); font-weight:600; line-height:1.45; }
-.paper-content :deep(h1) { margin:0 0 var(--space-5); font-size:calc(var(--text-md) * 1.5); text-align:center; }
-.paper-content :deep(h2) { margin:var(--space-5) 0 var(--space-3); font-size:calc(var(--text-md) * 1.25); }
-.paper-content :deep(h3) { margin:var(--space-4) 0 var(--space-2); font-size:var(--text-md); }
-.paper-content :deep(p) { margin:0 0 var(--space-3); }
-.paper-content :deep(ul),.paper-content :deep(ol) { padding-left:var(--space-5); margin:0 0 var(--space-3); }
-.paper-content :deep(table) { width:100%; border-collapse:collapse; margin:var(--space-4) 0; table-layout:fixed; }
-.paper-content :deep(th),.paper-content :deep(td) { padding:var(--space-2); border:1px solid var(--rule-strong); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
-.paper-content :deep(th) { background:var(--desk); font-weight:600; }
+.pdf-scroll canvas { display:block; max-width:100%; height:auto; margin:0 auto; background:var(--bg-surface); box-shadow:var(--shadow-paper); }
+
+/* 目录 */
+.outline { position:relative; display:flex; flex-direction:column; min-height:0; background:var(--bg-surface); border-right:1px solid var(--border-default); }
+.ohead { display:flex; align-items:center; justify-content:space-between; height:var(--etool-h); flex:none; padding:0 var(--space-2) 0 var(--space-4); border-bottom:1px solid var(--border-subtle); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
+.ohead .acts { display:flex; gap:2px; }
+.osearch { padding:var(--space-2) var(--space-2) 0; }
+.osearch .control { height:var(--control-h-sm); font-size:var(--text-sm); }
+.add-heading { position:absolute; top:calc(var(--etool-h) - var(--space-1)); left:var(--space-2); right:var(--space-2); z-index:15; display:grid; gap:var(--space-2); padding:var(--space-3); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-sheet); box-shadow:var(--shadow-2); font-size:var(--text-sm); }
+.add-heading label { font-weight:var(--weight-medium); }
+.add-heading .control { height:var(--control-h-sm); font-size:var(--text-sm); }
+.add-acts { display:flex; justify-content:flex-end; gap:var(--space-2); }
+.oempty { margin:0; padding:var(--space-4); color:var(--text-tertiary); font-size:var(--text-sm); }
+.olist { flex:1; min-height:0; overflow:auto; padding:var(--space-2); display:flex; flex-direction:column; gap:1px; }
+.oitem { display:flex; align-items:center; gap:6px; width:100%; min-height:30px; padding:5px var(--space-2); border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font-family:var(--font); font-size:var(--text-sm); line-height:var(--leading-sm); text-align:left; cursor:pointer; }
+.oitem:hover:not(:disabled) { background:var(--bg-hover); }
+.oitem:disabled { cursor:not-allowed; opacity:.6; }
+.oitem:focus-visible { outline:var(--focus-outline); outline-offset:-2px; }
+.oitem.l1 { font-weight:var(--weight-medium); }
+.oitem.l2 { padding-left:22px; }
+.oitem.l3 { padding-left:36px; }
+.oitem.l4 { padding-left:50px; }
+.oitem.empty .otext { color:var(--text-tertiary); }
+.oitem.on { background:var(--bg-active); color:var(--brand-700); font-weight:var(--weight-medium); }
+.oitem.on .otext { color:var(--brand-700); }
+.otext { flex:1; min-width:0; overflow-wrap:anywhere; }
+.omark { display:inline-block; width:7px; height:7px; border-radius:var(--radius-pill); flex:none; }
+.omark.danger { background:var(--danger-600); }
+.omark.info { background:var(--info-600); }
+.ostate { flex:none; color:var(--text-disabled); font-size:var(--text-xs); }
+.ofoot { display:flex; flex-wrap:wrap; gap:var(--space-1) var(--space-3); padding:var(--space-3) var(--space-4); border-top:1px solid var(--border-subtle); color:var(--text-tertiary); font-size:var(--text-xs); }
+.ofoot span { display:inline-flex; align-items:center; gap:var(--space-1); }
+
+/* 编辑区与格式工具栏 */
+.editor { display:grid; grid-template-rows:var(--etool-h) minmax(0,1fr); min-width:0; min-height:0; }
+.etool { display:flex; align-items:center; flex-wrap:nowrap; gap:2px; min-width:0; margin:0; padding:0 var(--space-3); overflow:hidden; background:var(--bg-surface); border:0; border-bottom:1px solid var(--border-default); }
+.etool .tool { height:30px; min-width:30px; padding:0 var(--space-2); font-size:var(--text-sm); }
+.etool .divider-v { margin:0 6px; }
+.etool select.control { flex:none; width:112px; height:30px; font-size:var(--text-sm); border-color:transparent; background-color:transparent; }
+.etool select.control:hover:not(:disabled) { background-color:var(--bg-hover); }
+.etool:disabled select.control { opacity:.45; }
+.tool-count { flex:none; padding-left:var(--space-2); color:var(--text-tertiary); font-size:var(--text-xs); white-space:nowrap; }
+.desk { min-height:0; overflow:auto; padding:var(--space-5) var(--space-4) var(--space-7); background:var(--bg-sunken); }
+.paper { position:relative; width:var(--paper-w); min-height:calc(var(--paper-w) * 1.26); margin:0 auto; padding:72px 96px; background:var(--bg-surface); box-shadow:var(--shadow-paper); }
+.paper-content { min-height:calc(var(--space-7) * 20); outline:none; color:var(--text-primary); font-family:var(--font-doc); font-size:var(--doc-text); line-height:1.75; overflow-wrap:anywhere; }
+/* S16：正文区不画焦点环（光标即焦点提示） */
+.paper-content:focus, .paper-content:focus-visible { outline:none; box-shadow:none; }
+.paper-content:empty::before { content:attr(data-placeholder); color:var(--text-disabled); font-family:var(--font); }
+.paper-content[contenteditable="false"] { cursor:default; }
+.paper-content :deep(h1),.paper-content :deep(h2),.paper-content :deep(h3),.paper-content :deep(h4),.paper-content :deep(h5),.paper-content :deep(h6) { color:var(--text-primary); font-family:var(--font); font-weight:700; line-height:1.5; }
+.paper-content :deep(h1) { margin:0 0 var(--space-4); font-size:calc(var(--doc-text) * 1.375); text-align:center; }
+.paper-content :deep(h2) { margin:var(--space-4) 0 10px; font-size:calc(var(--doc-text) * 1.125); }
+.paper-content :deep(h3),.paper-content :deep(h4),.paper-content :deep(h5),.paper-content :deep(h6) { margin:18px 0 var(--space-2); font-size:var(--doc-text); }
+.paper-content :deep(p) { margin:0 0 6px; }
+.paper-content :deep(ul),.paper-content :deep(ol) { padding-left:var(--space-5); margin:0 0 6px; }
+.paper-content :deep(table) { width:100%; border-collapse:collapse; margin:var(--space-2) 0 var(--space-3); table-layout:fixed; font-size:calc(var(--doc-text) * 0.875); line-height:1.5; }
+.paper-content :deep(th),.paper-content :deep(td) { padding:var(--space-1) var(--space-2); border:1px solid var(--text-primary); vertical-align:top; overflow-wrap:anywhere; }
+.paper-content :deep(th) { font-weight:700; }
 .paper-content :deep(img) { display:block; max-width:100%; max-height:calc(var(--space-7) * 14); width:auto; height:auto; object-fit:contain; margin:var(--space-4) auto; }
-.paper-content :deep(a) { color:var(--stamp); }
+.paper-content :deep(a) { color:var(--text-link); }
 .paper-content :deep([data-word-protected]) { cursor:not-allowed; color:var(--text-secondary); background:var(--bg-subtle); }
 .paper-content :deep([data-word-marker])::before { content:attr(data-word-marker); display:inline-block; margin-right:var(--space-2); }
-button:focus-visible { outline:var(--space-1) solid var(--focus-ring); outline-offset:var(--space-1); }
+/* 块标记：冲突（红线浅红底）、他人更新（蓝线）、定位闪烁 */
+.paper-content :deep(.blk-conflict) { margin-left:-12px; margin-right:-12px; padding:6px 12px; border-radius:2px; background:var(--danger-50); box-shadow:inset 3px 0 0 var(--danger-600); }
+.paper-content :deep(.blk-updated) { margin-left:-12px; margin-right:-12px; padding-left:12px; padding-right:12px; box-shadow:inset 3px 0 0 var(--info-200); }
+.paper-content :deep(.blk-flash) { outline:2px solid var(--brand-200); outline-offset:2px; }
+.conflict-marks { position:absolute; inset:0; pointer-events:none; }
+.conflict-gap { position:absolute; left:84px; right:84px; border-top:2px dashed var(--danger-600); }
+.conflict-mark { position:absolute; right:var(--space-2); transform:translateY(-50%); display:inline-flex; align-items:center; gap:var(--space-1); height:22px; padding:0 var(--space-2); border:0; border-radius:var(--radius-control); background:var(--danger-600); color:var(--text-on-brand); font-family:var(--font); font-size:var(--text-xs); line-height:22px; white-space:nowrap; pointer-events:auto; cursor:pointer; }
+.conflict-mark .ico { width:12px; height:12px; }
+.conflict-mark.approx { background:var(--bg-surface); border:1px dashed var(--danger-600); color:var(--danger-600); }
+.conflict-mark:focus-visible { outline:var(--focus-outline); outline-offset:2px; }
+
+/* 右侧面板（写作助手；冲突与版本记录在各自组件里用同一套 .phead/.pbody 尺寸） */
+.panel { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg-surface); border-left:1px solid var(--border-default); }
+.phead { display:flex; align-items:center; gap:var(--space-2); height:var(--etool-h); flex:none; padding:0 var(--space-2) 0 var(--space-4); border-bottom:1px solid var(--border-subtle); }
+.phead h2 { margin:0; font-size:var(--text-md); font-weight:var(--weight-semibold); }
+.phead .icon-btn { margin-left:auto; }
+.pbody { flex:1; min-height:0; overflow:auto; display:grid; align-content:start; gap:var(--space-4); padding:var(--space-4); font-size:var(--text-sm); }
+.pnote { margin:0; padding:10px var(--space-3); border-radius:var(--radius-control); background:var(--gray-50); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.scope { display:grid; grid-template-columns:repeat(3, 1fr); }
+.target { display:grid; gap:2px; padding:10px var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-subtle); }
+.target b { font-size:var(--text-sm); font-weight:var(--weight-medium); overflow-wrap:anywhere; }
+.target span { color:var(--text-tertiary); font-size:var(--text-xs); }
+.field { display:grid; gap:6px; }
+.field > label, .flabel { font-size:var(--text-sm); line-height:var(--leading-sm); font-weight:var(--weight-medium); color:var(--text-primary); }
+.skill-row { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); min-height:var(--control-h); padding:0 10px; border:1px solid var(--border-strong); border-radius:var(--radius-control); color:var(--text-primary); }
+.skill-row > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-form { display:grid; gap:var(--space-3); }
+.ai-form .primary { justify-self:start; }
+.ai-panel textarea.control { width:100%; resize:vertical; }
+.selected-text { margin:0; padding:var(--space-2) var(--space-3); max-height:calc(var(--space-7) * 3); overflow-y:auto; background:var(--bg-subtle); border-left:3px solid var(--brand-500); color:var(--text-secondary); font-family:var(--font-doc); white-space:pre-wrap; overflow-wrap:anywhere; }
+.draft { border:1px solid var(--brand-200); border-radius:var(--radius-sheet); overflow:hidden; }
+.draft .dh { display:flex; align-items:center; gap:6px; padding:10px var(--space-3); background:var(--brand-50); color:var(--brand-700); font-size:var(--text-xs); font-weight:var(--weight-medium); }
+.draft .dh strong { font-weight:var(--weight-medium); min-width:0; overflow-wrap:anywhere; }
+.draft .dh span { margin-left:auto; flex:none; font-weight:var(--weight-regular); color:var(--text-tertiary); }
+.draft .db { display:grid; gap:var(--space-2); padding:var(--space-3); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.draft .db p { margin:0; }
+.draft summary { width:fit-content; cursor:pointer; }
+.draft summary:focus-visible { outline:var(--focus-outline); }
+.draft ol { display:grid; gap:var(--space-1); margin:var(--space-2) 0 0; padding-left:var(--space-5); max-height:calc(var(--space-7) * 4); overflow-y:auto; }
+.draft li.current { color:var(--brand-600); font-weight:var(--weight-medium); }
+.mem { padding-top:var(--space-3); border-top:1px solid var(--border-subtle); color:var(--text-secondary); font-size:var(--text-sm); }
+.mem summary { display:flex; align-items:center; gap:6px; cursor:pointer; list-style:none; }
+.mem summary::-webkit-details-marker { display:none; }
+.mem summary .ico { width:14px; height:14px; }
+.mem summary span { margin-left:auto; color:var(--text-tertiary); font-size:var(--text-xs); }
+.mem summary:focus-visible { outline:var(--focus-outline); }
+.memory-content { margin:var(--space-3) 0; max-height:calc(var(--space-7) * 6); overflow-y:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.memory-pages { display:flex; gap:var(--space-2); margin-bottom:var(--space-3); }
+.hint { margin:0; color:var(--text-tertiary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.form-error { margin:0; color:var(--danger-700); font-size:var(--text-sm); overflow-wrap:anywhere; }
+/* 正文中的 AI 草稿预览（.ai-ghost） */
+.ai-ghost { margin:var(--space-2) -12px; padding:var(--space-1) 12px; background:var(--brand-50); box-shadow:inset 3px 0 0 var(--brand-500); }
+.ai-preview-tools { position:sticky; top:0; z-index:1; display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); padding:var(--space-2) 0; background:var(--brand-50); border-bottom:1px solid var(--brand-200); font-family:var(--font); }
+.ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
+.ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
+.ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--brand-600); }
+
+/* 底部状态栏 */
+.ws-status { grid-row:4; display:flex; align-items:center; gap:var(--space-4); min-width:0; padding:0 var(--space-4); background:var(--bg-surface); border-top:1px solid var(--border-default); color:var(--text-tertiary); font-size:var(--text-xs); white-space:nowrap; }
+.ws-status .cur { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.ws-status .sep { width:1px; height:12px; flex:none; background:var(--border-default); }
+.num { font-variant-numeric:tabular-nums; }
+
+/* 1366 等窄屏：文档栏按钮只留图标，工具栏按钮去掉文字 */
+@media (max-width: 1500px) {
+  .docbar .subtle:not(.icon-btn) { padding:0 var(--space-2); }
+  .tool-count { display:none; }
+}
 </style>

@@ -110,21 +110,21 @@ onBeforeUnmount(() => { alive = false; controller.abort(); window.removeEventLis
 </template>
 
 <style scoped>
-.document-skill-dialog { width:calc(var(--space-7) * 18); max-height:calc(100vh - var(--space-7)); padding:0; overflow:auto; border:1px solid var(--rule-strong); border-radius:var(--radius-sheet); background:var(--sheet); color:var(--ink); font-family:var(--font); }
-.document-skill-dialog::backdrop { background:var(--spine); opacity:.45; }
+.document-skill-dialog { width:calc(var(--space-7) * 18); max-height:calc(100vh - var(--space-7)); padding:0; overflow:auto; border:1px solid var(--border-strong); border-radius:var(--radius-sheet); background:var(--bg-surface); color:var(--text-primary); font-family:var(--font); }
+.document-skill-dialog::backdrop { background:var(--gray-900); opacity:.45; }
 header, footer { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-4) var(--space-5); }
-header { justify-content:space-between; border-bottom:1px solid var(--rule); }
+header { justify-content:space-between; border-bottom:1px solid var(--border-subtle); }
 h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
-h3 { margin:0 0 var(--space-2); font-size:var(--text-sm); color:var(--ink-secondary); }
-footer { justify-content:flex-end; border-top:1px solid var(--rule); }
+h3 { margin:0 0 var(--space-2); font-size:var(--text-sm); color:var(--text-secondary); }
+footer { justify-content:flex-end; border-top:1px solid var(--border-subtle); }
 footer span { margin-right:auto; }
 .skill-fields { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-2); padding:var(--space-5); }
-.skill-fields label { color:var(--ink-secondary); }
+.skill-fields label { color:var(--text-secondary); }
 .skill-fields p { margin:0; overflow-wrap:anywhere; }
 .skill-fields textarea { margin-bottom:var(--space-2); }
-.requirements { padding:var(--space-4); margin:var(--space-2) 0; border:1px solid var(--rule); background:var(--desk); }
+.requirements { padding:var(--space-4); margin:var(--space-2) 0; border:1px solid var(--border-subtle); background:var(--bg-page); }
 .requirements-text { white-space:pre-wrap; overflow-wrap:anywhere; max-height:calc(var(--space-7) * 5); overflow:auto; line-height:1.8; }
 .requirements p { margin-top:var(--space-3); }
 .update { display:flex; justify-content:space-between; align-items:center; gap:var(--space-3); }
-.failure { color:var(--fault); }
+.failure { color:var(--danger-600); }
 </style>

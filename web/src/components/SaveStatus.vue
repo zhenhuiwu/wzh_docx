@@ -22,19 +22,19 @@ const emit = defineEmits<{ save: []; retry: []; details: [] }>();
 </template>
 
 <style scoped>
-/* 类名与变量取自 wzh_collab/mockups（tokens.css/components.css），给出回退值以兼容当前 base.css。 */
-.savepill { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px 0 8px; border-radius:var(--radius-pill, 999px); font-size:var(--text-xs); white-space:nowrap; flex:none; }
-.savepill .i { width:14px; height:14px; flex:none; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
-.savepill.clean { color:var(--text-secondary, var(--ink-secondary)); background:var(--gray-100, var(--inset)); }
-.savepill.clean .i { color:var(--success-600, var(--ok)); }
-.savepill.dirty { color:var(--text-secondary, var(--ink-secondary)); background:var(--gray-100, var(--inset)); }
-.savepill.saving { color:var(--brand-600, var(--stamp)); background:var(--brand-50, var(--stamp-wash)); }
-.savepill.retrying, .savepill.offline { color:var(--warning-600, var(--warn)); background:var(--warning-50, var(--warn-wash)); }
-.savepill.blocked { color:var(--danger-600, var(--fault)); background:var(--danger-50, var(--fault-wash)); }
-.savepill.readonly { color:var(--text-secondary, var(--ink-secondary)); background:var(--gray-100, var(--inset)); }
-.dot { width:6px; height:6px; border-radius:var(--radius-pill, 999px); background:currentColor; }
-.spin { width:12px; height:12px; border-radius:var(--radius-pill, 999px); border:2px solid var(--brand-200, var(--rule-strong)); border-top-color:var(--brand-600, var(--stamp)); animation:spin 0.8s linear infinite; }
+/* 类名与变量取自 wzh_collab/mockups（tokens.css/components.css）；尺寸走 --pill-h / --icon-sm。 */
+.savepill { display:inline-flex; align-items:center; gap:6px; height:var(--pill-h); padding:0 10px 0 var(--space-2); border-radius:var(--radius-pill); font-size:var(--text-xs); white-space:nowrap; flex:none; }
+.savepill .i { width:var(--icon-sm); height:var(--icon-sm); flex:none; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.savepill.clean { color:var(--text-secondary); background:var(--gray-100); }
+.savepill.clean .i { color:var(--success-600); }
+.savepill.dirty { color:var(--text-secondary); background:var(--gray-100); }
+.savepill.saving { color:var(--brand-600); background:var(--brand-50); }
+.savepill.retrying, .savepill.offline { color:var(--warning-600); background:var(--warning-50); }
+.savepill.blocked { color:var(--danger-600); background:var(--danger-50); }
+.savepill.readonly { color:var(--text-secondary); background:var(--gray-100); }
+.dot { width:6px; height:6px; border-radius:var(--radius-pill); background:currentColor; }
+.spin { width:12px; height:12px; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:spin 0.8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.pill-action { height:auto; min-height:0; padding:0; margin-left:2px; border:0; background:transparent; color:inherit; font:inherit; font-weight:600; text-decoration:underline; cursor:pointer; }
-.pill-action:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; border-radius:var(--radius-control); }
+.pill-action { height:auto; min-height:0; padding:0; margin-left:2px; border:0; background:transparent; color:inherit; font:inherit; font-weight:var(--weight-semibold); text-decoration:underline; cursor:pointer; }
+.pill-action:focus-visible { outline:var(--focus-outline); outline-offset:2px; border-radius:var(--radius-control); }
 </style>

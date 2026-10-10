@@ -317,7 +317,7 @@ a.crumb:hover { color:var(--text-primary); text-decoration:underline; text-under
 .toast { display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-2) var(--space-4); border:1px solid var(--success-200); border-radius:var(--radius-sheet); background:var(--success-50); color:var(--success-600); box-shadow:var(--shadow-2); font-size:var(--text-sm); }
 .toast svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .content { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; padding:var(--content-pad); }
-/* 工作台高度按旧框架（顶栏 60 + 上下内边距 24）计算，这里补齐 12px，避免底部留白；阶段2 合并后改用 --content-h。 */
-.content.is-document { padding-block:calc(var(--content-pad) + var(--space-3) / 2); }
+/* 工作台重塑：文档编辑工作台贴满内容区（.ws 高度 = 100vh - 顶栏），不留内边距。 */
+.content.is-document { padding:0; overflow:hidden; }
 .brand:focus-visible,.user:focus-visible,.group:focus-visible,.collapse:focus-visible,.menu-pop button:focus-visible,.crumb:focus-visible,.menu :deep(a:focus-visible) { outline:none; box-shadow:var(--focus-shadow); }
 </style>
