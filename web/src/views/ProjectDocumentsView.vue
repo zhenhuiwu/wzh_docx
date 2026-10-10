@@ -2,7 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
-import { listDocuments, createDocument, type DocumentRecord } from "../api/documents";
+import { documentStatusLabel, listDocuments, createDocument, type DocumentRecord } from "../api/documents";
+import StatePanel from "../components/StatePanel.vue";
+import { formatDateTime } from "../format";
 import { listTemplates, listTemplateDocuments, type TemplateRecord, type TemplateDocument } from "../api/templates";
 import { uploadFile } from "../api/files";
 import ProjectFrame from "../components/ProjectFrame.vue";
@@ -32,6 +34,7 @@ const templateDocs = ref<TemplateDocument[]>([]);
 const submitting = ref(false);
 const formError = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
+const createDialog = ref<HTMLDialogElement | null>(null);
 type ChoicePhase = "idle" | "loading" | "ready" | "error";
 const templatesPhase = ref<ChoicePhase>("idle");
 const templateDocsPhase = ref<ChoicePhase>("idle");
@@ -228,6 +231,14 @@ function beforeUnload(event: BeforeUnloadEvent) {
   event.returnValue = "";
 }
 
+// 新建文档用页面内对话框承载（02 评审 5.8 C3），开关仍由 creating 控制。
+watch(creating, async (open) => {
+  await nextTick();
+  if (open && createDialog.value && !createDialog.value.open) createDialog.value.showModal();
+  if (open) nameInput.value?.focus();
+  if (!open && createDialog.value?.open) createDialog.value.close();
+});
+
 onBeforeRouteLeave(canLeave);
 onBeforeRouteUpdate(canLeave);
 watch(projectId, () => {
@@ -250,126 +261,141 @@ onBeforeUnmount(() => {
   <ProjectFrame>
     <section class="document-page">
       <div class="document-head">
-        <h2>文档编写</h2>
-        <button v-if="!creating" type="button" class="primary" :disabled="phase !== 'ready' || submitting" @click="startCreate">新建文档</button>
+        <div>
+          <h2 class="section-title">文档编写</h2>
+          <p class="page-desc">从模板创建或上传 Word 文档，进入后在线编写。</p>
+        </div>
+        <button type="button" class="primary" :disabled="phase !== 'ready' || submitting || creating" @click="startCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建文档</button>
       </div>
 
-      <p v-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
+      <dialog ref="createDialog" class="app-dialog create-dialog" aria-labelledby="create-document-title" @cancel.prevent="closeCreate" @close="creating && closeCreate()">
+        <form v-if="creating" class="create-form" :aria-busy="submitting" novalidate @submit.prevent="submitCreate">
+          <div class="dialog-head"><h2 id="create-document-title">新建文档</h2><button type="button" class="subtle icon-close" aria-label="关闭新建文档" :disabled="submitting" @click="closeCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
+          <div class="dialog-body create-body">
+            <div class="source-type" role="radiogroup" aria-label="创建方式">
+              <label class="radio-card" :class="{ on: sourceType === 'template' }">
+                <input type="radio" v-model="sourceType" value="template" :disabled="submitting" />
+                <span><strong>从模板创建</strong><small>使用模板管理中已核对的 Word 模板</small></span>
+              </label>
+              <label class="radio-card" :class="{ on: sourceType === 'upload' }">
+                <input type="radio" v-model="sourceType" value="upload" :disabled="submitting" />
+                <span><strong>上传 Word 文档</strong><small>导入已有的 .docx 文件继续编写</small></span>
+              </label>
+            </div>
 
-      <form v-if="creating" class="create-form" :aria-busy="submitting" @submit.prevent="submitCreate">
-        <h3>新建文档</h3>
+            <label class="stacked-label">
+              <span class="required">文档名称</span>
+              <input ref="nameInput" v-model="docName" class="control" type="text" maxlength="120" :disabled="submitting" />
+            </label>
 
-        <div class="source-type">
-          <label class="radio-label">
-            <input type="radio" v-model="sourceType" value="template" :disabled="submitting" />
-            从模板创建
-          </label>
-          <label class="radio-label">
-            <input type="radio" v-model="sourceType" value="upload" :disabled="submitting" />
-            上传 Word 文档
-          </label>
+            <div v-if="sourceType === 'template'" class="template-source">
+              <label class="stacked-label">
+                <span class="required">选择模板组</span>
+                <select v-model="selectedTemplateId" class="control" :disabled="submitting || templatesPhase !== 'ready' || templates.length === 0" @change="onTemplateChange">
+                  <option value="">请选择</option>
+                  <option v-for="t in templates" :key="t.id" :value="t.id">
+                    {{ t.name }} ({{ t.category }})
+                  </option>
+                </select>
+              </label>
+              <p v-if="templatesPhase === 'loading'" class="hint" role="status"><span class="spinner" aria-hidden="true"></span> 正在加载模板组…</p>
+              <p v-else-if="templatesPhase === 'error'" class="field-error" role="alert">
+                {{ templatesError }} <button type="button" class="text" :disabled="submitting" @click="loadTemplates">重试</button>
+              </p>
+              <p v-else-if="templatesPhase === 'ready' && templates.length === 0" class="hint">暂无可用模板组</p>
+
+              <label v-if="selectedTemplateId" class="stacked-label">
+                <span class="required">选择文档模板</span>
+                <select v-model="selectedTemplateDocId" class="control" :disabled="submitting || templateDocsPhase !== 'ready' || templateDocs.length === 0">
+                  <option value="">请选择</option>
+                  <option v-for="doc in templateDocs" :key="doc.id" :value="doc.id" :disabled="!doc.importStructure?.reviewed">
+                    {{ doc.name }}{{ doc.importStructure?.reviewed ? '' : '（待核对）' }}
+                  </option>
+                </select>
+              </label>
+              <p v-if="templateDocsPhase === 'loading'" class="hint" role="status"><span class="spinner" aria-hidden="true"></span> 正在加载文档模板…</p>
+              <p v-else-if="templateDocsPhase === 'error'" class="field-error" role="alert">
+                {{ templateDocsError }} <button type="button" class="text" :disabled="submitting" @click="onTemplateChange">重试</button>
+              </p>
+              <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && templateDocs.length === 0" class="hint">此模板组没有文档模板</p>
+              <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && !templateDocs.some(doc => doc.importStructure?.reviewed)" class="field-error" role="alert">请先在模板管理中核对并保存模板内容。</p>
+            </div>
+
+            <label v-else class="stacked-label">
+              <span class="required">上传 Word 文件（.docx）</span>
+              <input
+                class="control"
+                type="file"
+                accept=".docx"
+                :disabled="submitting"
+                @change="uploadedFile = ($event.target as HTMLInputElement).files?.[0] ?? null"
+              />
+            </label>
+
+            <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
+          </div>
+
+          <div class="dialog-actions">
+            <button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button>
+            <button type="submit" class="primary" :disabled="submitting">
+              {{ submitting ? "正在创建" : "创建" }}
+            </button>
+          </div>
+        </form>
+      </dialog>
+
+      <div class="doc-box">
+        <StatePanel v-if="phase === 'loading'" kind="loading" text="正在加载文档…" />
+        <StatePanel v-else-if="phase === 'error'" kind="error" title="文档加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
+        <StatePanel v-else-if="documents.length === 0" title="还没有文档" text="从模板创建第一篇文档，或上传已有的 Word 文档。"><button type="button" class="primary" :disabled="submitting" @click="startCreate">新建文档</button></StatePanel>
+        <div v-else class="table-wrap document-list">
+          <table>
+            <thead><tr><th>文档名称</th><th>来源</th><th>编写人</th><th>状态</th><th>最近修改</th><th class="th-right">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="doc in documents" :key="doc.id" class="document-row">
+                <td class="doc-name-cell"><router-link class="document-name" :to="{ name: 'document', params: { id: projectId, documentId: doc.id } }">{{ doc.name }}</router-link></td>
+                <td class="muted">{{ doc.sourceType === "upload" ? "上传 Word" : doc.templateDocumentName || "模板" }}</td>
+                <td>{{ doc.ownerName || "—" }}</td>
+                <td><span class="tag" :class="{ info: doc.status === 'in_progress', success: doc.status === 'completed' }">{{ documentStatusLabel[doc.status] || doc.status }}</span></td>
+                <td class="time num">{{ formatDateTime(doc.updatedAt) }}</td>
+                <td class="cell-right"><router-link class="link document-open" :to="{ name: 'document', params: { id: projectId, documentId: doc.id } }" :aria-label="`继续编写：${doc.name}`">继续编写</router-link></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
-        <label>
-          文档名称
-          <input ref="nameInput" v-model="docName" class="control" type="text" maxlength="120" :disabled="submitting" />
-        </label>
-
-        <div v-if="sourceType === 'template'" class="template-source">
-          <label>
-            选择模板组
-            <select v-model="selectedTemplateId" class="control" :disabled="submitting || templatesPhase !== 'ready' || templates.length === 0" @change="onTemplateChange">
-              <option value="">请选择</option>
-              <option v-for="t in templates" :key="t.id" :value="t.id">
-                {{ t.name }} ({{ t.category }})
-              </option>
-            </select>
-          </label>
-          <p v-if="templatesPhase === 'loading'" class="form-state" role="status">正在加载模板组…</p>
-          <p v-else-if="templatesPhase === 'error'" class="field-error" role="alert">
-            {{ templatesError }} <button type="button" class="ghost" :disabled="submitting" @click="loadTemplates">重试</button>
-          </p>
-          <p v-else-if="templatesPhase === 'ready' && templates.length === 0" class="form-state">暂无可用模板组</p>
-
-          <label v-if="selectedTemplateId">
-            选择文档模板
-            <select v-model="selectedTemplateDocId" class="control" :disabled="submitting || templateDocsPhase !== 'ready' || templateDocs.length === 0">
-              <option value="">请选择</option>
-              <option v-for="doc in templateDocs" :key="doc.id" :value="doc.id" :disabled="!doc.importStructure?.reviewed">
-                {{ doc.name }}{{ doc.importStructure?.reviewed ? '' : '（待核对）' }}
-              </option>
-            </select>
-          </label>
-          <p v-if="templateDocsPhase === 'loading'" class="form-state" role="status">正在加载文档模板…</p>
-          <p v-else-if="templateDocsPhase === 'error'" class="field-error" role="alert">
-            {{ templateDocsError }} <button type="button" class="ghost" :disabled="submitting" @click="onTemplateChange">重试</button>
-          </p>
-          <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && templateDocs.length === 0" class="form-state">此模板组没有文档模板</p>
-          <p v-else-if="selectedTemplateId && templateDocsPhase === 'ready' && !templateDocs.some(doc => doc.importStructure?.reviewed)" class="field-error" role="alert">请先在模板管理中核对并保存模板内容。</p>
-        </div>
-
-        <label v-else>
-          上传 Word 文件（.docx）
-          <input
-            class="control"
-            type="file"
-            accept=".docx"
-            :disabled="submitting"
-            @change="uploadedFile = ($event.target as HTMLInputElement).files?.[0] ?? null"
-          />
-        </label>
-
-        <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
-
-        <div class="actions">
-          <button type="submit" class="primary" :disabled="submitting || (sourceType === 'template' && !templateReady)">
-            {{ submitting ? "正在创建" : "创建" }}
+        <div v-if="phase === 'ready' && total > 20" class="pager">
+          <span class="total">共 {{ total }} 条</span>
+          <button type="button" class="ghost" :disabled="submitting || page <= 1" @click="page -= 1; load()">
+            上一页
           </button>
-          <button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button>
+          <button type="button" class="ghost" :disabled="submitting || page >= pageCount" @click="page += 1; load()">
+            下一页
+          </button>
         </div>
-      </form>
-
-      <p v-if="phase === 'loading'" class="empty" role="status">正在加载文档…</p>
-      <p v-else-if="phase === 'error'" class="empty">
-        <button type="button" class="ghost" @click="load">重试</button>
-      </p>
-      <p v-else-if="documents.length === 0" class="empty">还没有文档</p>
-      <div v-else class="document-list">
-        <router-link v-for="doc in documents" :key="doc.id" class="document-row" :to="{ name: 'document', params: { id: projectId, documentId: doc.id } }">
-          <span class="document-name">{{ doc.name }}</span>
-          <span class="document-open">继续编写 →</span>
-        </router-link>
-      </div>
-
-      <div v-if="phase === 'ready' && total > 20" class="pager">
-        <span>共 {{ total }} 条</span>
-        <button type="button" class="ghost" :disabled="submitting || page <= 1" @click="page -= 1; load()">
-          上一页
-        </button>
-        <button type="button" class="ghost" :disabled="submitting || page >= pageCount" @click="page += 1; load()">
-          下一页
-        </button>
       </div>
     </section>
   </ProjectFrame>
 </template>
 
 <style scoped>
-.document-page { display:flex; flex:1; flex-direction:column; min-width:0; padding:var(--space-6); }
-.document-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-5); margin-bottom:var(--space-6); }
-.document-head h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
-.document-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:var(--space-4); min-height:calc(var(--space-7) + var(--space-2)); padding:var(--space-3) var(--space-2); border-bottom:1px solid var(--rule); color:var(--ink); text-decoration:none; }
-.document-row:hover { background:var(--desk); }
-.document-row:focus-visible { outline:2px solid var(--stamp); outline-offset:-2px; }
-.document-name { min-width:0; font-size:var(--text-md); font-weight:600; overflow-wrap:anywhere; }
-.document-open { color:var(--stamp); font-size:var(--text-sm); text-align:right; }
-.create-form { display:grid; gap:var(--space-4); max-width:calc(var(--space-7) * 14); margin-bottom:var(--space-6); padding:var(--space-5); border:1px solid var(--rule); border-radius:var(--radius-sheet); background:var(--desk); }
-.create-form h3 { margin:0; font-size:var(--text-md); }
-.create-form label { display:grid; gap:var(--space-1); color:var(--ink-secondary); font-size:var(--text-sm); }
-.template-source { display:grid; gap:var(--space-4); }
-.form-state { margin:0; color:var(--ink-secondary); font-size:var(--text-sm); }
-.source-type,.actions { display:flex; gap:var(--space-4); }
-.source-type .radio-label { display:flex; align-items:center; gap:var(--space-2); cursor:pointer; }
-.source-type input { accent-color:var(--stamp); }
-.document-page .pager { display:flex; align-items:center; justify-content:flex-end; gap:var(--space-2); margin-top:auto; padding:var(--space-3) 0; color:var(--ink-secondary); font-size:var(--text-xs); }
+.document-page { display:flex; flex:1; flex-direction:column; gap:var(--space-4); min-width:0; padding:var(--space-5) var(--space-6) var(--space-6); }
+.document-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-5); }
+.doc-box { border:1px solid var(--border-default); border-radius:var(--radius-sheet); overflow:hidden; }
+.doc-name-cell { width:40%; white-space:normal; }
+.document-name { color:var(--text-primary); font-weight:var(--weight-medium); text-decoration:none; overflow-wrap:anywhere; }
+.document-name:hover { color:var(--text-link); text-decoration:underline; text-underline-offset:3px; }
+.document-name:focus-visible { outline:none; border-radius:var(--radius-control); box-shadow:var(--focus-shadow); }
+.create-dialog { width:var(--dialog-w-form); }
+.create-body { display:grid; gap:var(--space-4); }
+.template-source { display:grid; gap:var(--space-3); }
+.source-type { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-3); }
+.radio-card { display:flex; align-items:flex-start; gap:var(--space-3); padding:var(--space-3) var(--space-4); border:1px solid var(--border-strong); border-radius:var(--radius-control); cursor:pointer; }
+.radio-card:hover { background:var(--bg-subtle); }
+.radio-card.on { border-color:var(--brand-600); background:var(--bg-active); }
+.radio-card:focus-within { box-shadow:var(--focus-shadow); }
+.radio-card input { margin:var(--space-1) 0 0; }
+.radio-card span { display:grid; gap:2px; }
+.radio-card strong { font-size:var(--text-md); font-weight:var(--weight-medium); }
+.radio-card small { color:var(--text-tertiary); font-size:var(--text-xs); }
 </style>
