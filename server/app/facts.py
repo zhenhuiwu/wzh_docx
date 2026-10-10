@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
 from app.errors import AppError
-from app.identity import require_permission
+from app.identity import require_permission, require_session
 from app.knowledge import _admin, _can_see, _require_base
 from app.projects import require_project_owner
 from app.models import format_timestamp
@@ -232,7 +232,7 @@ def list_facts(
     state: str = "",
     name: str = "",
 ) -> dict[str, object]:
-    actor = require_permission(request, "projects.read")
+    actor = require_session(request)  # 终审建议：与项目/文档接口一致，按项目成员可见（不再要求全局 projects.read）
     target = _uuid(project_id, "projectId")
     page, page_size, sort, state, name = _list_args(page, pageSize, sort, state, name)
     admin = _admin(actor.roles)
@@ -456,7 +456,7 @@ def _binding_item(connection, row: dict, user_id: UUID, admin: bool) -> dict[str
 
 @router.get("/projects/{project_id}/knowledge-bindings")
 def list_bindings(project_id: str, request: Request) -> dict[str, object]:
-    actor = require_permission(request, "projects.read")
+    actor = require_session(request)  # 终审建议：与项目/文档接口一致，按项目成员可见（不再要求全局 projects.read）
     target = _uuid(project_id, "projectId")
     admin = _admin(actor.roles)
     with connect() as connection:

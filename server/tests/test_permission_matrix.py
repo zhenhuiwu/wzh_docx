@@ -107,9 +107,10 @@ def test_auditor_sees_all_projects_in_list(matrix):
 
 @pytest.mark.parametrize("path", ["facts", "knowledge-bindings"])
 def test_auditor_reads_facts_and_bindings(matrix, path):
-    """终验回归（低）：全局只读审计口径——审计员非成员也能读事实列表和知识绑定，不能改。"""
+    """终验回归（低）+ 终审建议：项目成员（含负责人）与全局审计员都能读事实列表和知识绑定；看不到项目的账号 404；审计员不能改。"""
     client, project, _, _ = matrix
-    assert _call(client, "auditor", "GET", f"/projects/{project}/{path}").status_code == 200
-    assert _call(client, "nobody", "GET", f"/projects/{project}/{path}").status_code in (403, 404)
+    got = {role: _call(client, role, "GET", f"/projects/{project}/{path}").status_code for role in ROLES}
+    assert got == {role: 200 if role in READERS else 404 for role in ROLES}, got
+    assert _call(client, "auditor", "GET", f"/projects/{uuid4()}/{path}").status_code == 404
     assert _call(client, "auditor", "PUT", f"/projects/{project}/knowledge-bindings",
                  {"baseIds": [], "expectedProjectRevision": 0}).status_code == 403
