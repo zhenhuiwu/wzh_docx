@@ -29,6 +29,7 @@ def test_memory_api_pages_all_original_requests_and_keeps_document_authorization
         project, document = uuid4(), uuid4()
         with connect() as connection:
             connection.execute("INSERT INTO projects (id, name, owner_id) VALUES (%s, %s, %s)", (project, "中性项目", owner))
+            connection.execute("INSERT INTO project_members (project_id, user_id, role) VALUES (%s, %s, 'owner')", (project, owner))
             connection.execute("INSERT INTO documents (id, project_id, name, owner_id) VALUES (%s, %s, %s, %s)",
                                (document, project, "中性文档", owner))
             for revision in range(1, 24):

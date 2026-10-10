@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 import shutil
 from typing import Literal
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
@@ -19,8 +18,9 @@ from app.config import ai_reasoning_kwargs, get_settings
 from app.db import connect
 from app.document_memory import load_task_memory
 from app.documents import _admin, _check_word, _content_result, _document_row, _insert_at, _save_markdown, _section_body, _uuid
+from app.ai_capability import require_ai
 from app.errors import AppError
-from app.identity import require_permission
+from app.document_access import document_principal
 from app.models import format_timestamp
 from app.visio_render import VisioRenderError, render_visio
 
@@ -142,14 +142,8 @@ def generate_graph(*, document_id: UUID, document_name: str, heading: str, conte
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
+    require_ai("diagram", settings)
     base, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()
-    if not base or not model:
-        raise AppError(503, "AI_UNAVAILABLE", "尚未配置 AI 服务，请在 server/.env 设置 AI_BASE_URL 和 AI_MODEL。")
-    parsed = urlsplit(base)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise AppError(503, "AI_UNAVAILABLE", "AI_BASE_URL 配置不正确。")
-    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"} and (parsed.scheme != "https" or not settings.ai_api_key):
-        raise AppError(503, "AI_UNAVAILABLE", "远程 AI 服务须使用 HTTPS 并配置 AI_API_KEY。")
     memory = load_task_memory(document_id, scope="document" if heading == "全文" else "section",
                               target=heading[:120], instruction=instruction)
     chat = ChatOpenAI(model=model, base_url=base, api_key=settings.ai_api_key or "local-model",
@@ -179,7 +173,7 @@ def generate_graph(*, document_id: UUID, document_name: str, heading: str, conte
 
 @router.get("/documents/{document_id}/diagrams")
 def list_diagrams(request: Request, document_id: str) -> dict:
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as connection:
         _document_row(connection, did, session.user_id, _admin(session.roles))
@@ -192,10 +186,10 @@ def list_diagrams(request: Request, document_id: str) -> dict:
 
 @router.post("/documents/{document_id}/diagrams", status_code=201)
 def create_diagram(request: Request, document_id: str, body: DiagramGenerateBody) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as connection:
-        row = _document_row(connection, did, session.user_id, _admin(session.roles))
+        row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
     if row[12] != body.expectedRevision:
         raise AppError(409, "REVISION_CONFLICT", "文档已更新，请保存并刷新后重试。")
     heading, content = ("全文", str(row[7])) if body.headingIndex is None else (None, None)
@@ -215,9 +209,9 @@ def create_diagram(request: Request, document_id: str, body: DiagramGenerateBody
     directory = _diagram_path(diagram_id, "diagram.png").parent
     try:
         render_visio(graph, directory)
-        session = require_permission(request, "documents.edit")
+        session = document_principal(request)
         with connect() as connection:
-            current = _document_row(connection, did, session.user_id, _admin(session.roles))
+            current = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
             if current[12] != body.expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "生成期间文档已更新，请重新生成图表。")
             connection.execute(
@@ -237,7 +231,7 @@ def create_diagram(request: Request, document_id: str, body: DiagramGenerateBody
 
 @router.get("/documents/{document_id}/diagrams/{diagram_id}/file")
 def diagram_file(request: Request, document_id: str, diagram_id: str, format: Literal["png", "vsdx"] = "vsdx"):
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     did, gid = _uuid(document_id, "documentId"), _uuid(diagram_id, "diagramId")
     with connect() as connection:
         _document_row(connection, did, session.user_id, _admin(session.roles))
@@ -256,10 +250,10 @@ def diagram_file(request: Request, document_id: str, diagram_id: str, format: Li
 
 @router.post("/documents/{document_id}/diagrams/{diagram_id}/insert")
 def insert_diagram(request: Request, document_id: str, diagram_id: str, body: DiagramInsertBody) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did, gid = _uuid(document_id, "documentId"), _uuid(diagram_id, "diagramId")
     with connect() as connection:
-        row = _document_row(connection, did, session.user_id, _admin(session.roles))
+        row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
         diagram = _diagram_row(connection, did, gid)
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")

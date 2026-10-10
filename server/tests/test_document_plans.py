@@ -106,12 +106,12 @@ class DocumentPlanTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValidationError):
                 self.body(**data)
 
-    def test_explicit_capability_and_project_role_both_required(self):
+    def test_project_role_decides_without_global_capability(self):
+        # 决策1（阶段2 S1）：只有项目编写角色、没有全局 documents.edit 也可以建计划。
         self.actor.roles = ("auditor",)
-        with self.assertRaises(AppError) as caught:
-            self.create()
-        self.assertEqual(caught.exception.status_code, 403)
-        self.assertEqual(self.connection.queries, [])
+        self.assertEqual(self.create()["data"]["name"], "验收报告")
+        self.connection.plan = None
+        self.connection.queries.clear()
         self.actor.roles = ("project_creator",)
         self.connection.role = "viewer"
         with self.assertRaises(AppError) as caught:

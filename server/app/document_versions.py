@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
 from app.errors import AppError
-from app.identity import require_permission
+from app.document_access import document_principal
 from app.models import format_timestamp
 
 router = APIRouter()
@@ -80,9 +80,10 @@ def _public(row, *, detail: bool = False) -> dict:
 
 def _visible(connection, request: Request, document_id: str, permission: str):
     from app.documents import _admin, _document_row, _uuid
-    actor = require_permission(request, permission)
+    actor = document_principal(request)
     did = _uuid(document_id, "documentId")
-    return did, _document_row(connection, did, actor.user_id, _admin(actor.roles))
+    need = "edit" if permission == "documents.edit" else "read"
+    return did, _document_row(connection, did, actor.user_id, _admin(actor.roles), need)
 
 
 def _version(connection, document_id: UUID, revision: int):
@@ -153,7 +154,7 @@ def restore_version(request: Request, document_id: str, revision: int, body: Ver
                        format_template=template, outline=version["outline"], kind="restore", restored_from_revision=revision)
         _restore_memory(connection, did, version["memory_revisions"])
         connection.commit()
-        actor = require_permission(request, "documents.edit")
+        actor = document_principal(request)
         current = _document_row(connection, did, actor.user_id, _admin(actor.roles))
         result = _content_result(request, current)
         result["data"]["formatTemplate"] = current[6]

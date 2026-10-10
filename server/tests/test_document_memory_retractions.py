@@ -24,10 +24,11 @@ def adopted_document(tmp_path, monkeypatch):
         project, document = uuid4(), uuid4()
         with connect() as connection:
             connection.execute("INSERT INTO projects (id, name, owner_id) VALUES (%s, %s, %s)", (project, "中性项目", owner))
+            connection.execute("INSERT INTO project_members (project_id, user_id, role) VALUES (%s, %s, 'owner')", (project, owner))
             connection.execute("INSERT INTO documents (id, project_id, name, owner_id) VALUES (%s, %s, %s, %s)",
                                (document, project, "中性文档", owner))
             connection.commit()
-        monkeypatch.setattr(documents, "require_permission", lambda *args: SimpleNamespace(user_id=owner, roles=("project_creator",)))
+        monkeypatch.setattr(documents, "document_principal", lambda *args: SimpleNamespace(user_id=owner, roles=("project_creator",)))
         monkeypatch.setattr(documents, "_check_word", lambda *args: None)
         request = SimpleNamespace(state=SimpleNamespace(request_id="retraction-test"))
         for revision, content, instruction in ((0, "# 范围\n\n原正文。", "保持旧术语。"),

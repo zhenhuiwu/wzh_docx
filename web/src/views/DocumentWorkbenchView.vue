@@ -7,13 +7,14 @@ import DocumentHistory from "../components/DocumentHistory.vue";
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
-import { accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { PROJECT_ROLE_TEXT, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { listDrafts, recoverySummary, removeDraft, tabId as makeTabId, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import DOMPurify from "dompurify";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
+import { getCapabilities, type Capabilities } from "../api/documents";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -76,6 +77,9 @@ let retryTimer: number | undefined;
 let savingTimer: number | undefined;
 let clockTimer: number | undefined;
 let pendingKey: { content: string; key: string } | null = null;
+const capabilities = ref<Capabilities | null>(null);
+// 打开文档时的账号：会话失效后 readSession() 为空，草稿仍要写到原账号名下（G1）。
+let draftAccount = "";
 const browserTab = makeTabId(window.sessionStorage, () => crypto.randomUUID());
 const selectedHeading = ref<number | null>(null);
 const headingTitle = ref("");
@@ -179,10 +183,17 @@ async function load() {
   errorText.value = "";
   loadErrorStatus.value = 0;
   try {
+    draftAccount = readSession()?.staffId || draftAccount;
+    void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const record = await getDocument(id);
     const preview = await previewDocument(id);
     if (id !== documentId.value || version !== loadVersion) return;
     document.value = record;
+    if (record.permissions && !record.permissions.canEdit) {
+      // 01 §6.1：canEdit=false 直接只读，不必等第一次 403。
+      readonly.value = true;
+      readonlyReason.value = `你在该项目中是${PROJECT_ROLE_TEXT[record.permissions.projectRole || ""] || "成员"}，可以查看和导出，不能修改正文。`;
+    }
     markdownContent.value = record.markdownContent;
     savedContent.value = record.markdownContent;
     selectedHeading.value = [...record.markdownContent.matchAll(/^(#{1,6})\s+(.+)$/gm)].length ? 0 : null;
@@ -216,7 +227,7 @@ function resetSaveState() {
   exportError.value = "";
   pendingKey = null;
 }
-function account() { return readSession()?.staffId || "user"; }
+function account() { return draftAccount || readSession()?.staffId || "user"; }
 function findLocalDrafts(record: DocumentRecord) {
   const drafts = listDrafts(window.localStorage, account(), record.id)
     .filter(draft => !(draft.wholeDocument && draft.markdown === record.markdownContent));
@@ -1006,6 +1017,15 @@ async function acceptDiagram(result: DocumentContentResult & { formatTemplate: R
 }
 async function leaveDocument(to?: RouteLocationNormalized) {
   if (leaveBypass) { leaveBypass = false; return true; }
+  if (to && sessionEnded(to)) {
+    // 会话失效或需要改密（G1）：保存已不可能。草稿写入并读回校验通过就放行跳转，重新登录后由恢复条提示；
+    // 校验失败只给“下载后离开 / 留在本页”。
+    window.clearTimeout(autoSaveTimer);
+    window.clearTimeout(retryTimer);
+    if (!isDirty.value || persistAndVerify()) return true;
+    leaveDialog.value = { mode: "download-only", count: pendingCount.value, target: to.fullPath };
+    return false;
+  }
   if (skillOpen.value || skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || addingHeading.value || diagramBusy.value || refreshingEditor.value || undoingAi.value) {
     noteAction("操作仍在进行，请完成或停止后再离开文档。");
     return false;
@@ -1021,6 +1041,15 @@ async function leaveDocument(to?: RouteLocationNormalized) {
   if (decision === "leave") return true;
   leaveDialog.value = { mode: decision, count: pendingCount.value, target: to?.fullPath || router.resolve({ name: "project-documents", params: { id: projectId.value } }).fullPath };
   return false;
+}
+/** AI 功能不可用时的原因（02 P1-5，文案不含配置项名）；可用返回空串。 */
+function aiUnavailable(feature: "writing" | "diagram"): string {
+  const state = capabilities.value?.ai[feature];
+  if (!state || state.available) return "";
+  return capabilities.value?.ai.adminHint ? `AI 服务未配置或配置不正确（${capabilities.value.ai.adminHint}）` : "AI 服务暂不可用，请联系系统管理员";
+}
+function sessionEnded(to: RouteLocationNormalized) {
+  return (to.name === "login" && to.query.logout !== "1") || to.name === "change-password";
 }
 function confirmLeave(downloadFirst: boolean) {
   const target = leaveDialog.value?.target;
@@ -1194,7 +1223,9 @@ onUnmounted(() => {
 <template>
   <div class="workbench" @keydown="onKeydown">
     <div v-if="phase === 'loading'" class="state">正在加载文档...</div>
-    <div v-else-if="phase === 'error'" class="state"><p>{{ errorText }}</p><button type="button" class="ghost" @click="load">重试</button></div>
+    <div v-else-if="phase === 'error'" class="state" data-testid="load-error"><p>{{ errorText }}</p>
+      <router-link v-if="loadErrorStatus === 404" class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link>
+      <button v-else type="button" class="ghost" @click="load">重试</button></div>
     <template v-else-if="document">
       <header class="toolbar">
         <div class="toolbar-left">
@@ -1215,7 +1246,7 @@ onUnmounted(() => {
           <template v-else>
             <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
             <div class="export-group">
-              <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || aiLocked" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
+              <button type="button" class="primary" data-testid="export-word" :disabled="exporting || saving || aiLocked || document.permissions?.canExport === false" :title="document.permissions?.canExport === false ? '你在该项目中没有导出权限' : undefined" @click="handleExport">{{ exporting ? "导出中..." : "下载编辑稿" }}</button>
               <button v-if="isDirty" type="button" class="primary export-more" aria-haspopup="menu" :aria-expanded="exportMenu" aria-label="更多下载方式" :disabled="exporting" @click="exportMenu = !exportMenu">▾</button>
               <div v-if="exportMenu" class="export-menu card" role="menu" @keydown.esc="exportMenu = false">
                 <button type="button" class="ghost" role="menuitem" @click="exportServerVersion">服务器版本（Word）</button>
@@ -1283,7 +1314,7 @@ onUnmounted(() => {
           </form>
         </aside>
         <main v-show="mode === 'edit'" class="editor-area">
-          <fieldset class="editor-toolbar" aria-label="文字格式" :disabled="aiLocked || addingHeading">
+          <fieldset class="editor-toolbar" aria-label="文字格式" :disabled="aiLocked || addingHeading || readonly">
             <button type="button" class="ghost" title="一级标题" @mousedown.prevent @click="format('formatBlock', 'h1')">标题 1</button>
             <button type="button" class="ghost" title="二级标题" @mousedown.prevent @click="format('formatBlock', 'h2')">标题 2</button>
             <button type="button" class="ghost" title="正文" @mousedown.prevent @click="format('formatBlock', 'p')">正文</button>
@@ -1293,9 +1324,9 @@ onUnmounted(() => {
             <span class="toolbar-separator" aria-hidden="true"></span>
             <button type="button" class="ghost" title="项目符号" @mousedown.prevent @click="format('insertUnorderedList')">项目符号</button>
             <button type="button" class="ghost" title="编号列表" @mousedown.prevent @click="format('insertOrderedList')">编号列表</button>
-            <button type="button" class="primary" :aria-expanded="aiOpen" @mousedown.prevent @click="aiOpen = !aiOpen">写作助手</button>
-            <button type="button" class="ghost" :disabled="!canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
-            <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
+            <button type="button" class="primary" :aria-expanded="aiOpen" :disabled="readonly || Boolean(aiUnavailable('writing'))" :title="aiUnavailable('writing') || undefined" @mousedown.prevent @click="aiOpen = !aiOpen">写作助手</button>
+            <button type="button" class="ghost" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings">编写规范</button>
+            <button type="button" class="ghost" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams">Visio 图表</button>
           </fieldset>
           <div class="page-scroll"><div class="paper" :style="paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @paste="pasteContent" @drop="blockUnsupportedImages" @mouseup="captureEditorTarget" @keyup="captureEditorTarget"></div></div></div>
         </main>

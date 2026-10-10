@@ -17,6 +17,34 @@ export interface DocumentRecord {
   revision: number;
   updatedAt: string;
   projectName?: string;
+  permissions?: DocumentPermissions;
+}
+
+/** 01 §4.7：仅用于展示，写接口仍以服务端 403 为准。 */
+export interface DocumentPermissions {
+  projectRole: "owner" | "editor" | "reviewer" | "viewer" | null;
+  canEdit: boolean;
+  canExport: boolean;
+  canResolveConflicts: boolean;
+  canViewMemberConflicts: boolean;
+  readonlyReason: "role" | null;
+}
+
+export interface Capability { available: boolean; reason: string | null }
+export interface Capabilities {
+  ai: { writing: Capability; diagram: Capability; testExtraction: Capability; adminHint?: string };
+  wordPreview: Capability;
+  visio: Capability;
+}
+
+let capabilitiesCache: Promise<Capabilities> | null = null;
+/** GET /capabilities，按页面会话缓存；失败时下次重新请求。 */
+export function getCapabilities(): Promise<Capabilities> {
+  capabilitiesCache ??= apiRequest<{ data: Capabilities }>("/capabilities").then(body => {
+    if (!body?.data) throw new Error("能力信息不完整。");
+    return body.data;
+  }).catch(error => { capabilitiesCache = null; throw error; });
+  return capabilitiesCache;
 }
 
 export function documentHeadings(markdown: string): { level: number; text: string }[] {
@@ -36,13 +64,13 @@ export async function listDocuments(
   page: number = 1,
   name: string = "",
   pageSize: number = 20
-): Promise<{ items: DocumentRecord[]; page: number; pageSize: number; total: number }> {
+): Promise<{ items: DocumentRecord[]; page: number; pageSize: number; total: number; permissions?: DocumentPermissions }> {
   const params = new URLSearchParams();
   params.set("page", page.toString());
   params.set("pageSize", pageSize.toString());
   if (name) params.set("name", name);
 
-  const body = await apiRequest<{ data: { items: DocumentRecord[]; page: number; pageSize: number; total: number } }>(
+  const body = await apiRequest<{ data: { items: DocumentRecord[]; page: number; pageSize: number; total: number; permissions?: DocumentPermissions } }>(
     `/projects/${projectId}/documents?${params}`
   );
   return body?.data ?? { items: [], page: 1, pageSize, total: 0 };

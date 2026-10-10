@@ -8,7 +8,6 @@ import os
 import re
 import sys
 from io import BytesIO
-from urllib.parse import urlsplit
 from pathlib import Path
 from threading import Lock
 from time import monotonic
@@ -26,11 +25,12 @@ from app.document_rules import DraftFormatError, section_rules, validate_draft, 
 from app.document_memory import clear_memory, load_memory, record_memory, read_memory_history, retract_memory
 from app.document_versions import record_current_version, router as versions_router
 from app.docx_parser import parse_docx
+from app.ai_capability import require_ai
 from app.errors import AppError
 from app.config import get_settings
 from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
-from app.identity import require_permission
+from app.document_access import DocumentRow, Need, check_project, document_principal, load_document, member_role, permissions_of
 from app.models import format_timestamp
 from app.writing_skills import load_skill_snapshot
 
@@ -279,11 +279,11 @@ def _writing_skill(row) -> dict | None:
 
 @router.patch("/documents/{document_id}/writing-skill")
 def set_document_skill(request: Request, document_id: str, body: DocumentSkillBody) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         with conn.transaction(immediate=True):
-            row = _document_row(conn, did, session.user_id, _admin(session.roles))
+            row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
             if row[12] != body.expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "文档已更新，请关闭设置并刷新后重试。")
             current = _writing_skill(row) or {"mode": "auto", "documentInstructions": ""}
@@ -337,51 +337,25 @@ def _admin(roles: tuple[str, ...]) -> bool:
     return "system_admin" in roles
 
 
-def _project_visible(connection, project_id: UUID, user_id: UUID, admin: bool) -> None:
-    params: list[object] = [project_id]
-    visibility = "true"
-    if not admin:
-        # 简化版：项目创建者可见
-        visibility = "p.owner_id = %s"
-        params.append(user_id)
-    row = connection.execute(
-        f"SELECT id FROM projects p WHERE p.id = %s AND {visibility}",
-        params,
-    ).fetchone()
-    if row is None:
-        raise AppError(404, "NOT_FOUND", "没有这个项目。")
+def _project_visible(connection, project_id: UUID, user_id: UUID, admin: bool, need: Need = "read") -> str | None:
+    """项目成员可见（S1）；非成员 404，不区分项目是否存在。返回项目角色。"""
+    exists = connection.execute("SELECT id FROM projects WHERE id = %s", [project_id]).fetchone()
+    if exists is None:
+        raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
+    role = member_role(connection, project_id, user_id)
+    check_project(connection, project_id, role, admin, need)
+    return role
 
 
-def _document_row(connection, document_id: UUID, user_id: UUID, admin: bool) -> dict:
-    params: list[object] = [document_id]
-    visibility = "true"
-    if not admin:
-        visibility = "p.owner_id = %s"
-        params.append(user_id)
-    row = connection.execute(
-        f"""
-        SELECT d.id, d.project_id, d.name, d.source_type, d.template_document_id,
-               d.original_docx_file_id, d.format_template, d.markdown_content, d.outline,
-               d.status, d.owner_id, owner.name as owner_name, d.revision, d.updated_at,
-               p.name as project_name,
-               td.name as template_document_name
-        FROM documents d
-        JOIN projects p ON p.id = d.project_id
-        JOIN users owner ON owner.id = d.owner_id
-        LEFT JOIN template_documents td ON td.id = d.template_document_id
-        WHERE d.id = %s AND {visibility}
-        """,
-        params
-    ).fetchone()
-    if row is None:
-        raise AppError(404, "NOT_FOUND", "没有这个文档。")
-    return row
+def _document_row(connection, document_id: UUID, user_id: UUID, admin: bool, need: Need = "read") -> DocumentRow:
+    """按名可取列的文档行（DocumentRow）；可见性与权限按项目成员角色（S1）。"""
+    return load_document(connection, document_id, user_id, admin, need)
 
 
 @router.get("/projects/{project_id}/documents")
 def list_documents(request: Request, project_id: str) -> dict[str, object]:
     """列出项目文档"""
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     admin = _admin(session.roles)
     pid = _uuid(project_id, "projectId")
 
@@ -392,7 +366,8 @@ def list_documents(request: Request, project_id: str) -> dict[str, object]:
     offset = (page - 1) * page_size
 
     with connect() as conn:
-        _project_visible(conn, pid, session.user_id, admin)
+        role = _project_visible(conn, pid, session.user_id, admin)
+        permissions = permissions_of(role, admin)
 
         where = ["d.project_id = %s"]
         params: list[object] = [pid]
@@ -437,6 +412,7 @@ def list_documents(request: Request, project_id: str) -> dict[str, object]:
                 "revision": row[6],
                 "updatedAt": format_timestamp(row[7]),
                 "templateDocumentName": row[8],
+                "permissions": permissions,
             }
             for row in rows
         ]
@@ -444,6 +420,7 @@ def list_documents(request: Request, project_id: str) -> dict[str, object]:
         return {
             "data": {
                 "items": items,
+                "permissions": permissions,
                 "page": page,
                 "pageSize": page_size,
                 "total": total,
@@ -459,7 +436,7 @@ def create_document(
     body: DocumentCreateBody
 ) -> dict[str, object]:
     """创建文档（从模板或上传）"""
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     admin = _admin(session.roles)
     pid = _uuid(project_id, "projectId")
 
@@ -471,7 +448,7 @@ def create_document(
         raise AppError(422, "VALIDATION_FAILED", "来源类型无效。")
 
     with connect() as conn:
-        _project_visible(conn, pid, session.user_id, admin)
+        _project_visible(conn, pid, session.user_id, admin, "edit")
 
         # 检查重复
         existing = conn.execute(
@@ -599,7 +576,7 @@ def create_document(
 @router.get("/documents/{document_id}")
 def get_document(request: Request, document_id: str) -> dict[str, object]:
     """获取文档详情（包含 Markdown 内容）"""
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
 
@@ -624,6 +601,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "updatedAt": format_timestamp(row[13]),
                 "projectName": row[14],
                 "templateDocumentName": row[15],
+                "permissions": permissions_of(row.project_role, row.admin),
             },
             "requestId": request.state.request_id,
         }
@@ -636,7 +614,7 @@ def update_document_content(
     body: DocumentContentPatchBody
 ) -> dict[str, object]:
     """更新文档内容（Markdown）"""
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
 
@@ -645,7 +623,7 @@ def update_document_content(
 
     with connect() as conn:
         # 检查文档和版本
-        row = _document_row(conn, did, session.user_id, admin)
+        row = _document_row(conn, did, session.user_id, admin, "edit")
 
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "版本冲突，请刷新后重试。")
@@ -671,7 +649,7 @@ def update_document_content(
 
 @router.post("/documents/{document_id}/headings")
 def add_heading(request: Request, document_id: str, body: HeadingAddBody) -> dict[str, object]:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     title = body.title.strip()
     if not title or len(title) > 120 or "\n" in title or "\r" in title:
@@ -679,7 +657,7 @@ def add_heading(request: Request, document_id: str, body: HeadingAddBody) -> dic
     if body.placement not in {"child", "sibling"}:
         raise AppError(422, "VALIDATION_FAILED", "标题位置不正确。")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles))
+        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
         markdown = row[7]
@@ -827,7 +805,7 @@ def _apply_edits(markdown: str, edits: list[DocumentEdit]) -> str:
 
 @router.get("/documents/{document_id}/memory")
 def get_writing_memory(request: Request, document_id: str, offset: int = 0, limit: int = 5) -> dict:
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     if offset < 0 or not 1 <= limit <= 10:
         raise AppError(422, "VALIDATION_FAILED", "记忆查询范围不正确。")
@@ -842,10 +820,10 @@ def get_writing_memory(request: Request, document_id: str, offset: int = 0, limi
 
 @router.delete("/documents/{document_id}/memory")
 def delete_writing_memory(request: Request, document_id: str) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        _document_row(conn, did, session.user_id, _admin(session.roles))
+        _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         clear_memory(conn, did)
         conn.commit()
     return {"data": {"summary": ""}, "requestId": request.state.request_id}
@@ -853,10 +831,10 @@ def delete_writing_memory(request: Request, document_id: str) -> dict:
 
 @router.post("/documents/{document_id}/sections/draft", response_model=None)
 def draft_section(request: Request, document_id: str, body: SectionDraftBody, stream: bool = False) -> dict[str, object] | StreamingResponse:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles))
+        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
     if row[12] != body.expectedRevision:
         raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
     whole_document = body.scope == "document"
@@ -882,16 +860,8 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     if len(existing) > 20000:
         raise AppError(422, "VALIDATION_FAILED", "本节正文超过 20000 字，请选中需要修改的部分。")
     settings = get_settings()
+    require_ai("writing", settings)
     base_url, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()
-    if not base_url or not model:
-        raise AppError(503, "AI_UNAVAILABLE", "尚未配置 AI 服务，请在 server/.env 设置 AI_BASE_URL 和 AI_MODEL。")
-    parsed = urlsplit(base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise AppError(503, "AI_UNAVAILABLE", "AI_BASE_URL 配置不正确。")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise AppError(503, "AI_UNAVAILABLE", "远程 AI 服务必须使用 HTTPS。")
-    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"} and not settings.ai_api_key:
-        raise AppError(503, "AI_UNAVAILABLE", "请配置 AI_API_KEY。")
     read_sections: set[int] = set()
     planned_sections: set[int] = set()
     inputs = dict(
@@ -1008,10 +978,10 @@ def _replace_selection(markdown: str, selection: DocumentSelectionBody, content:
 
 @router.post("/documents/{document_id}/selection")
 def insert_selection(request: Request, document_id: str, body: SelectionInsertBody) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles))
+        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "文档已更新，请重新选择正文并生成。")
         rules = section_rules(heading="选中内容", document_name=row[2], template_name=row[15] or "",
@@ -1030,11 +1000,11 @@ def insert_selection(request: Request, document_id: str, body: SelectionInsertBo
 
 @router.post("/documents/{document_id}/sections/insert")
 def insert_section(request: Request, document_id: str, body: SectionInsertBody) -> dict[str, object]:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     content = body.content.strip()
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles))
+        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
         heading, _, _ = _section_body(row[7], body.headingIndex)
@@ -1051,10 +1021,10 @@ def insert_section(request: Request, document_id: str, body: SectionInsertBody) 
 
 @router.post("/documents/{document_id}/edits")
 def insert_document_edits(request: Request, document_id: str, body: DocumentInsertBody) -> dict:
-    session = require_permission(request, "documents.edit")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, _admin(session.roles))
+        row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "文档已更新，请重新生成全文草稿。")
         try:
@@ -1076,12 +1046,12 @@ def export_document(
     body: DocumentExportBody
 ) -> dict[str, object]:
     """导出为 Word 文档"""
-    session = require_permission(request, "documents.export")
+    session = document_principal(request)
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
 
     with connect() as conn:
-        row = _document_row(conn, did, session.user_id, admin)
+        row = _document_row(conn, did, session.user_id, admin, "export")
 
         if row[12] != body.expectedRevision:
             raise AppError(409, "REVISION_CONFLICT", "版本冲突，请刷新后重试。")
@@ -1138,7 +1108,7 @@ def export_document(
 @router.get("/documents/{document_id}/preview")
 def preview_document(request: Request, document_id: str) -> dict[str, object]:
     """预览文档（返回 HTML）"""
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
 
@@ -1170,7 +1140,7 @@ def _editing_html(connection, row) -> str:
 def preview_original_word(request: Request, document_id: str, scope: Literal["original", "edited"] = "original",
                           expectedRevision: int | None = None) -> FileResponse:
     """Render original or current exported OOXML through the local Word installation."""
-    session = require_permission(request, "documents.read")
+    session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         document = _document_row(conn, did, session.user_id, _admin(session.roles))

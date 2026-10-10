@@ -283,7 +283,7 @@ def list_projects(
     status: str | None = None,
     archived: bool = False,
 ) -> dict[str, object]:
-    actor = require_permission(request, "projects.read")
+    actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
     if page < 1 or not 1 <= pageSize <= 50 or sort not in _SORTS:
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     if status is not None and status not in _STATUSES:
@@ -468,7 +468,7 @@ def create_project(request: Request, body: ProjectCreateBody) -> dict[str, objec
 
 @router.get("/projects/{project_id}")
 def get_project(project_id: str, request: Request) -> dict[str, object]:
-    actor = require_permission(request, "projects.read")
+    actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
     target = _parse_uuid(project_id, "projectId")
     with connect() as connection:
         project = _load(connection, target, actor.user_id, _is_admin(actor.roles))
@@ -649,7 +649,7 @@ def list_members(
     account: str = "",
     role: str | None = None,
 ) -> dict[str, object]:
-    actor = require_permission(request, "projects.read")
+    actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
     target = _parse_uuid(project_id, "projectId")
     if role is not None and role not in _ROLES:
         raise AppError(422, "VALIDATION_FAILED", "项目角色不正确。")

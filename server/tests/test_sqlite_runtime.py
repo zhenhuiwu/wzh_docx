@@ -49,6 +49,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             "107_document_memory_retractions.sql",
             "108_document_versions.sql",
             "109_writing_skills.sql",
+            "110_project_member_owner_backfill.sql",
         ]
         assert migrate() == []
         admin_id = create_user(

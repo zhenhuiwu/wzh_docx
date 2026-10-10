@@ -20,8 +20,10 @@ from app.config import ai_reasoning_kwargs, get_settings
 from app.db import connect
 from app.docx_parser import parse_docx
 from app.documents import _project_visible, _uuid
+from app.ai_capability import require_ai
 from app.errors import AppError
 from app.files import resolve_object
+from app.document_access import document_principal
 from app.identity import require_permission
 from app.models import format_timestamp
 from app.test_executor import _test_text
@@ -390,14 +392,8 @@ def analyze_task(task: dict) -> list[dict]:
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
+    require_ai("testExtraction", settings)
     base = settings.ai_base_url.strip().rstrip("/")
-    parsed = urlsplit(base)
-    if not base or not settings.ai_model.strip():
-        raise AppError(503, "AI_UNAVAILABLE", "尚未配置 AI 服务。")
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise AppError(503, "AI_UNAVAILABLE", "AI 服务地址配置不正确。")
-    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"} and (parsed.scheme != "https" or not settings.ai_api_key):
-        raise AppError(503, "AI_UNAVAILABLE", "远程 AI 服务需要 HTTPS 和 API Key。")
     plan = _plan_text(task)
     files = {root: source_files(task, root) for root in ("frontend", "backend")}
     coverage, reads = 0, []
@@ -741,7 +737,7 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
     from app.test_executor import MissingInput, result_markdown
 
     require_permission(request, "tests.read")
-    actor = require_permission(request, "documents.edit")
+    actor = document_principal(request)
     did = _uuid(body.documentId, "documentId")
     ids = [str(_uuid(value, "caseIds")) for value in body.caseIds]
     if len(set(ids)) != len(ids):
@@ -749,7 +745,7 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         task = _visible(connection, task_id, actor)
-        document = _document_row(connection, did, actor.user_id, _admin(actor.roles))
+        document = _document_row(connection, did, actor.user_id, _admin(actor.roles), "edit")
         if document[1] != task["project_id"]:
             raise AppError(422, "DOCUMENT_PROJECT_MISMATCH", "只能补充到测试任务所属项目的文档。")
         stored_run = _selected_run(connection, str(task["id"]), body.runId)

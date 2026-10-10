@@ -21,6 +21,7 @@ from app.identity import router as identity_router
 from app.jobs import router as jobs_router
 from app.knowledge import router as knowledge_router
 from app.projects import router as projects_router
+from app.ai_capability import router as capabilities_router
 from app.documents import router as documents_router
 from app.document_diagrams import router as document_diagrams_router
 from app.document_plans import router as document_plans_router
@@ -103,6 +104,7 @@ def create_app() -> FastAPI:
 
     api = APIRouter(prefix="/api/v1")
     api.include_router(health_router)
+    api.include_router(capabilities_router)
     api.include_router(identity_router)
     api.include_router(users_router)
     api.include_router(projects_router)

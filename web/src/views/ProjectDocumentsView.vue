@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError } from "../api/client";
-import { listDocuments, createDocument, type DocumentRecord } from "../api/documents";
+import { listDocuments, createDocument, type DocumentPermissions, type DocumentRecord } from "../api/documents";
+import { accessText } from "../saveModel";
 import { listTemplates, listTemplateDocuments, type TemplateRecord, type TemplateDocument } from "../api/templates";
 import { uploadFile } from "../api/files";
 import ProjectFrame from "../components/ProjectFrame.vue";
@@ -14,6 +15,8 @@ const projectId = computed(() => {
 });
 
 const documents = ref<DocumentRecord[]>([]);
+const permissions = ref<DocumentPermissions | null>(null);
+const notFound = ref(false);
 const phase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
 const page = ref(1);
@@ -54,6 +57,7 @@ async function load() {
   const request = ++listRequest;
   phase.value = "loading";
   errorText.value = "";
+  notFound.value = false;
   if (!target) {
     phase.value = "error";
     errorText.value = "没有这个项目。";
@@ -69,12 +73,15 @@ async function load() {
       return;
     }
     documents.value = result.items;
+    permissions.value = result.permissions ?? null;
     total.value = result.total;
     phase.value = "ready";
   } catch (error) {
     if (request !== listRequest || target !== projectId.value) return;
     phase.value = "error";
-    errorText.value = messageOf(error);
+    // 02 P0-4：非成员与不存在不区分，不显示“重试”。
+    notFound.value = error instanceof ApiError && error.status === 404;
+    errorText.value = notFound.value || (error instanceof ApiError && error.status === 403) ? accessText(error as ApiError) : messageOf(error);
   }
 }
 
@@ -251,7 +258,7 @@ onBeforeUnmount(() => {
     <section class="document-page">
       <div class="document-head">
         <h2>文档编写</h2>
-        <button v-if="!creating" type="button" class="primary" :disabled="phase !== 'ready' || submitting" @click="startCreate">新建文档</button>
+        <button v-if="!creating && permissions?.canEdit !== false" type="button" class="primary" :disabled="phase !== 'ready' || submitting" @click="startCreate">新建文档</button>
       </div>
 
       <p v-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
@@ -331,7 +338,8 @@ onBeforeUnmount(() => {
 
       <p v-if="phase === 'loading'" class="empty" role="status">正在加载文档…</p>
       <p v-else-if="phase === 'error'" class="empty">
-        <button type="button" class="ghost" @click="load">重试</button>
+        <router-link v-if="notFound" class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link>
+        <button v-else type="button" class="ghost" @click="load">重试</button>
       </p>
       <p v-else-if="documents.length === 0" class="empty">还没有文档</p>
       <div v-else class="document-list">

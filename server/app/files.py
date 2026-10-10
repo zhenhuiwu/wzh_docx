@@ -436,10 +436,28 @@ def _idempotent_file(
     return record
 
 
+def authorize_read(request: Request, file_id: str) -> None:
+    """项目文件对项目成员可读（S1：只有项目角色的账号也能下载原稿和导出稿）；其余仍要求 files.read。"""
+
+    from app.identity import require_session
+    from app.permissions import has_permission
+    from app.projects import project_role
+
+    actor = require_session(request)
+    if has_permission(actor.roles, "files.read"):
+        return
+    with connect() as connection:
+        row = connection.execute("select project_id, base_id from files where id = %s", (file_id,)).fetchone()
+        if (row is not None and row["project_id"] is not None and row["base_id"] is None
+                and project_role(connection, row["project_id"], actor.user_id) is not None):
+            return
+    raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
+
+
 @router.get("/files/{file_id}/content")
 def download_file(file_id: str, request: Request) -> Response:
     parsed = parse_file_id(file_id)
-    authorize(request, "files.read")
+    authorize_read(request, parsed)
     guard_knowledge_file(request, parsed)
     return _file_response(_load_visible(parsed), inline=False)
 
@@ -447,6 +465,6 @@ def download_file(file_id: str, request: Request) -> Response:
 @router.get("/files/{file_id}/preview")
 def preview_file(file_id: str, request: Request) -> Response:
     parsed = parse_file_id(file_id)
-    authorize(request, "files.read")
+    authorize_read(request, parsed)
     guard_knowledge_file(request, parsed)
     return _file_response(_load_visible(parsed), inline=True)
