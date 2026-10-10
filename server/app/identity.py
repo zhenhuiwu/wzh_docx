@@ -156,6 +156,7 @@ class Principal:
     session_id: UUID
     csrf_token: str
     expires_at: datetime
+    must_change_password: bool = False
 
     def public_user(self) -> dict[str, object]:
         return {
@@ -173,6 +174,7 @@ class Principal:
                 if self.last_login_at is None
                 else format_timestamp(self.last_login_at)
             ),
+            "requiresFirstLoginChange": self.must_change_password,
         }
 
     def public_session(self, request: Request) -> dict[str, object]:
@@ -195,6 +197,7 @@ def create_user(
     roles: list[str],
     department: str = "",
     connection=None,
+    must_change_password: bool = False,
 ) -> UUID:
     cleaned = _clean_account(account)
     display_name = name.strip()
@@ -221,9 +224,9 @@ def create_user(
                 """
                 insert into users (
                   id, account, account_key, name, department,
-                  password_hash, status
+                  password_hash, status, must_change_password
                 )
-                values (%s, %s, %s, %s, %s, %s, 'active')
+                values (%s, %s, %s, %s, %s, %s, 'active', %s)
                 """,
                 (
                     user_id,
@@ -232,6 +235,7 @@ def create_user(
                     display_name,
                     department,
                     password_hash,
+                    1 if must_change_password else 0,
                 ),
             )
             for role in roles:
@@ -272,7 +276,8 @@ def _load_principal(token: str) -> Principal | None:
             """
             select s.id as session_id, s.csrf_token, s.expires_at, s.revoked_at,
                    u.id as user_id, u.account, u.name, u.department, u.status,
-                   u.revision, u.created_at, u.updated_at, u.last_login_at
+                   u.revision, u.created_at, u.updated_at, u.last_login_at,
+                   u.must_change_password
             from sessions s
             join users u on u.id = s.user_id
             where s.token_hash = %s
@@ -307,6 +312,7 @@ def _load_principal(token: str) -> Principal | None:
         session_id=row["session_id"],
         csrf_token=row["csrf_token"],
         expires_at=row["expires_at"],
+        must_change_password=bool(row["must_change_password"]),
     )
 
 
@@ -314,10 +320,17 @@ def current_principal(request: Request) -> Principal | None:
     return _load_principal(request.cookies.get(_SESSION_COOKIE, ""))
 
 
-def require_session(request: Request) -> Principal:
+def require_session(request: Request, *, allow_password_change: bool = False) -> Principal:
+    """Return the signed-in principal.
+
+    An account that must change its password can only read its own session,
+    log out, or change the password; every other API is refused until then.
+    """
     principal = current_principal(request)
     if principal is None:
         raise AppError(401, "AUTH_REQUIRED", "需要登录后才能继续。")
+    if principal.must_change_password and not allow_password_change:
+        raise AppError(403, "PASSWORD_CHANGE_REQUIRED", "请先修改初始密码。")
     return principal
 
 
@@ -517,12 +530,12 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
 
 @router.get("/auth/me")
 def get_current_session(request: Request) -> dict[str, object]:
-    return require_session(request).public_session(request)
+    return require_session(request, allow_password_change=True).public_session(request)
 
 
 @router.post("/auth/logout", status_code=204)
 def logout(request: Request) -> Response:
-    principal = require_session(request)
+    principal = require_session(request, allow_password_change=True)
     require_csrf(request, principal)
     with connect() as connection:
         with connection.transaction():
@@ -541,7 +554,7 @@ def logout(request: Request) -> Response:
 
 @router.post("/auth/change-password", status_code=204)
 def change_password(request: Request, body: PasswordBody) -> Response:
-    principal = require_session(request)
+    principal = require_session(request, allow_password_change=True)
     require_csrf(request, principal)
     current = _clean_password(body.currentPassword, "currentPassword")
     new_password = _require_new_password(body.newPassword)
@@ -560,7 +573,8 @@ def change_password(request: Request, body: PasswordBody) -> Response:
             connection.execute(
                 """
                 update users
-                set password_hash = %s, revision = revision + 1, updated_at = now()
+                set password_hash = %s, must_change_password = 0,
+                    revision = revision + 1, updated_at = now()
                 where id = %s
                 """,
                 (updated, principal.user_id),

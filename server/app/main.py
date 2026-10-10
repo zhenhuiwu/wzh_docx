@@ -12,7 +12,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.bootstrap_admin import bootstrap_first_admin
+from app.bootstrap_admin import bootstrap_first_admin, flag_known_default_passwords
 from app.db import migrate, ping
 from app.errors import AppError, error_content, install_error_handlers
 from app.files import router as files_router
@@ -52,6 +52,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     migrate()
     seed_writing_skills()
     bootstrap_first_admin()
+    flag_known_default_passwords()
     recover_interrupted_tasks()
     yield
 

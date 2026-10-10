@@ -214,3 +214,51 @@ def test_disabled_account_cannot_login(client: TestClient) -> None:
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
     assert PASSWORD not in response.text
+
+
+def test_bootstrap_admin_must_change_password_before_other_apis(runtime_env, monkeypatch) -> None:
+    from app.bootstrap_admin import bootstrap_first_admin
+    from app.main import create_app
+
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_ACCOUNT", "first-admin")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "第一管理员")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "initial-secret-1")
+    assert bootstrap_first_admin() is True
+    with TestClient(create_app()) as client:
+        response = _login(client, "first-admin", "initial-secret-1")
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["user"]["requiresFirstLoginChange"] is True
+        csrf = response.json()["data"]["csrfToken"]
+        me = client.get("/api/v1/auth/me")
+        assert me.status_code == 200 and me.json()["data"]["user"]["requiresFirstLoginChange"] is True
+        for path in ("/api/v1/projects", "/api/v1/users", "/api/v1/templates"):
+            blocked = client.get(path)
+            assert blocked.status_code == 403, path
+            assert blocked.json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+        changed = client.post(
+            "/api/v1/auth/change-password",
+            json={"currentPassword": "initial-secret-1", "newPassword": "changed-secret-2"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert changed.status_code == 204, changed.text
+        me = client.get("/api/v1/auth/me")
+        assert me.json()["data"]["user"]["requiresFirstLoginChange"] is False
+        assert client.get("/api/v1/projects").status_code == 200
+
+
+def test_known_default_password_is_flagged_for_change(runtime_env) -> None:
+    from app.bootstrap_admin import flag_known_default_passwords
+
+    _reset("admin")
+    create_user(account="admin", name="管理员", password=PASSWORD, roles=["system_admin"])
+    assert flag_known_default_passwords() == 0
+    from app.identity import hash_password
+
+    with connect() as connection:
+        with connection.transaction():
+            connection.execute("update users set password_hash = %s where account_key = 'admin'", (hash_password("admin123"),))
+    assert flag_known_default_passwords() == 1
+    with connect() as connection:
+        row = connection.execute("select must_change_password from users where account_key = 'admin'").fetchone()
+    assert row["must_change_password"]
+    assert flag_known_default_passwords() == 0

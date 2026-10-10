@@ -7,7 +7,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import secrets
 import socket
 import sys
 import threading
@@ -36,19 +35,39 @@ class FrontendFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
-def initialize_admin():
+INITIAL_PASSWORD_FILE = "初始管理员密码.txt"
+
+
+def initialize_admin(home: Path) -> None:
+    """Create the first administrator with a random one-time password.
+
+    The password is written once to a local file beside the data and printed
+    to the console. The account must change it at first sign-in.
+    """
+    from app.bootstrap_admin import create_initial_admin, generate_initial_password
     from app.db import connect, migrate
-    from app.identity import create_user, hash_password
 
     migrate()
+    password = generate_initial_password()
     with connect() as connection:
         with connection.transaction(immediate=True):
             if connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"]:
                 return
-            user = create_user(account="admin", name="管理员", password=secrets.token_urlsafe(24),
-                               roles=["system_admin"], connection=connection)
-            # Preserve the user's fixed initial account without changing password validation.
-            connection.execute("UPDATE users SET password_hash=%s WHERE id=%s", (hash_password("admin123"), user))
+            create_initial_admin("admin", "管理员", password, connection=connection)
+    target = home / INITIAL_PASSWORD_FILE
+    target.write_text(
+        "文档工作室初始管理员\n"
+        "账号：admin\n"
+        f"初始密码：{password}\n"
+        "首次登录后系统会要求修改密码。修改完成后请删除本文件。\n",
+        encoding="utf-8-sig",
+    )
+    try:
+        target.chmod(0o600)
+    except OSError:
+        logging.warning("不能限制初始密码文件的访问权限：%s", target)
+    logging.info("已创建初始管理员 admin，初始密码已写入 %s", target)
+    print(f"初始管理员：admin，初始密码：{password}（已保存到 {target}，首次登录须修改）")
 
 
 def application(home: Path):
@@ -141,7 +160,7 @@ def main():
     (home / "logs").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.FileHandler(home / "logs" / "server.log", encoding="utf-8"), logging.StreamHandler()])
-    initialize_admin()
+    initialize_admin(home)
     if not args.no_browser:
         def open_when_ready():
             for _ in range(150):
