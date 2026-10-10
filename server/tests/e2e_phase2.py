@@ -58,8 +58,10 @@ def step(name: str):
                 for index, page in enumerate(open_pages):
                     if not page.is_closed():
                         OUT.mkdir(parents=True, exist_ok=True)
-                        page.screenshot(path=str(OUT / f"fail-{index}.png"))
-                raise
+                        page.screenshot(path=str(OUT / f"fail-{len(results)}-{index}.png"))
+                # 审查员建议 9：失败后继续跑后面的步骤，最后汇总（E2E_STOP_ON_FAIL=1 时仍中止）
+                if os.environ.get("E2E_STOP_ON_FAIL") == "1":
+                    raise
         return run
     return wrap
 
@@ -415,17 +417,17 @@ def main() -> int:
             assert "（紧接着输入）" in server and "（张工第四次）" in server, server[-400:]
             # 3) 自动保存合并了他人修改、载入重绘期间继续打字：有“正在合并…”提示（aria-busy），
             #    编辑区不锁、不重绘，字留在编辑区；下次保存按原基准再合并，停手后再显示他人修改
-            b.evaluate("""() => { window.__sawRefresh = false; new MutationObserver(() => {
-                if (document.querySelector('[data-testid=editor-refreshing]')) window.__sawRefresh = true;
-            }).observe(document.body, { childList: true, subtree: true }); }""")
+            # 方案 C 后载入提示延迟 350ms 才出现（T-S2），重绘快时看不到提示条；改为观察编辑区本身进入重绘（aria-busy / refreshing）
+            b.evaluate("""() => { window.__sawRefresh = false; const el = document.querySelector('.paper-content');
+                const check = () => { if (el.getAttribute('aria-busy') === 'true' || el.classList.contains('refreshing') || document.querySelector('[data-testid=editor-refreshing]')) window.__sawRefresh = true; };
+                new MutationObserver(check).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'class', 'contenteditable'] }); }""")
             api_append(p_upd, "（张工第五次）")
             target = paragraph(b, p_upd2)
             target.click()
             b.keyboard.press("End")
             b.keyboard.type("（锁前）", delay=40)
             # 停止输入 3 秒触发自动保存，服务器合并张工的修改后重绘编辑区；重绘一开始就继续打字
-            expect(b.get_by_test_id("editor-refreshing")).to_be_visible(timeout=20000)
-            expect(b.locator(".paper-content")).to_have_attribute("aria-busy", "true")
+            b.wait_for_function("window.__sawRefresh === true", timeout=20000, polling=20)
             b.keyboard.type("（锁定中输入）", delay=60)
             wait_saved(b, 40000)
             b.wait_for_timeout(3500)
@@ -463,6 +465,7 @@ def main() -> int:
                     const url = String(input instanceof Request ? input.url : input);
                     if (!url.includes('/preview')) return original(input, init);
                     if (mode === 'fail-then-delay' && first) { first = false; return Promise.reject(new TypeError('probe')); }
+                    window.__previewDelayed = (window.__previewDelayed || 0) + 1;
                     return new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)); }; }"""
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
@@ -477,7 +480,9 @@ def main() -> int:
             type_after(page, "探针A丙段落", "（李工改丙A）")
             insert_before("A")
             page.evaluate(slow_preview, "delay")
-            expect(page.get_by_test_id("editor-refreshing")).to_be_visible(timeout=20000)
+            # 审查员 M4：确认重绘真的在进行（后台取版式的请求已发出、被拖慢 4 秒），再在乙后的“无。”里打字——走到重绘期间写回的路径
+            # （方案 C 后不锁的后台重绘不显示载入提示条，不能再用 editor-refreshing 判断）
+            page.wait_for_function("(window.__previewDelayed || 0) > 0", timeout=30000, polling=20)
             target = second_none("A")
             target.click()
             page.keyboard.press("End")

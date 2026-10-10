@@ -104,11 +104,16 @@ def conflict_items(doc_id: str) -> list[dict]:
     from app.db import connect
     out = []
     with connect() as connection:
-        for row in connection.execute("SELECT payload_json FROM document_conflicts WHERE document_id=%s", (doc_id,)).fetchall():
+        for row in connection.execute("SELECT id, payload_json FROM document_conflicts WHERE document_id=%s", (doc_id,)).fetchall():
             for item in json.loads(row["payload_json"]).get("conflicts", []):
                 theirs = item.get("theirs") or {}
+                mine = (item.get("mine") or {}).get("markdown") or ""
+                # 方案 C：冲突后续写存成快照，“我的版本”以最新一份为准
+                snap = connection.execute(
+                    "SELECT markdown FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    (row["id"], item.get("itemIndex"))).fetchone()
                 out.append({"theirs": theirs.get("markdown") or "", "by": (theirs.get("updatedBy") or {}).get("name"),
-                            "mine": (item.get("mine") or {}).get("markdown") or ""})
+                            "mine": mine, "latest": snap["markdown"] if snap else mine})
     return out
 
 
@@ -123,17 +128,21 @@ def check(ctx: Ctx, name: str, page, doc_id: str, owners: dict[str, str], genuin
         if len(hits) != 1 or owner not in hits[0].split(marker)[0] and not hits[0].lstrip("-| ").startswith(owner):
             problems.append(f"{marker}→{[hit[:30] for hit in hits]}")
     editor = page.locator(".paper-content").inner_text()
-    missing = [marker for marker in owners if marker not in editor]
+    items = conflict_items(doc_id)
+    # 方案 C：真冲突那一段在编辑区冻结、显示我的版本（对方版本在正文和冲突卡里），所以只属于对方版本的标记不要求出现在编辑区
+    frozen_theirs = [marker for marker in owners if genuine and len(items) == 1 and marker in items[0]["theirs"] and marker not in items[0]["latest"]]
+    missing = [marker for marker in owners if marker not in editor and marker not in frozen_theirs]
     if missing:
         problems.append(f"编辑区缺 {missing}")
+    if genuine and genuine[1] not in editor:
+        problems.append(f"编辑区冻结段缺我的 {genuine[1]}")
     patches = page.evaluate("window.__patches")
     reused = [key for key in {p["key"] for p in patches} if len({p["md"] for p in patches if p["key"] == key}) > 1]
     if reused:
         problems.append("同一保存键换了内容")
-    items = conflict_items(doc_id)
     if genuine:
         owner, marker = genuine
-        if len(items) != 1 or not items[0]["theirs"].startswith(owner) or items[0]["by"] != "张工" or marker not in items[0]["mine"]:
+        if len(items) != 1 or not items[0]["theirs"].startswith(owner) or items[0]["by"] != "张工" or marker not in items[0]["latest"]:
             problems.append(f"真冲突不符：{items}")
         if any(m in item["mine"] for item in items for m in owners):
             problems.append("自己已保存的内容进了冲突")

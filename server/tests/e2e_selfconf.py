@@ -42,14 +42,25 @@ def make_doc(data: dict, name: str, big: int) -> str:
                       json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
 
 
-def same_row(page, doc_id: str, server: dict, editor: str, gap: int, i: int, big: int) -> dict:
+def latest_mines(li, doc_id: str, timeout: float = 12.0) -> str:
+    """方案 C：冲突后续写存在快照里，“我的版本”以 mineLatest 为准（审查员 M4 / 测试工程师）。等到标记完整或超时。"""
+    deadline = time.time() + timeout
+    while True:
+        items = li.call("GET", f"/documents/{doc_id}/conflicts?status=open&actor=me")["items"]
+        got = "\n".join(((item.get("mineLatest") or {}).get("markdown") or (item.get("mine") or {}).get("markdown") or "") for item in items)
+        if MARK in got or not items or time.time() > deadline:
+            return got
+        time.sleep(0.5)
+
+
+def same_row(page, doc_id: str, server: dict, editor: str, gap: int, i: int, big: int, li=None) -> dict:
     from app.db import connect
     with connect() as connection:
         rows = connection.execute("SELECT status, payload_json FROM document_conflicts WHERE document_id=%s", (doc_id,)).fetchall()
     items = [(row["status"], item) for row in rows for item in json.loads(row["payload_json"]).get("conflicts", [])]
     open_items = [item for status, item in items if status == "open"]
     md = server["markdownContent"]
-    mines = "\n".join(((item.get("mine") or {}).get("markdown") or "") for item in open_items)
+    mines = latest_mines(li, doc_id) if li is not None else "\n".join(((item.get("mine") or {}).get("markdown") or "") for item in open_items)
     mine_open = MARK in mines
     # 冲突返回后才打的字会写在（已换成对方版本的）这一段末尾：标记分成前后两截——前一截在冲突副本（或正文），后一截在正文。
     # 只认已存到服务器的（正文或未处理冲突的“我的版本”），按顺序切成两截核对，不认只在编辑区里的字
@@ -69,6 +80,7 @@ def main() -> int:
     base.require_targets()
     data = base.seed()
     zhang = data["zhang"]
+    li = base.Api(f"e2e-li-{base.RUN}")
     n = int(os.environ.get("N", "3"))
     gaps = [int(item) for item in os.environ.get("GAPS", "0").split(",")]
     delay = int(os.environ.get("DELAY", "60"))
@@ -105,7 +117,7 @@ def main() -> int:
                 server = zhang.call("GET", f"/documents/{doc_id}")
                 editor = page.locator(".paper-content").inner_text()
                 if same:
-                    results.append(same_row(page, doc_id, server, editor, gap, i, big))
+                    results.append(same_row(page, doc_id, server, editor, gap, i, big, li))
                     print(json.dumps(results[-1], ensure_ascii=False), flush=True)
                     continue
                 row = {"gap": gap, "i": i, "big": big, "server_full": MARK in server["markdownContent"], "editor_full": MARK in editor,

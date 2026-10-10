@@ -110,6 +110,8 @@ let caretSinkSeq = 0;
 const sinkNote = ref<{ conflictId: string; text: string } | null>(null);
 /** 审查员 M2：隐形框里还没存进冲突副本的续写（先进本机草稿，再发；失败退避重试、联网重发、离开时守住） */
 const sinkUnsaved = ref<{ conflictId: string; itemIndex: number; markdown: string } | null>(null);
+/** 隐形框换到另一条冲突时，上一条还没存上的续写（同样记草稿、继续重试） */
+const sinkBacklog = ref<Array<{ conflictId: string; itemIndex: number; markdown: string }>>([]);
 let caretSinkText = "";
 let caretSinkPrefix = "";
 let caretSinkRetry = 0;
@@ -341,8 +343,8 @@ const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
-const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0));
-const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value));
+const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length);
+const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: (offline.value || (!online.value && frozenUnsaved.value > 0)) && hasUnsaved.value,
@@ -1386,6 +1388,8 @@ function openCaretSink(root: HTMLElement, target: { conflictId: string; itemInde
   if (same) {
     caretSinkPrefix = caretSinkText; // 同一条冲突再次打开：接着记，不重发已存上的部分
   } else {
+    if (sinkUnsaved.value) sinkBacklog.value = [...sinkBacklog.value.filter(edit => !(edit.conflictId === sinkUnsaved.value!.conflictId && edit.itemIndex === sinkUnsaved.value!.itemIndex)), sinkUnsaved.value];
+    sinkUnsaved.value = null;
     caretSinkSent = "";
     caretSinkText = "";
     caretSinkPrefix = "";
@@ -1411,7 +1415,22 @@ function dropCaretSink() {
   caretSink = null;
 }
 function onlineAgain() {
-  if (sinkUnsaved.value) void flushCaretSink();
+  if (sinkUnsaved.value || sinkBacklog.value.length) void flushCaretSink();
+}
+async function flushSinkBacklog() {
+  const record = document.value;
+  if (!record || !sinkBacklog.value.length) return;
+  for (const edit of [...sinkBacklog.value]) {
+    try {
+      caretSinkSeq = nextSeq(caretSinkSeq);
+      await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `sinkb-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
+    } catch (error) {
+      if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "SNAPSHOT_LIMIT"].includes(error.code))) continue;
+    }
+    sinkBacklog.value = sinkBacklog.value.filter(item => item !== edit);
+  }
+  persistLocalDraft();
+  if (sinkBacklog.value.length && !caretSinkRetryTimer) caretSinkRetryTimer = window.setTimeout(() => { caretSinkRetryTimer = 0; void flushCaretSink(); }, 5000);
 }
 let caretSinkFlight: Promise<void> | null = null;
 let caretSinkSent = "";
@@ -1420,6 +1439,8 @@ async function flushCaretSink(): Promise<void> {
   if (caretSinkFlight) { await caretSinkFlight.catch(() => undefined); }
   if (caretSinkComposing) return; // 设计师建议 3：组字中不提交拼音，上屏后再提交
   window.clearTimeout(caretSinkRetryTimer);
+  caretSinkRetryTimer = 0;
+  await flushSinkBacklog();
   const record = document.value, target = caretSinkTarget;
   const all = caretSinkText;
   const typed = unsentSinkText();
@@ -2092,6 +2113,7 @@ function currentDraft(): DraftV2 | null {
     // 方案 C（14 §3.5 第 6 条）：冻结区里还没存成快照的续写
     conflictsEdits: [
       ...frozenOpen.value.filter(entry => entry.mine !== entry.saved).map(entry => ({ conflictId: entry.conflictId, itemIndex: entry.itemIndex, markdown: entry.mine })),
+      ...sinkBacklog.value.map(edit => ({ ...edit })),
       ...(sinkUnsaved.value ? [{ ...sinkUnsaved.value }] : []),
     ],
     pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
@@ -2104,7 +2126,7 @@ function persistLocalDraft(): boolean {
   if (!record || !browserTab) return false;
   window.clearTimeout(draftTimer);
   draftTimer = undefined;
-  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value) {
+  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length) {
     // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
     // 终验回归 H1：恢复条正列着本标签的旧草稿时不删（由“恢复/舍弃”处理）
     if (!localDrafts.value.some(draft => draft.tabId === browserTab)) removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
@@ -2878,7 +2900,7 @@ async function beforeResolve(): Promise<boolean> {
   await flushCaretSink();
   // 让冲突面板拿到刚存上的快照 id（审查点 3：处理请求带上它）
   await nextTick();
-  return !isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value;
+  return !isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length;
 }
 /** 卡片上“我的版本”的实时内容（冻结区里的文字）与快照状态。 */
 const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry => [entry.key, {
