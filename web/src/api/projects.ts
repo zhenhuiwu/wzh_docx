@@ -18,6 +18,8 @@ export interface ProjectRecord {
   createdAt: string;
   updatedAt: string;
   softwareVersion: string | null;
+  /** 只在项目详情返回（测试 L2）；列表项没有。 */
+  permissions?: { projectRole: string | null; canEdit: boolean; canManageMembers: boolean };
 }
 
 export interface ProjectMember {

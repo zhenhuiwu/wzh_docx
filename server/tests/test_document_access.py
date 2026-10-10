@@ -209,3 +209,14 @@ def test_member_without_global_role_uploads_to_own_project_only(members):
     unscoped = client.post("/api/v1/files", files=files, data={"purpose": "attachment"},
                            headers={**headers, "Idempotency-Key": "member-upload-unscoped"})
     assert unscoped.status_code == 422  # 夹具账号带 template_manager（含 files.upload），未选项目仍被拒
+
+
+def test_project_detail_permissions_hide_edit_for_readonly_members(members):
+    """测试 L2：只读成员拿到 canEdit=false，前端据此隐藏“编辑项目”。"""
+    client, project, _document, _ = members
+    for role, can_manage in (("viewer", False), ("reviewer", False), ("editor", False), ("owner", True)):
+        _as(client, role)
+        permissions = client.get(f"/api/v1/projects/{project}").json()["data"]["permissions"]
+        assert permissions["projectRole"] == role
+        assert permissions["canEdit"] is False  # 这些账号没有全局 projects.manage（与 PATCH 判定一致）
+        assert permissions["canManageMembers"] is can_manage

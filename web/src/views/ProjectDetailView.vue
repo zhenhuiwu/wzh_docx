@@ -160,7 +160,7 @@ onBeforeUnmount(() => {
       <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
           <h2 id="overview-title" class="section-title">项目概述</h2>
-          <button type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''; fields.clear()">{{ editing ? "收起编辑" : "编辑项目" }}</button>
+          <button v-if="project.permissions?.canEdit !== false" type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''; fields.clear()">{{ editing ? "收起编辑" : "编辑项目" }}</button>
         </div>
         <form v-if="editing" class="edit-form" :aria-busy="saving" novalidate @submit.prevent="saveInfo">
           <div class="form-grid">

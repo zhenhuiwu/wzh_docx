@@ -45,7 +45,12 @@ jobs:
         run: uvx "ruff==${RUFF_VERSION}" check . ../deploy ../test_csrf.py --config pyproject.toml
       - name: 安装 Playwright Chromium
         run: uv run --frozen playwright install --with-deps chromium
-      - name: pytest
+      - name: 安装前端依赖（往返 E2E 打包 editorMarkdown 需要）
+        working-directory: web
+        run: npm ci
+      - name: pytest（含 20 个模板的浏览器往返 E2E）
+        env:
+          DOCWB_E2E: "1"
         run: uv run --frozen pytest -q -rs
       - name: 部署快照检查
         working-directory: deploy
@@ -98,4 +103,6 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: vitest
+        run: npx vitest run
       - run: npm audit --audit-level=high

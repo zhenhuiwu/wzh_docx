@@ -14,6 +14,7 @@ from app.db import connect
 from app.errors import AppError
 from app.identity import require_csrf, require_permission, require_session
 from app.models import format_timestamp
+from app.permissions import has_permission
 
 router = APIRouter()
 
@@ -471,7 +472,15 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
     actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
     target = _parse_uuid(project_id, "projectId")
     with connect() as connection:
-        project = _load(connection, target, actor.user_id, _is_admin(actor.roles))
+        admin = _is_admin(actor.roles)
+        project = _load(connection, target, actor.user_id, admin)
+        role = project_role(connection, target, actor.user_id)
+    # 测试 L2：前端按此隐藏写操作（与 update_project / 成员管理的判定一致）。
+    project["permissions"] = {
+        "projectRole": role,
+        "canEdit": has_permission(actor.roles, "projects.manage") and (admin or role == "owner"),
+        "canManageMembers": admin or role == "owner",
+    }
     return _envelope(request, project)
 
 
