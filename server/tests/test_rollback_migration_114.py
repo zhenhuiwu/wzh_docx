@@ -102,3 +102,24 @@ def test_open_connection_counts_as_in_use(tmp_path, monkeypatch):
             holder.wait(10)
     finally:
         config.get_settings.cache_clear()
+
+
+def test_main_requires_manual_confirmation(tmp_path, monkeypatch, capsys):
+    """终审建议：旧版本服务查不出来，--yes 非交互时必须另加 --service-stopped，否则不改库。"""
+    from app import config
+    from app.db import migrate
+    from app.rollback_migration_114 import main
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+        assert main(["--yes"]) == 2
+        assert "--service-stopped" in capsys.readouterr().err
+        assert COLUMN in _columns(path)
+        assert main(["--yes", "--service-stopped"]) == 0
+        assert COLUMN not in _columns(path)
+    finally:
+        config.get_settings.cache_clear()

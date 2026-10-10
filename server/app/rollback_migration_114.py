@@ -3,7 +3,8 @@
 只在需要退回到 114 之前的程序版本时使用；**先停服务**，用与服务相同的 DATABASE_URL 运行::
 
     uv run python -m app.rollback_migration_114          # 只检查，不改库
-    uv run python -m app.rollback_migration_114 --yes    # 先整库备份，再回滚
+    uv run python -m app.rollback_migration_114 --yes    # 先整库备份，再回滚（会要求输入 yes 确认已停服务）
+    uv run python -m app.rollback_migration_114 --yes --service-stopped   # 非交互运行时
 
 回滚做两件事（同一事务）：删掉 document_objects.deleted_after_ref 列、删掉 schema_migrations 里的 114 记录。
 注意：
@@ -12,8 +13,11 @@
 - **回滚后必须用 114 之前的旧版本程序启动服务。** 若仍启动含 114 的新版本，服务启动时会自动重新执行 114
   （列重新加上，旧删除记录的该列为 NULL），回滚等于白做。
 - 服务在运行时脚本拒绝回滚（退出码 2）：正在运行的新版本程序仍会写这一列，回滚后删段保存会出错。
-  判断依据：服务启动时持有的 <库名>.service.lock 运行标记；Linux 上另查是否有其他进程打开着库文件（含 -wal/-shm）；
-  最后尝试拿库的独占写锁。旧版本程序没有运行标记，请务必确认它也已停止。
+- 能可靠识别的只有带运行标记的版本（ed68f33 及之后）：服务启动时持有 <库名>.service.lock 的锁，拿不到就拒绝。
+- 以下两项只是辅助，**识别不了空闲的服务**：Linux 上查其他进程是否打开着库文件（服务按请求开关连接，空闲时不占用库文件）；
+  尝试拿库的独占写锁（WAL 库空闲时能拿到）。
+- 因此 114 之前的旧版本、以及 114 之后到 ed68f33 之前的中间版本（会写这一列却没有运行标记）在运行时**查不出来**，
+  必须人工确认所有使用该库的服务都已停止：--yes 时会要求输入 yes 确认，非交互运行须另加 --service-stopped。
 """
 
 from __future__ import annotations
@@ -115,7 +119,17 @@ def rollback(path: Path, apply: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="单独回滚迁移 114（document_objects.deleted_after_ref）")
     parser.add_argument("--yes", action="store_true", help="确认执行（默认只检查）")
+    parser.add_argument("--service-stopped", action="store_true", help="非交互运行时声明：已人工确认所有使用该库的服务都已停止")
     args = parser.parse_args(argv)
+    if args.yes and not args.service_stopped:
+        # 旧版本/中间版本的服务没有运行标记、空闲时也查不到，必须人工确认
+        prompt = "旧版本服务没有运行标记，空闲时检测不到。确认所有使用该库的服务都已停止，请输入 yes："
+        if not sys.stdin.isatty():
+            print("非交互运行时请在人工确认服务已停止后加 --service-stopped。", file=sys.stderr)
+            return 2
+        if input(prompt).strip().lower() != "yes":
+            print("已取消，库未改动。")
+            return 2
     return rollback(_database_path(), args.yes)
 
 

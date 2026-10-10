@@ -37,6 +37,19 @@ def _try_lock(handle: IO[str], exclusive: bool) -> bool:
         return False
 
 
+def _unlock(handle: IO[str]) -> None:
+    try:
+        if os.name == "nt":  # pragma: no cover - Windows
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
 def acquire(database: Path) -> None:
     """服务启动时调用。拿不到锁（例如同库已有另一个服务进程）只记日志，不影响启动。"""
     global _held
@@ -72,7 +85,10 @@ def service_running(database: Path) -> bool:
     except OSError:
         return True
     try:
-        return not _try_lock(handle, exclusive=True)
+        locked = _try_lock(handle, exclusive=True)
+        if locked:
+            _unlock(handle)  # Windows 建议先解锁再关闭，避免紧接着启动的服务短暂拿不到锁
+        return not locked
     finally:
         handle.close()
 
