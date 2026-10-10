@@ -14,8 +14,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.bootstrap_admin import bootstrap_first_admin, flag_known_default_passwords
-from app.db import migrate, ping
-from app.errors import AppError, error_content, install_error_handlers
+from app.db import journal_mode, migrate, ping
+from app.errors import AppError, database_busy_error, error_content, install_error_handlers
 from app.files import router as files_router
 from app.identity import router as identity_router
 from app.jobs import router as jobs_router
@@ -54,6 +54,7 @@ def get_health(request: Request) -> dict[str, object]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     migrate()
+    logger.info("sqlite journal_mode=%s", journal_mode())
     seed_writing_skills()
     bootstrap_first_admin()
     flag_known_default_passwords()
@@ -86,7 +87,12 @@ def create_app() -> FastAPI:
             )
         except StarletteHTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            busy = database_busy_error(exc)
+            if busy is not None:
+                logger.warning("database busy, request %s", request.state.request_id)
+                return JSONResponse(status_code=503, content=error_content(request, busy),
+                                    headers={"Retry-After": str(busy.retry_after)})
             logger.exception("unhandled error, request %s", request.state.request_id)
             response = JSONResponse(
                 status_code=500,

@@ -92,17 +92,55 @@ class DictConnection:
             self.commit()
         return False
 
+    @property
+    def in_transaction(self) -> bool:
+        return self._conn.in_transaction
+
 
 @contextmanager
-def connect() -> Iterator[DictConnection]:
+def write_transaction(connection: DictConnection) -> Iterator[DictConnection]:
+    """BEGIN IMMEDIATE 写事务（01 §5.4）：开始即取得写锁，避免 DEFERRED 读后升级时直接 BUSY。"""
+    if connection.in_transaction:
+        raise RuntimeError("write_transaction 不能嵌套在已开始的事务里")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield connection
+    except BaseException:
+        connection.rollback()
+        raise
+    connection.commit()
+
+
+def is_database_busy(error: BaseException) -> bool:
+    return isinstance(error, sqlite3.OperationalError) and (
+        "database is locked" in str(error) or "database is busy" in str(error))
+
+
+_journal_mode = ""
+
+
+def journal_mode() -> str:
+    """迁移时设置的日志模式（启动日志/健康检查用）。"""
+    return _journal_mode
+
+
+BUSY_TIMEOUT_MS = 5000      # 决策6：在线请求等待写锁最多 5 秒
+MAINTENANCE_BUSY_MS = 30000  # 迁移、回填 CLI
+
+
+@contextmanager
+def connect(busy_ms: int | None = None) -> Iterator[DictConnection]:
+    busy_ms = BUSY_TIMEOUT_MS if busy_ms is None else busy_ms
     url = get_settings().database_url
     if not url.startswith("sqlite:///"):
         raise ValueError("DATABASE_URL must be sqlite:///...")
     path = Path(url.removeprefix("sqlite:///"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=30)
+    connection = sqlite3.connect(path, timeout=busy_ms / 1000)
     connection.row_factory = Row
     connection.execute("pragma foreign_keys = on")
+    connection.execute(f"pragma busy_timeout = {int(busy_ms)}")
+    connection.execute("pragma synchronous = FULL")
     try:
         yield DictConnection(connection)
     except Exception:
@@ -123,8 +161,11 @@ def ping() -> bool:
 
 def migrate() -> list[str]:
     """Legacy 001–035 migrations are PostgreSQL only; apply SQLite 100+ scripts."""
+    global _journal_mode
     applied: list[str] = []
-    with connect() as connection:
+    with connect(MAINTENANCE_BUSY_MS) as connection:
+        # WAL 持久化在库文件里；必须在事务外切换，所以不能写进迁移文件（01 §2.3）。
+        _journal_mode = str(connection.execute("pragma journal_mode = WAL").fetchone()[0]).lower()
         connection.execute(
             "create table if not exists schema_migrations ("
             "version text primary key, applied_at text not null default CURRENT_TIMESTAMP)"

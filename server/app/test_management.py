@@ -743,7 +743,7 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
     if len(set(ids)) != len(ids):
         raise AppError(422, "VALIDATION_FAILED", "所选测试项不能重复。")
     with connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
+        # S2：读取与 Word 预检在写锁外完成，写锁只包住最后的 CAS 写入（01 §5.4，busy_timeout=5s）。
         task = _visible(connection, task_id, actor)
         document = _document_row(connection, did, actor.user_id, _admin(actor.roles), "edit")
         if document[1] != task["project_id"]:
@@ -779,6 +779,9 @@ def insert_test_results(request: Request, task_id: str, body: ResultsInsert) -> 
             updated = _insert_at(document[7], offset, content)
             images = list(template.get("images", [])) + pictures
             _check_word(connection, document, updated, images=images)
+            connection.execute("BEGIN IMMEDIATE")
+            if _selected_run(connection, str(task["id"]), body.runId)["status"] == "running":
+                raise AppError(409, "TASK_BUSY", "测试仍在执行，请结束后再补充文档。")
             template["images"] = images
             template["testResults"] = bindings + [{"runId": run["id"], "caseId": case["caseId"]} for case in pending]
             _save_markdown(connection, did, updated, document[12], format_template=template, kind="test_results")

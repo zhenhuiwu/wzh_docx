@@ -23,6 +23,15 @@ class AppError(Exception):
     retry_after: int | None = None
 
 
+def database_busy_error(exc: BaseException) -> AppError | None:
+    """SQLite 写锁等待超过 busy_timeout → 503 DATABASE_BUSY（01 §5.4），前端按同一保存键退避重试。"""
+    from app.db import is_database_busy
+
+    if not is_database_busy(exc):
+        return None
+    return AppError(503, "DATABASE_BUSY", "服务器正忙，请稍后重试。", retry_after=1)
+
+
 def request_id_of(request: Request) -> str:
     value = getattr(request.state, "request_id", "")
     return value or "unknown"
@@ -76,7 +85,10 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
-        del exc
+        busy = database_busy_error(exc)
+        if busy is not None:
+            return JSONResponse(status_code=503, content=error_content(request, busy),
+                                headers={"Retry-After": str(busy.retry_after)})
         wrapped = AppError(
             500,
             "INTERNAL_ERROR",
