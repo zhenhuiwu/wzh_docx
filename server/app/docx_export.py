@@ -25,6 +25,7 @@ from docx.section import Section
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.image.image import Image
 from docx.shared import Inches
+from docx.text.run import Run
 from lxml import html
 
 from app.docx_parser import parse_docx, _list_info, heading_level
@@ -244,7 +245,8 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
         raise ValueError("此段包含图片、链接、域或复杂 Word 内容，无法安全替换；请在原稿中修改该段。")
 
     runs = paragraph.runs
-    if source_inline != target_inline:
+    # 复审：段内有书签时也走按偏移重建的路径，书签保持原范围（段首/书签边界处加字不再被并进书签）。
+    if source_inline != target_inline or paragraph._p.xpath("./w:bookmarkStart|./w:bookmarkEnd"):
         _edit_inline_runs(paragraph, target)
         return
 
@@ -286,20 +288,26 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
         elif operation in {"insert", "replace"}:
             owner = owners[start] if start < len(owners) else owners[-1] if owners else 0
             new_owners[new_start:new_end] = [owner] * (new_end - new_start)
+    marks = _bookmark_marks(paragraph, old_text, new_text)
+    cuts = {offset for offset, _ in marks}
     groups = []
-    for (char, bold, italic), owner in zip(target_chars, new_owners):
+    for position, ((char, bold, italic), owner) in enumerate(zip(target_chars, new_owners)):
         key = (owner, bold, italic)
-        if groups and groups[-1][0] == key:
+        if groups and groups[-1][0] == key and position not in cuts:
             groups[-1][1] += char
         else:
             groups.append([key, char])
-    # 书签不随 clear() 丢失：开始标记放回段首、结束标记放回段尾（与段内文字无关）。
-    starts = [deepcopy(node) for node in paragraph._p.xpath("./w:bookmarkStart")]
-    ends = [deepcopy(node) for node in paragraph._p.xpath("./w:bookmarkEnd")]
     paragraph.clear()
-    for node in reversed(starts):
-        paragraph._p.insert(1 if paragraph._p.pPr is not None else 0, node)
+    pending = list(marks)
+    offset = 0
+
+    def flush(upto: int) -> None:
+        while pending and pending[0][0] <= upto:
+            paragraph._p.append(pending.pop(0)[1])
+
     for (owner, bold, italic), text in groups:
+        flush(offset)
+        offset += len(text)
         original = runs[owner] if runs else None
         if original is not None and text == original.text and (not bold or original.bold is True) and (not italic or original.italic is True):
             paragraph._p.append(deepcopy(original._r))
@@ -311,8 +319,70 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
             run.bold = True
         if italic:
             run.italic = True
-    for node in ends:
-        paragraph._p.append(node)
+    flush(len(new_text))
+
+
+_BOOKMARK_FREE = ("_Toc", "_GoBack", "OLE_LINK")
+
+
+def _referenced_bookmarks(paragraph: Paragraph) -> set[str]:
+    root = paragraph._p.getroottree().getroot()
+    texts = [node.text or "" for node in root.iter(qn("w:instrText"))]
+    texts += [node.get(qn("w:instr")) or "" for node in root.iter(qn("w:fldSimple"))]
+    names = {node.get(qn("w:anchor")) for node in root.iter(qn("w:hyperlink")) if node.get(qn("w:anchor"))}
+    for text in texts:
+        names.update(re.findall(r"\b(?:REF|PAGEREF|NOTEREF)\s+(\S+)", text))
+        names.update(re.findall(r"\bHYPERLINK\s+\\l\s+\"?([^\s\"]+)", text))
+    return names
+
+
+def _bookmark_marks(paragraph: Paragraph, old_text: str, new_text: str) -> list[tuple[int, object]]:
+    """复审：改格式（整段重建 run）时书签保持原范围。
+
+    记下每个书签开始/结束标记在原文字里的偏移，按新旧文字的差异映射到新文字里，重建时插回对应位置：
+    落在未改动的文字上就精确对应；落在被替换/删除的文字里时，开始往前、结束往后取（范围只扩不缩）。
+    被交叉引用（REF/PAGEREF/NOTEREF/超链接锚点）的书签若边界落在被改的文字里、范围说不清，按受保护处理；
+    嵌在其他元素里的书签（重建会丢）同样按受保护处理。_Toc/_GoBack/OLE_LINK 不承载引用内容，不受此限。
+    """
+    p = paragraph._p
+    if p.xpath("./*[not(self::w:bookmarkStart or self::w:bookmarkEnd)][.//w:bookmarkStart or .//w:bookmarkEnd]"):
+        raise ValueError("此段的书签嵌在其他 Word 结构里，改格式会丢失书签；请在原稿中修改该段。")
+    found = []
+    offset = 0
+    for child in p:
+        if child.tag == qn("w:r"):
+            offset += len(Run(child, paragraph).text)
+        elif child.tag in (qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
+            found.append((offset, child))
+    if not found:
+        return []
+    operations = list(_anchored_operations(old_text, new_text))
+    names_by_id = {node.get(qn("w:id")): node.get(qn("w:name")) or "" for node in p.getroottree().getroot().iter(qn("w:bookmarkStart"))}
+    referenced = None
+    marks = []
+    for order, (old_offset, node) in enumerate(found):
+        is_start = node.tag == qn("w:bookmarkStart")
+        mapped, exact = None, False
+        for operation, start, end, new_start, new_end in operations:
+            if operation == "equal" and start <= old_offset <= end:
+                mapped, exact = new_start + old_offset - start, True
+                break
+        if mapped is None:
+            for operation, start, end, new_start, new_end in operations:
+                if start <= old_offset <= end:
+                    mapped = new_start if is_start else new_end
+                    break
+        if mapped is None:
+            mapped = len(new_text)
+        if not exact and old_offset not in (0, len(old_text)):
+            name = node.get(qn("w:name")) if is_start else names_by_id.get(node.get(qn("w:id")), "")
+            if not (name or "").startswith(_BOOKMARK_FREE):
+                referenced = _referenced_bookmarks(paragraph) if referenced is None else referenced
+                if name in referenced:
+                    raise ValueError("此段被交叉引用的书签边界处文字已改动，无法确定书签范围；请在原稿中修改该段。")
+        marks.append((mapped, order, deepcopy(node)))
+    marks.sort(key=lambda item: (item[0], item[1]))
+    return [(mapped, node) for mapped, _, node in marks]
 
 
 def _edit_table(table: Table, target, source) -> None:

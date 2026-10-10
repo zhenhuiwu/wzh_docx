@@ -158,3 +158,174 @@ def test_preview_keeps_existing_noncharacter_apart_from_tabs(tmp_path):
     html_text = render_document_html(source, markdown)
     assert html_text.count("\t") == 1
     assert html_text.count("\ufdef") == 1 and html_text.count("\ufdee") == 1
+
+
+def _bookmark_doc(path, build):
+    from docx import Document as WordDocument
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    def mark(paragraph, kind, ident, name=None, parent=None):
+        node = OxmlElement(f"w:bookmark{kind}")
+        node.set(qn("w:id"), str(ident))
+        if name:
+            node.set(qn("w:name"), name)
+        (parent if parent is not None else paragraph._p).append(node)
+
+    doc = WordDocument()
+    doc.add_heading("概述", 1)
+    build(doc, mark)
+    doc.save(path)
+
+
+def _children(path, index):
+    from docx import Document as WordDocument
+    from docx.oxml.ns import qn
+
+    out = []
+    for child in WordDocument(path).paragraphs[index]._p:
+        tag = child.tag.split("}")[1]
+        if tag == "r":
+            out.append("".join(node.text or "" for node in child.iter(qn("w:t"))))
+        elif tag.startswith("bookmark"):
+            out.append(f"{tag[8:]}:{child.get(qn('w:id'))}")
+    return out
+
+
+def _add_ref(doc, name):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    q = doc.add_paragraph("详见")
+    for kind, text in (("begin", None), ("instr", f" REF {name} \\h "), ("separate", None), ("text", "表"), ("end", None)):
+        run = q.add_run()
+        if kind in ("begin", "separate", "end"):
+            node = OxmlElement("w:fldChar")
+            node.set(qn("w:fldCharType"), kind)
+            run._r.append(node)
+        elif kind == "instr":
+            node = OxmlElement("w:instrText")
+            node.text = text
+            run._r.append(node)
+        else:
+            run.text = text
+
+
+def test_bookmarks_keep_range_when_formatting_changes(tmp_path):
+    """复审：改格式/段首加字时，部分覆盖与嵌套的书签保持原范围，不扩到整段、不丢。"""
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source, out = tmp_path / "bm.docx", tmp_path / "out.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph()
+        mark(p, "Start", 1, "_Ref1")
+        p.add_run("表 3-1")
+        mark(p, "Start", 2, "_Ref2")
+        p.add_run(" 系统")
+        mark(p, "End", 2)
+        mark(p, "End", 1)
+        p.add_run("参数表")
+        _add_ref(doc, "_Ref1")
+        _add_ref(doc, "_Ref2")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    for new, expected in (
+        (markdown.replace("系统参数表", "系统**参数**表"),
+         ["Start:1", "表 3-1", "Start:2", " 系统", "End:2", "End:1", "参", "数", "表"]),
+        (markdown.replace("表 3-1 系统参数表", "附表 3-1 系统参数表"),
+         ["附", "Start:1", "表 3-1", "Start:2", " 系统", "End:2", "End:1", "参数表"]),
+        (markdown.replace("表 3-1 系统参数表", "**表** 3-1 系统参数表"),
+         ["Start:1", "表", " 3-1", "Start:2", " 系统", "End:2", "End:1", "参数表"]),
+    ):
+        edit_original_docx(new, source, out)
+        got = _children(out, 1)
+        assert [item for item in got if item.startswith(("Start", "End"))] == [
+            item for item in expected if item.startswith(("Start", "End"))]
+        assert "".join(item for item in got if ":" not in item) == "".join(item for item in expected if ":" not in item)
+        # 书签内文字不变
+        start, end = got.index("Start:1"), got.index("End:1")
+        inside = "".join(item for item in got[start:end] if ":" not in item).replace("**", "")
+        assert inside.endswith("3-1 系统") and not inside.startswith("附"), got
+
+
+def test_bookmark_spanning_paragraphs_keeps_its_end(tmp_path):
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source, out = tmp_path / "span.docx", tmp_path / "out.docx"
+
+    def build(doc, mark):
+        first = doc.add_paragraph("第一段")
+        mark(first, "Start", 5, "_Ref5")
+        first.add_run("开始")
+        second = doc.add_paragraph("第二段")
+        mark(second, "End", 5)
+        second.add_run("之后")
+        _add_ref(doc, "_Ref5")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    edit_original_docx(markdown.replace("第二段之后", "第二段**之后**"), source, out)
+    got = _children(out, 2)
+    assert got.index("End:5") == 1 and got[0] == "第二段", got
+
+
+def test_referenced_bookmark_with_ambiguous_edge_stays_protected(tmp_path):
+    import pytest as _pytest
+
+    from app.docx_export import WordEditError, edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "amb.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph()
+        p.add_run("前文")
+        mark(p, "Start", 3, "_Ref3")
+        p.add_run("表 3-1")
+        mark(p, "End", 3)
+        _add_ref(doc, "_Ref3")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    with _pytest.raises((WordEditError, ValueError)):
+        edit_original_docx(markdown.replace("前文表 3-1", "前言附录 3-1"), source, tmp_path / "out.docx")
+    # 同样的改动落在未被引用的 _Toc 书签上可以改
+    source2 = tmp_path / "toc.docx"
+
+    def build2(doc, mark):
+        p = doc.add_paragraph()
+        p.add_run("前文")
+        mark(p, "Start", 3, "_Toc3")
+        p.add_run("表 3-1")
+        mark(p, "End", 3)
+
+    _bookmark_doc(source2, build2)
+    edit_original_docx(parse_docx(str(source2)).markdown.replace("前文表 3-1", "前言附录 3-1"), source2, tmp_path / "out2.docx")
+    assert "".join(item for item in _children(tmp_path / "out2.docx", 1) if ":" not in item) == "前言附录 3-1"
+
+
+def test_bookmark_nested_in_other_element_stays_protected(tmp_path):
+    import pytest as _pytest
+    from docx.oxml import OxmlElement
+
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "nested.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph("正文")
+        wrapper = OxmlElement("w:customXml")
+        p._p.append(wrapper)
+        mark(p, "Start", 9, "_Ref9", parent=wrapper)
+        mark(p, "End", 9, parent=wrapper)
+        p.add_run("其余")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    with _pytest.raises(ValueError):
+        edit_original_docx(markdown.replace("正文其余", "正文**其余**"), source, tmp_path / "out.docx")
