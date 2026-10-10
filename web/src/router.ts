@@ -1,8 +1,8 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { START_LOCATION, createRouter, createWebHistory } from "vue-router";
 import { defineAsyncComponent, h } from "vue";
 import AppShell from "./layouts/AppShell.vue";
-import { onPasswordChangeRequired } from "./api/client";
-import { endSession, ensureSession, loginDestination, markPasswordChangeRequired } from "./session";
+import { onPasswordChangeRequired, onSessionExpired } from "./api/client";
+import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
@@ -146,6 +146,14 @@ onPasswordChangeRequired(() => {
   const current = router.currentRoute.value;
   if (current.name === "change-password" || current.meta.public) return;
   void router.replace({ name: "change-password", query: { redirect: current.fullPath } });
+});
+
+onSessionExpired(() => {
+  markSessionExpired();
+  const current = router.currentRoute.value;
+  // 首次导航由守卫处理；登录页等公开页面自身的 401 不跳转。
+  if (current === START_LOCATION || current.meta.public) return;
+  void router.replace({ name: "login", query: { redirect: current.fullPath } });
 });
 
 router.afterEach((to, _from, failure) => {

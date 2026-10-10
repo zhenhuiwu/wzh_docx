@@ -25,10 +25,16 @@ export class ApiError extends Error {
 
 let csrfToken = "";
 let passwordChangeHandler: (() => void) | null = null;
+let sessionExpiredHandler: (() => void) | null = null;
 
 /** 任意请求收到 403 PASSWORD_CHANGE_REQUIRED 时调用（由路由注册，跳到改密页）。 */
 export function onPasswordChangeRequired(handler: () => void) {
   passwordChangeHandler = handler;
+}
+
+/** 任意请求收到 401（会话失效或被管理员吊销）时调用（由路由注册，跳到登录页）。 */
+export function onSessionExpired(handler: () => void) {
+  sessionExpiredHandler = handler;
 }
 
 export function setCsrfToken(token: string) {
@@ -109,6 +115,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
     if (!response.ok) {
       const error = payload?.error ?? {};
       if (response.status === 403 && error.code === "PASSWORD_CHANGE_REQUIRED") passwordChangeHandler?.();
+      // /auth/me 由路由守卫自行处理，/auth/login 的 401 是账号或密码错误。
+      if (response.status === 401 && path !== "/auth/me" && path !== "/auth/login") sessionExpiredHandler?.();
       throw new ApiError(
         response.status,
         typeof error.code === "string" ? error.code : "INTERNAL_ERROR",

@@ -32,6 +32,11 @@ export function markPasswordChangeRequired() {
   if (cache) cache = { ...cache, mustChangePassword: true };
 }
 
+/** 服务端返回 401：本地会话作废，下一次路由检查会重新询问服务端。 */
+export function markSessionExpired() {
+  cache = null;
+}
+
 export function loginDestination(value: unknown): string {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/projects";
   try {

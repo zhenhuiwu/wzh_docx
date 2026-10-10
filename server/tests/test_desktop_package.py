@@ -1,6 +1,7 @@
 """One portable-entry check: routes, the random initial account and existing data."""
 import os
 import stat
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -102,7 +103,7 @@ def test_leftover_password_file_is_reported_not_overwritten(empty_database):
 
 def test_offline_reset_gives_a_new_password_that_must_be_changed(empty_database, capsys):
     from app import reset_admin
-    from app.identity import create_user
+    from app.identity import PASSWORD_CHANGE_GUARD_PREFIX, create_user
 
     desktop.initialize_admin(empty_database)
     create_user(account="writer", name="编写", password="writer-password-1", roles=["project_creator"])
@@ -113,6 +114,11 @@ def test_offline_reset_gives_a_new_password_that_must_be_changed(empty_database,
                 "SELECT 'session-1', id, 'hash', 'csrf', '2999-01-01T00:00:00+00:00' FROM users WHERE account = 'writer'"
             )
             connection.execute("INSERT INTO login_guards (account_key, failed_count) VALUES ('writer', 9)")
+            connection.execute(
+                "INSERT INTO login_guards (account_key, failed_count) "
+                "SELECT ? || id, 9 FROM users WHERE account = 'writer'",
+                (PASSWORD_CHANGE_GUARD_PREFIX,),
+            )
     capsys.readouterr()
     assert reset_admin.main(["writer"]) == 0
     printed = capsys.readouterr().out
@@ -167,3 +173,49 @@ def test_initial_password_file_is_removed_after_first_change(empty_database, mon
         assert changed.status_code == 204, changed.text
     assert not target.exists()
     assert other.exists()
+
+
+def test_desktop_reset_keeps_old_password_when_file_cannot_be_written(empty_database, monkeypatch, capsys):
+    import app.bootstrap_admin as bootstrap
+
+    desktop.initialize_admin(empty_database)
+    target = empty_database / desktop.INITIAL_PASSWORD_FILE
+    with connect() as connection:
+        before = connection.execute("SELECT password_hash, revision FROM users WHERE account = 'admin'").fetchone()
+
+    def refuse(path, text):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(bootstrap, "write_secret_file", refuse)
+    capsys.readouterr()
+    with pytest.raises(bootstrap.ResetError, match="密码没有改变"):
+        desktop.reset_admin(empty_database, "admin")
+    assert "临时密码" not in capsys.readouterr().out
+    with connect() as connection:
+        after = connection.execute("SELECT password_hash, revision FROM users WHERE account = 'admin'").fetchone()
+    assert dict(after) == dict(before)
+    assert not target.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL check")
+def test_windows_password_file_has_owner_only_protected_dacl(tmp_path):
+    from app.bootstrap_admin import owner_only_acl_problem, write_secret_file
+
+    secret = tmp_path / "secret.txt"
+    write_secret_file(secret, "x")
+    assert owner_only_acl_problem(secret) is None
+    assert secret.read_text(encoding="utf-8-sig") == "x"
+    # The checker is not vacuous: an ordinary file inherits the folder's ACEs.
+    ordinary = tmp_path / "ordinary.txt"
+    ordinary.write_text("x", encoding="utf-8")
+    assert owner_only_acl_problem(ordinary) is not None
+    with pytest.raises(FileExistsError):
+        write_secret_file(secret, "y")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL check")
+def test_windows_initial_admin_file_is_owner_only(empty_database):
+    from app.bootstrap_admin import owner_only_acl_problem
+
+    desktop.initialize_admin(empty_database)
+    assert owner_only_acl_problem(empty_database / desktop.INITIAL_PASSWORD_FILE) is None

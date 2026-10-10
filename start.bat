@@ -26,12 +26,12 @@ if errorlevel 1 (
 )
 where node >nul 2>&1
 if errorlevel 1 (
-    echo 未找到 Node.js，需要 %MIN_NODE% 及以上，见 web\.nvmrc
+    echo 未找到 Node.js，需要 %MIN_NODE% 及以上，见 仓库根目录 .nvmrc
     exit /b 1
 )
 node -e "const [n,h]=[process.argv[1],process.versions.node].map(v=>v.split('.').map(Number));process.exit(h[0]>n[0]||(h[0]===n[0]&&h[1]>=n[1])?0:1)" %MIN_NODE%
 if errorlevel 1 (
-    for /f "delims=" %%v in ('node --version') do echo Node.js 版本过低：%%v，需要 %MIN_NODE% 及以上，见 web\.nvmrc
+    for /f "delims=" %%v in ('node --version') do echo Node.js 版本过低：%%v，需要 %MIN_NODE% 及以上，见 仓库根目录 .nvmrc
     exit /b 1
 )
 

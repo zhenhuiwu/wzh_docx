@@ -3,7 +3,7 @@
 面向公司内网的项目文档编制与测试取证系统：按 GJB 438C 等 Word 模板导入文档结构，由 AI 分章节辅助编写，在网页中编辑后导出 Word；并提供 AI 测试用例管理（真实执行、截图取证、生成 Word 报告），以及项目、用户、模板和 Skill 管理。
 
 - 后端：Python 3.12+、FastAPI、SQLite，依赖由 [uv](https://docs.astral.sh/uv/) 管理，代码在 `server/`。**uv 最低 0.4.30**：`server/uv.lock`（revision 5）已用 uv 0.4.30、0.5.0、0.5.31、0.6.0、0.6.17、0.7.0、0.7.22、0.8.0、0.8.24、0.9.5、0.10.0、0.12.23 实测：`uv export --frozen` / `uv lock --check` 都能读取，`uv lock` 也不会改写它；CI 固定使用 0.12.23
-- 前端：Vue 3 + TypeScript + Vite，代码在 `web/`，需要 **Node.js 22.13 及以上**（见 `web/.nvmrc`、`web/package.json` 的 `engines`；`web/.npmrc` 开启了 `engine-strict`，版本不够时 `npm ci` 直接失败）。前端依赖只以 `web/package-lock.json` 为准，仓库根目录没有 Node 工程
+- 前端：Vue 3 + TypeScript + Vite，代码在 `web/`，需要 **Node.js 22.13 及以上**（见仓库根目录的 `.nvmrc`、`web/package.json` 的 `engines`；`web/.npmrc` 开启了 `engine-strict`，版本不够时 `npm ci` 直接失败）。前端依赖只以 `web/package-lock.json` 为准，仓库根目录没有 Node 工程
 - 界面只按 1920×1080 固定桌面设计与验收，开发与验收地址固定为 http://localhost:5173 ，其他约束见 [AGENTS.md](AGENTS.md)
 - 设计与交接资料见 `docs/`；`docs/归档/` 中是已过时的历史说明
 
@@ -108,7 +108,7 @@ cd ../web && npm ci && npm run build && npm audit
 
 说明：
 
-- **运行 pytest 前先确认 `node --version` 是 22.13 及以上**（例如 `nvm use` 读取 `web/.nvmrc`）。测试执行器相关用例依赖 Node.js 22 的逐文件 `test:summary` 事件；PATH 中是更低版本时这些用例会被跳过（不是失败），跳过数会比 CI 多。
+- **运行 pytest 前先确认 `node --version` 是 22.13 及以上**（例如在仓库根目录执行 `nvm use`，读取根目录 `.nvmrc`）。测试执行器相关用例依赖 Node.js 22 的逐文件 `test:summary` 事件；PATH 中是更低版本时这些用例会被跳过（不是失败），跳过数会比 CI 多。
 - 原生 Visio 生成、Word 目录更新与版式预览需要 Windows 和本机 Microsoft Office，对应测试在其他平台跳过；非 Windows 环境调用这些功能会返回明确错误。
 - 持续集成配置见 `.github/workflows/ci.yml`（pytest + Playwright、ruff、部署快照检查、vue-tsc 构建、npm audit）。
 
@@ -127,7 +127,7 @@ cd deploy
 - 数据迁移由 `deploy/snapshot_data.py` 完成：只读校验源数据，清空会话等临时表，拒绝覆盖已有部署目录。
 - 部署包在 `deploy/.build/package` 中**按允许清单**重新组装（程序、`_internal`、迁移的 `data`、`.env.example`、`使用说明.txt`、`部署校验.json`），每次先清空；`release/` 中本机试用留下的 `.env`、数据、日志、密码文件不会进入 zip。出现清单外的文件时打包直接失败。`-NoZip` 只刷新 `release/文档工作室` 中的程序文件，保留其旁边的数据和 `.env`。
 - **部署包不含 `.env` 和 AI 密钥**，只生成 `.env.example`（带原环境的 AI 地址、模型等非敏感配置，值按 python-dotenv 规则转义）。目标电脑需要 AI 功能时，复制为 `.env` 并填写 `AI_API_KEY`。
-- **部署包不含被测系统的登录密码**：测试任务里保存的 `testPassword`（以及 JSON 中其他名为 password、secret、apiKey、token 的字段）在复制出的数据库中被清除，残留的明文也会被遮盖，数据库随后 VACUUM 重建。**部署后请在“测试用例管理”中逐个任务重新填写被测系统密码再执行测试。** 账号密码以哈希形式迁移，原密码继续有效。
+- **部署包不含被测系统的登录密码**：只在测试执行相关的列（`test_tasks.config_json/cases_json/error`、`test_task_runs.snapshot_json/result_json`）中删除 `testPassword` 等凭据键（password、secret、apiKey、token），并把这些列里残留的明文替换为 `******`，按“表.列”记入 `部署校验.json`；其他列保证原样，迁移时会校验。若被删除的密码作为完整词还出现在其他表（例如弱密码 `123456` 出现在正文、或与某个账号同名），迁移会停止并指出表和列，不会替换，请先在原系统中修改该测试任务的被测系统密码后重试。数据库随后 VACUUM 重建。**部署后请在“测试用例管理”中逐个任务重新填写被测系统密码再执行测试。** 账号密码以哈希形式迁移，原密码继续有效。
 
 ## 目录
 
