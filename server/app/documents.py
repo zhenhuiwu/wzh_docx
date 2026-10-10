@@ -30,6 +30,7 @@ from app.errors import AppError
 from app.config import get_settings
 from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
+from app.document_commit import commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
 from app.document_access import DocumentRow, Need, check_project, document_principal, load_document, member_role, permissions_of
 from app.models import format_timestamp
@@ -38,6 +39,7 @@ from app.writing_skills import load_skill_snapshot
 router = APIRouter()
 router.include_router(versions_router)
 router.include_router(objects_router)
+router.include_router(conflicts_router)
 # S3（01 §5.5）：Word COM 仍串行，但只包住 COM 调用；同一预览目标按文件键加锁只生成一次；
 # 缓存命中与 edit_original_docx 都在锁外。进程内锁只对单进程部署有效。
 _COM_SLOT = BoundedSemaphore(1)
@@ -134,6 +136,9 @@ class DocumentContentPatchBody(BaseModel):
     markdownContent: str
     memory: WritingMemoryBody | None = None
     retractMemoryRevision: int | None = Field(default=None, ge=0)
+    # 阶段2（01 §4.3）：opt-in 三方合并；clientSaveKey 用于幂等重放
+    allowMerge: bool = False
+    clientSaveKey: str | None = Field(default=None, min_length=8, max_length=80)
 
 
 class DocumentExportBody(BaseModel):
@@ -251,7 +256,7 @@ _AI_KINDS = frozenset({"selection", "ai_section", "ai_document", "diagram"})
 
 def _save_markdown(connection, document_id: UUID, markdown: str, expected_revision: int, *,
                    format_template: dict | None = None, outline: list | None = None,
-                   kind: str = "edit", restored_from_revision: int | None = None) -> UUID:
+                   kind: str = "edit", restored_from_revision: int | None = None, **commit) -> UUID:
     ensure_document_objects(connection, document_id)
     before = record_current_version(connection, document_id, expected_revision=expected_revision)
     template = before["format_template"] if format_template is None else format_template
@@ -266,7 +271,7 @@ def _save_markdown(connection, document_id: UUID, markdown: str, expected_revisi
     record_current_version(connection, document_id, expected_revision=expected_revision + 1,
                            kind=kind, restored_from_revision=restored_from_revision)
     return record_commit(connection, document_id, base_revision=expected_revision, markdown=markdown, kind=kind,
-                         ai_assisted=kind in _AI_KINDS)
+                         ai_assisted=kind in _AI_KINDS, **commit)
 
 
 def _check_word(connection, row, content: str, *, images: list[dict] | None = None) -> None:
@@ -450,6 +455,13 @@ def list_documents(request: Request, project_id: str) -> dict[str, object]:
             }
             for row in rows
         ]
+        # 01 §4.4.2：未处理冲突数（一次 GROUP BY）；memberOpenConflicts 只给负责人/管理员
+        counts = open_counts(conn, [row[0] for row in rows], session.user_id)
+        manager = admin or role == "owner"
+        for item in items:
+            mine, total = counts.get(item["id"], (0, 0))
+            item["mineOpenConflicts"] = mine
+            item["memberOpenConflicts"] = total if manager else None
 
         return {
             "data": {
@@ -655,9 +667,19 @@ def update_document_content(
     if body.retractMemoryRevision is not None and (body.retractMemoryRevision != body.expectedRevision or body.memory is not None):
         raise AppError(422, "VALIDATION_FAILED", "只能撤回当前版本的编写记忆，且不能同时新增要求。")
 
+    if body.allowMerge and body.retractMemoryRevision is not None:
+        raise AppError(422, "VALIDATION_FAILED", "撤回 AI 修改需要基于当前版本，不能合并保存。")
+
     with connect() as conn:
         # 检查文档和版本
         row = _document_row(conn, did, session.user_id, admin, "edit")
+        if body.allowMerge:
+            return _merge_content(request, conn, session, did, row, body)
+        rhash = request_hash({"base": body.expectedRevision, "markdown": body.markdownContent, "kind": "strict",
+                              "memory": body.memory.model_dump() if body.memory else None,
+                              "retract": body.retractMemoryRevision})
+        if body.clientSaveKey and replay(conn, did, session.user_id, body.clientSaveKey, rhash) is not None:
+            return _content_result(request, _document_row(conn, did, session.user_id, admin))
 
         if row[12] != body.expectedRevision:
             raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
@@ -667,7 +689,8 @@ def update_document_content(
 
         _check_word(conn, row, body.markdownContent)
         _save_markdown(conn, did, body.markdownContent, row[12],
-                       kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit")
+                       kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit",
+                       client_save_key=body.clientSaveKey, request_hash=rhash if body.clientSaveKey else None)
         if body.memory:
             record_memory(conn, did, body.memory.instruction, scope=body.memory.scope,
                           target=body.memory.target, revision=row[12] + 1)
@@ -679,6 +702,29 @@ def update_document_content(
         row = _document_row(conn, did, session.user_id, admin)
 
         return _content_result(request, row)
+
+
+def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody) -> dict[str, object]:
+    """allowMerge：以 versions[expectedRevision] 为基线块级三方合并（01 §4.3、§5.2、§5.4）。"""
+    if body.memory is not None and _writing_skill(row) is not None:
+        raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
+    admin = _admin(session.roles)
+    memory = body.memory
+
+    def after_write(connection, revision: int) -> None:
+        if memory:
+            record_memory(connection, did, memory.instruction, scope=memory.scope, target=memory.target, revision=revision)
+
+    data = commit_whole(
+        conn, document_id=did, actor=session.user_id, base_revision=body.expectedRevision, mine_md=body.markdownContent,
+        kind="ai_selection" if memory else "edit", client_save_key=body.clientSaveKey,
+        check_word=lambda markdown: _check_word(conn, _document_row(conn, did, session.user_id, admin, "edit"), markdown),
+        extra={"memory": memory.model_dump() if memory else None}, after_write=after_write)
+    result = _content_result(request, _document_row(conn, did, session.user_id, admin))
+    result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
+    if data.get("replayed"):
+        result["data"]["replayed"] = True
+    return result
 
 
 @router.post("/documents/{document_id}/headings")

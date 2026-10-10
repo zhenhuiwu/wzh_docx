@@ -74,3 +74,37 @@ def test_canonical_key_ignores_dialect(before, after):
 ])
 def test_canonical_key_detects_changes(before, after):
     assert canonical_key(before) != canonical_key(after)
+
+
+# 用例 4：diff3（01 §5.2 整篇规则）
+from app.document_merge import merge3  # noqa: E402
+
+BASE = "# H\n\nP1\n\nP2\n\nP3\n"
+
+
+def _merge(theirs, mine, **kwargs):
+    result = merge3(BASE, theirs, mine, **kwargs)
+    return result.markdown, [conflict.reason for conflict in result.conflicts]
+
+
+def test_diff3_rules():
+    assert _merge(BASE.replace("P1", "T1"), BASE.replace("P3", "M3")) == ("# H\n\nT1\n\nP2\n\nM3\n", [])
+    assert _merge(BASE.replace("P2", "T2"), BASE.replace("P2", "M2"))[1] == ["MODIFIED"]
+    assert _merge(BASE.replace("P2", "X"), BASE.replace("P2", "X")) == ("# H\n\nP1\n\nX\n\nP3\n", [])
+    both = _merge(BASE.replace("P2\n\n", "P2\n\nTI\n\n"), BASE.replace("P2\n\n", "P2\n\nMI\n\n"))
+    assert both == ("# H\n\nP1\n\nP2\n\nTI\n\nMI\n\nP3\n", [])          # 都保留、对方在前
+    assert _merge(BASE.replace("P2", "T2"), BASE.replace("P2\n\n", ""))[1] == ["DELETED"]   # 删 vs 改
+    assert _merge(BASE.replace("P2\n\n", ""), BASE.replace("P2", "M2"))[1] == ["DELETED"]   # 改 vs 删
+    assert _merge(BASE.replace("P2\n\n", ""), BASE.replace("P2\n\n", "")) == ("# H\n\nP1\n\nP3\n", [])
+    assert _merge(BASE.replace("P1", "T1"), BASE.replace("P2", "M2")) == ("# H\n\nT1\n\nM2\n\nP3\n", [])   # 相邻各改一处
+    assert _merge(BASE.replace("P2", "T2"), BASE.replace("P2", "P2  ")) == ("# H\n\nP1\n\nT2\n\nP3\n", [])  # 只是写法差异
+
+
+def test_diff3_duplicate_paragraphs_and_insert_dedupe():
+    base = "X\n\nX\n\nX\n"
+    result = merge3(base, base + "\nT\n", "X\n\nY\n\nX\n")
+    assert result.conflicts or result.markdown == "X\n\nY\n\nX\n\nT\n"     # ∈ {正确, 冲突}
+    same = BASE.replace("P2\n\n", "P2\n\nS\n\n")
+    assert merge3(BASE, same, same, dedupe_inserts=True).markdown.count("S\n") == 1     # 同一账号重发：去重
+    assert merge3(BASE, same, same, dedupe_inserts=False).markdown.count("S\n") == 2    # 不同账号：都保留
+    assert merge3("- a\n- b\n", "- a\n- b\n- t\n", "- a\n- m\n- b\n").markdown == "- a\n- m\n- b\n- t\n"

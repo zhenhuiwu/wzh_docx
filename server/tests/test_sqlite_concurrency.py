@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.db import connect, migrate, write_transaction
 from app.identity import create_user
 from app.main import create_app
+from tests.test_document_access import members  # noqa: F401
+from tests.test_documents import document_context  # noqa: F401
 
 
 def _path() -> Path:
@@ -76,3 +78,61 @@ def test_locked_database_returns_503_database_busy(monkeypatch):
     assert response.status_code == 503, response.text
     assert response.json()["error"]["code"] == "DATABASE_BUSY"
     assert response.headers["Retry-After"] == "1"
+
+
+def test_five_writers_on_large_document_all_succeed(members, monkeypatch):  # noqa: F811
+    """用例 29：busy_timeout=5000 下 5 个线程对同一 2MB 文档的不同段并发提交：全部成功、无 503，写锁持有 <1s。"""
+    from contextlib import contextmanager
+
+    import app.document_commit as commit
+    from tests.test_document_access import PASSWORD, _as
+
+    client, project, document, _ = members
+    monkeypatch.setattr("app.documents._check_word", lambda *args, **kwargs: time.sleep(0.05))
+    paragraphs = [f"第 {index} 段：" + "测试正文内容，用于模拟大文档。" * 12 for index in range(9000)]
+    text = "# 大文档\n\n" + "\n\n".join(paragraphs) + "\n"
+    assert len(text.encode("utf-8")) > 2_000_000
+    accounts = []
+    with connect() as connection:
+        for index in range(5):
+            uid = create_user(account=f"w29-{index}", name=f"并发{index}", password=PASSWORD, roles=["template_manager"],
+                              connection=connection)
+            connection.execute("INSERT INTO project_members(project_id,user_id,role) VALUES(%s,%s,'editor')", (project, uid))
+            accounts.append(f"w29-{index}")
+        connection.commit()
+    headers = _as(client, "editor")
+    saved = client.patch(f"/api/v1/documents/{document['id']}/content",
+                         json={"expectedRevision": 0, "markdownContent": text, "allowMerge": True}, headers=headers)
+    assert saved.status_code == 200, saved.text
+    held: list[float] = []
+    original = commit.write_transaction
+
+    @contextmanager
+    def timed(connection):
+        with original(connection):
+            started = time.perf_counter()
+            yield connection
+            held.append(time.perf_counter() - started)
+
+    monkeypatch.setattr(commit, "write_transaction", timed)
+    results = []
+
+    def run(index):
+        with TestClient(create_app()) as own:
+            token = own.get("/api/v1/auth/csrf").json()["data"]["csrfToken"]
+            login = own.post("/api/v1/auth/login", json={"account": accounts[index], "password": PASSWORD},
+                             headers={"X-CSRF-Token": token})
+            mine = text.replace(paragraphs[1000 * (index + 1)], f"并发{index}修改。")
+            results.append(own.patch(f"/api/v1/documents/{document['id']}/content",
+                                     json={"expectedRevision": 1, "markdownContent": mine, "allowMerge": True},
+                                     headers={"X-CSRF-Token": login.json()["data"]["csrfToken"]}))
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert [response.status_code for response in results] == [200] * 5, [response.text[:200] for response in results]
+    final = client.get(f"/api/v1/documents/{document['id']}").json()["data"]
+    assert final["revision"] == 6 and all(f"并发{index}修改。" in final["markdownContent"] for index in range(5))
+    assert held and max(held) < 1.0, held
