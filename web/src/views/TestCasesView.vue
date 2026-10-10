@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StatePanel from "../components/StatePanel.vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
@@ -487,59 +488,73 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
 </script>
 
 <template>
-  <section class="test-page">
+  <section class="view fill test-page">
     <header class="page-head">
-      <h1>{{ taskId ? task?.name || "测试任务" : "测试用例管理" }}</h1>
-      <button v-if="taskId" type="button" class="ghost" @click="backToList">返回任务列表</button>
-      <button v-else type="button" class="primary" @click="openCreate">新建测试任务</button>
+      <div>
+        <h1>{{ taskId ? task?.name || "测试任务" : "测试用例管理" }}</h1>
+        <p class="page-desc">{{ taskId ? "从测试计划提取测试项，勾选后运行并查看执行结果。" : "上传测试计划，自动提取测试项并执行；结果可写回项目文档。" }}</p>
+      </div>
+      <div class="page-actions">
+        <button v-if="taskId" type="button" class="ghost" @click="backToList">返回任务列表</button>
+        <button v-else type="button" class="primary" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建测试任务</button>
+      </div>
     </header>
 
-    <div v-if="!taskId" class="test-surface">
-      <form class="task-query" @submit.prevent="search">
+    <div v-if="!taskId" class="card test-surface">
+      <form class="query task-query" @submit.prevent="search">
         <label>任务名称<input v-model="draft.name" type="search" class="control" :disabled="phase === 'loading'" /></label>
         <label>所属项目<select v-model="draft.projectId" class="control" aria-label="筛选所属项目" :disabled="projectsLoading || phase === 'loading'"><option value="">全部项目</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
         <div class="query-actions"><button type="submit" class="primary" :disabled="phase === 'loading'">查询</button><button type="button" class="ghost" :disabled="phase === 'loading'" @click="draft = { name: '', projectId: '' }; search()">重置</button></div>
       </form>
-      <p v-if="projectsError" class="error-strip" role="alert">项目读取失败：{{ projectsError }} <button type="button" class="ghost" @click="loadProjects">重试</button></p>
-      <div v-if="phase === 'loading'" class="state-panel" role="status">正在读取测试任务…</div>
-      <div v-else-if="phase === 'error'" class="state-panel" role="alert"><strong>测试任务加载失败</strong><p>{{ errorText }}</p><button type="button" class="ghost" @click="loadList">重试</button></div>
-      <div v-else-if="!tasks.length" class="state-panel"><strong>{{ applied.name || applied.projectId ? "没有找到测试任务" : "还没有测试任务" }}</strong></div>
-      <div v-else class="task-list">
-        <div class="task-row task-columns" aria-hidden="true"><span>任务名称</span><span>所属项目</span><span>状态</span><span>操作</span></div>
-        <button v-for="item in tasks" :key="item.id" type="button" class="task-row" @click="openTask(item.id)"><strong>{{ item.name }}</strong><span>{{ item.projectName || projects.find(project => project.id === item.projectId)?.name || "—" }}</span><span class="state-label" :data-state="item.status">{{ statusLabel(item.status) }}</span><span class="open-link">打开 →</span></button>
+      <p v-if="projectsError" class="notice" role="alert">项目读取失败：{{ projectsError }} <button type="button" class="text" @click="loadProjects">重试</button></p>
+      <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取测试任务…" />
+      <StatePanel v-else-if="phase === 'error'" kind="error" title="测试任务加载失败" :text="errorText"><button type="button" class="ghost" @click="loadList">重试</button></StatePanel>
+      <StatePanel v-else-if="!tasks.length" :title="applied.name || applied.projectId ? '没有找到测试任务' : '还没有测试任务'" :text="applied.name || applied.projectId ? '换个条件试试。' : '新建测试任务并上传测试计划 Word 后，可自动提取测试项。'" />
+      <div v-else class="table-wrap task-list">
+        <table>
+          <thead><tr><th>任务名称</th><th class="col-project">所属项目</th><th class="col-state">状态</th><th class="col-ops th-right">操作</th></tr></thead>
+          <tbody>
+            <tr v-for="item in tasks" :key="item.id" class="task-row" @click="openTask(item.id)">
+              <td class="task-name">{{ item.name }}</td>
+              <td>{{ item.projectName || projects.find(project => project.id === item.projectId)?.name || "—" }}</td>
+              <td><span class="state-label" :data-state="item.status">{{ statusLabel(item.status) }}</span></td>
+              <td class="ops"><button type="button" class="text" :aria-label="`打开测试任务：${item.name}`" @click.stop="openTask(item.id)">打开</button></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <nav class="pager" aria-label="测试任务分页"><span class="total">共 {{ total }} 个任务</span><label>每页<select v-model.number="pageSize" class="control" aria-label="每页" :disabled="phase !== 'ready'" @change="page = 1; loadList()"><option :value="10">10 条</option><option :value="20">20 条</option><option :value="50">50 条</option></select></label><span>第 {{ page }} / {{ pageCount }} 页</span><button type="button" class="ghost" :disabled="phase !== 'ready' || page <= 1" @click="changePage(page - 1)">上一页</button><button type="button" class="ghost" :disabled="phase !== 'ready' || page >= pageCount" @click="changePage(page + 1)">下一页</button><form @submit.prevent="changePage(targetPage)"><label>页码<input v-model.number="targetPage" class="control" type="number" min="1" :max="pageCount" :disabled="phase !== 'ready' || !total" required /></label><button type="submit" class="ghost" :disabled="phase !== 'ready' || !total">跳转</button></form></nav>
+      <nav v-if="phase === 'ready' && tasks.length" class="pager" aria-label="测试任务分页"><span class="total">共 {{ total }} 个任务</span><label>每页<select v-model.number="pageSize" class="control" aria-label="每页" :disabled="phase !== 'ready'" @change="page = 1; loadList()"><option :value="10">10 条</option><option :value="20">20 条</option><option :value="50">50 条</option></select></label><span>第 {{ page }} / {{ pageCount }} 页</span><button type="button" class="ghost" :disabled="phase !== 'ready' || page <= 1" @click="changePage(page - 1)">上一页</button><button type="button" class="ghost" :disabled="phase !== 'ready' || page >= pageCount" @click="changePage(page + 1)">下一页</button><form @submit.prevent="changePage(targetPage)"><label>页码<input v-model.number="targetPage" class="control" type="number" min="1" :max="pageCount" :disabled="phase !== 'ready' || !total" required /></label><button type="submit" class="ghost" :disabled="phase !== 'ready' || !total">跳转</button></form></nav>
     </div>
 
-    <div v-else class="test-surface">
-      <div v-if="detailPhase === 'loading'" class="state-panel" role="status">正在读取测试任务…</div>
-      <div v-else-if="detailPhase === 'error'" class="state-panel" role="alert"><strong>测试任务加载失败</strong><p>{{ detailError }}</p><button type="button" class="ghost" @click="loadDetail()">重试</button></div>
+    <div v-else class="card test-surface">
+      <StatePanel v-if="detailPhase === 'loading'" kind="loading" text="正在读取测试任务…" />
+      <StatePanel v-else-if="detailPhase === 'error'" kind="error" title="测试任务加载失败" :text="detailError"><button type="button" class="ghost" @click="loadDetail()">重试</button></StatePanel>
       <template v-else-if="task">
         <div class="detail-toolbar">
           <nav class="detail-tabs" aria-label="测试任务视图"><button type="button" :class="{ active: tab === 'cases' }" :aria-current="tab === 'cases' ? 'page' : undefined" @click="tab = 'cases'">测试项</button><button type="button" :class="{ active: tab === 'results' }" :aria-current="tab === 'results' ? 'page' : undefined" @click="tab = 'results'">执行结果</button></nav>
           <span class="state-label" :data-state="task.status" role="status">{{ analyzing ? "正在提取测试项" : activeRun?.stopRequested ? "正在停止" : running && tab === 'results' && activeResults.length ? `正在测试 ${finishedCount} / ${activeResults.length}` : statusLabel(task.status) }}</span>
-          <div class="toolbar-actions"><button type="button" class="ghost" :disabled="locked" @click="analyze">{{ analyzing ? "正在提取…" : task.cases.length ? "重新提取" : "从计划提取测试项" }}</button><button v-if="running" type="button" class="ghost stop-button" :disabled="operation === 'stop' || task.runs[0]?.stopRequested" @click="stop">{{ operation === 'stop' || task.runs[0]?.stopRequested ? "正在停止…" : "停止测试" }}</button><button v-else type="button" class="primary" :disabled="locked || !enabledCount" @click="run()">{{ operation === 'run' ? "正在启动…" : "运行已勾选测试项" }}</button></div>
+          <div class="toolbar-actions"><button type="button" class="ghost" :disabled="locked" @click="analyze">{{ analyzing ? "正在提取…" : task.cases.length ? "重新提取" : "从计划提取测试项" }}</button><button v-if="running" type="button" class="ghost danger stop-button" :disabled="operation === 'stop' || task.runs[0]?.stopRequested" @click="stop">{{ operation === 'stop' || task.runs[0]?.stopRequested ? "正在停止…" : "停止测试" }}</button><button v-else type="button" class="primary" :disabled="locked || !enabledCount" @click="run()">{{ operation === 'run' ? "正在启动…" : "运行已勾选测试项" }}</button></div>
         </div>
-        <p v-if="actionError || detailError || task.error" class="error-strip" role="alert">{{ actionError || detailError || task.error }}</p>
-        <div class="config-row"><details class="task-config"><summary>测试配置</summary><dl><div><dt>所属项目</dt><dd>{{ task.projectName || projects.find(project => project.id === task?.projectId)?.name || "—" }}</dd></div><div><dt>测试计划</dt><dd>{{ task.planName || "未提供" }}</dd></div><div><dt>功能测试方式</dt><dd>{{ task.executionMode === "agent" ? "AI 实时操作" : "按固定步骤" }}</dd></div><div><dt>前端地址</dt><dd>{{ task.frontendUrl || "未提供" }}</dd></div><div><dt>前端源码</dt><dd>{{ task.frontendRoot || "未提供" }}</dd></div><div><dt>后端地址</dt><dd>{{ task.backendUrl || "未提供" }}</dd></div><div><dt>后端源码</dt><dd>{{ task.backendRoot || "未提供" }}</dd></div><div><dt>允许修改的测试数据</dt><dd>{{ task.dataScope || "未提供" }}</dd></div></dl></details><button type="button" class="ghost" :disabled="locked" @click="openEdit">编辑配置</button></div>
+        <p v-if="actionError || detailError || task.error" class="notice error-strip" role="alert">{{ actionError || detailError || task.error }}</p>
+        <div class="config-row"><details class="task-config"><summary>测试配置</summary><dl><div><dt>所属项目</dt><dd>{{ task.projectName || projects.find(project => project.id === task?.projectId)?.name || "—" }}</dd></div><div><dt>测试计划</dt><dd>{{ task.planName || "未提供" }}</dd></div><div><dt>功能测试方式</dt><dd>{{ task.executionMode === "agent" ? "AI 实时操作" : "按固定步骤" }}</dd></div><div><dt>前端地址</dt><dd>{{ task.frontendUrl || "未提供" }}</dd></div><div><dt>前端源码</dt><dd>{{ task.frontendRoot || "未提供" }}</dd></div><div><dt>后端地址</dt><dd>{{ task.backendUrl || "未提供" }}</dd></div><div><dt>后端源码</dt><dd>{{ task.backendRoot || "未提供" }}</dd></div><div><dt>允许修改的测试数据</dt><dd>{{ task.dataScope || "未提供" }}</dd></div></dl></details><button type="button" class="ghost sm" :disabled="locked" @click="openEdit">编辑配置</button></div>
 
         <div v-if="tab === 'cases'" class="case-area">
-          <div v-if="analyzing && !task.cases.length" class="state-panel" role="status">正在读取测试计划和源码…</div>
-          <div v-else-if="!task.cases.length" class="state-panel"><strong>尚未提取测试项</strong><button type="button" class="primary" :disabled="locked" @click="analyze">提取测试项</button></div>
+          <StatePanel v-if="analyzing && !task.cases.length" kind="loading" text="正在读取测试计划和源码…" />
+          <StatePanel v-else-if="!task.cases.length" title="尚未提取测试项" text="从测试计划 Word 中提取测试项后，可勾选并运行。"><button type="button" class="primary" :disabled="locked" @click="analyze">提取测试项</button></StatePanel>
           <article v-for="item in task.cases" :key="item.id" class="case-block">
-            <header class="case-head"><label class="case-title"><input type="checkbox" :checked="item.enabled && !missingInput(item)" :disabled="locked || Boolean(missingInput(item))" :aria-label="`选择测试项：${item.title}`" @change="toggleCase(item, $event)" /><strong>{{ item.title }}</strong></label><span class="kind-label">{{ kindLabel(item.kind) }}</span><button type="button" class="ghost" :aria-label="`运行测试项：${item.title}`" :disabled="locked || !item.enabled || Boolean(missingInput(item))" @click="run([item.id])">运行此项</button></header>
+            <header class="case-head"><label class="case-title"><input type="checkbox" :checked="item.enabled && !missingInput(item)" :disabled="locked || Boolean(missingInput(item))" :aria-label="`选择测试项：${item.title}`" @change="toggleCase(item, $event)" /><strong>{{ item.title }}</strong></label><span class="tag plain kind-label">{{ kindLabel(item.kind) }}</span><button type="button" class="ghost sm" :aria-label="`运行测试项：${item.title}`" :disabled="locked || !item.enabled || Boolean(missingInput(item))" @click="run([item.id])">运行此项</button></header>
             <dl class="case-facts"><div class="full-row"><dt>预期结果</dt><dd>{{ item.expected || "未确定" }}</dd></div></dl>
             <details class="test-procedure"><summary>{{ item.kind === 'unit' ? "测试步骤与代码" : "测试步骤与依据" }}</summary><dl class="case-facts"><div><dt>计划依据</dt><dd>{{ item.planReference || "未提取到计划依据" }}</dd></div><div><dt>代码位置</dt><dd>{{ item.sourceReference || "未确定" }}</dd></div></dl><ol v-if="item.steps?.length" class="planned-steps"><li v-for="(step, index) in item.steps" :key="index"><strong>{{ stepLabel(step) }}</strong><details v-if="stepDetails(step)"><summary>操作参数</summary><pre>{{ stepDetails(step) }}</pre></details><pre v-if="stepCode(step)">{{ stepCode(step) }}</pre></li></ol></details>
-            <div v-if="missingInput(item)" class="missing-input"><span>缺少条件：{{ missingInput(item) }}</span><button type="button" class="ghost" :disabled="locked" @click="openEdit">补充配置</button></div>
+            <div v-if="missingInput(item)" class="missing-input"><span>缺少条件：{{ missingInput(item) }}</span><button type="button" class="ghost sm" :disabled="locked" @click="openEdit">补充配置</button></div>
           </article>
         </div>
 
         <div v-else class="results-area">
-          <div v-if="!task.runs.length" class="state-panel"><strong>还没有执行记录</strong><button type="button" class="ghost" @click="tab = 'cases'">查看测试项</button></div>
+          <StatePanel v-if="!task.runs.length" title="还没有执行记录" text="在“测试项”中勾选并运行后，结果会显示在这里。"><button type="button" class="ghost" @click="tab = 'cases'">查看测试项</button></StatePanel>
           <template v-else>
             <div class="run-toolbar"><label>执行记录<select v-model="runId" class="control" aria-label="执行记录" @change="resultCaseId = ''"><option v-for="record in task.runs" :key="record.id" :value="record.id">{{ dateLabel(record.startedAt) }} · {{ statusLabel(record.status) }}</option></select></label><div class="run-actions"><button type="button" class="ghost" :disabled="downloading || !reportReady" @click="downloadReport">{{ downloading ? "正在生成 Word…" : "下载测试报告 Word" }}</button><button type="button" class="primary" :disabled="writing || !reportReady" @click="openWrite">补充到文档</button></div></div>
-            <p v-if="currentRun?.error || currentRun?.result?.error" class="error-strip" role="alert">{{ currentRun.error || currentRun.result.error }}</p>
-            <div v-if="!results.length" class="state-panel" role="status">{{ currentRun && ['running', 'queued', 'stopping'].includes(currentRun.status) ? "正在启动测试…" : "本次执行没有测试结果" }}</div>
+            <p v-if="currentRun?.error || currentRun?.result?.error" class="notice error-strip" role="alert">{{ currentRun.error || currentRun.result.error }}</p>
+            <StatePanel v-if="!results.length" :kind="currentRun && ['running', 'queued', 'stopping'].includes(currentRun.status) ? 'loading' : 'empty'" :text="currentRun && ['running', 'queued', 'stopping'].includes(currentRun.status) ? '正在启动测试…' : '本次执行没有测试结果'" />
             <div v-else class="result-workspace">
               <nav class="result-list" aria-label="测试结果"><button v-for="item in results" :key="item.caseId" type="button" :class="{ selected: currentResult?.caseId === item.caseId }" @click="resultCaseId = item.caseId"><strong>{{ item.title }}</strong><span class="state-label" :data-state="item.status">{{ statusLabel(item.status) }}</span></button></nav>
               <article v-if="currentResult" ref="resultDetail" class="result-detail">
@@ -564,9 +579,9 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
       </template>
     </div>
 
-    <dialog v-if="creating" ref="createDialog" class="test-dialog" aria-labelledby="create-test-title" @cancel="submitting && $event.preventDefault()" @close="creating = false; form.testPassword = ''; editingId = ''">
+    <dialog v-if="creating" ref="createDialog" class="app-dialog test-dialog" aria-labelledby="create-test-title" @cancel="submitting && $event.preventDefault()" @close="creating = false; form.testPassword = ''; editingId = ''">
       <form novalidate @submit.prevent="submitCreate">
-        <div class="dialog-head"><h2 id="create-test-title">{{ editingId ? "编辑测试配置" : "新建测试任务" }}</h2><button type="button" class="ghost" :disabled="submitting" :aria-label="editingId ? '关闭编辑测试配置' : '关闭新建测试任务'" @click="closeCreate">关闭</button></div>
+        <div class="dialog-head"><h2 id="create-test-title">{{ editingId ? "编辑测试配置" : "新建测试任务" }}</h2><button type="button" class="subtle icon-close" :disabled="submitting" :aria-label="editingId ? '关闭编辑测试配置' : '关闭新建测试任务'" @click="closeCreate"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
         <fieldset :disabled="submitting" class="dialog-fields">
           <label>任务名称<input ref="nameInput" v-model="form.name" class="control" required maxlength="120" /></label>
           <label>所属项目<select v-model="form.projectId" class="control" aria-label="所属项目" :disabled="Boolean(editingId) || projectsLoading || !projects.length" required><option value="">{{ projectsLoading ? "正在读取项目…" : "请选择项目" }}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
@@ -584,12 +599,12 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
           <label class="full-row">允许修改的测试数据范围<textarea v-model="form.dataScope" class="control" rows="2" /></label>
           <details class="full-row concurrency-fields"><summary>并发测试参数</summary><div><label>并发数<input v-model.number="form.concurrency" type="number" min="1" max="20" class="control" required /></label><label>请求总数<input v-model.number="form.requests" type="number" min="1" max="200" class="control" required /></label></div></details>
         </fieldset>
-        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+        <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         <div class="dialog-actions"><button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button><button type="submit" class="primary" :disabled="submitting || projectsLoading || !projects.length">{{ submitting ? editingId ? "正在保存…" : "正在上传并创建…" : editingId ? "保存配置" : "创建测试任务" }}</button></div>
       </form>
     </dialog>
-    <dialog v-if="writeOpen" ref="writeDialog" class="test-dialog" aria-labelledby="write-test-title" @cancel="writing && $event.preventDefault()" @close="writeOpen = false; ++writeRequest">
-      <div class="dialog-head"><h2 id="write-test-title">补充测试结果</h2><button type="button" class="ghost" :disabled="writing" aria-label="关闭补充测试结果" @click="closeWrite">关闭</button></div>
+    <dialog v-if="writeOpen" ref="writeDialog" class="app-dialog test-dialog" aria-labelledby="write-test-title" @cancel="writing && $event.preventDefault()" @close="writeOpen = false; ++writeRequest">
+      <div class="dialog-head"><h2 id="write-test-title">补充测试结果</h2><button type="button" class="subtle icon-close" :disabled="writing" aria-label="关闭补充测试结果" @click="closeWrite"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
       <div v-if="writeSaved" class="state-panel" role="status"><strong>{{ writeSaved.insertedCount ? "已补充测试结果" : "这些测试结果已在文档中" }}</strong><p>{{ writeSaved.documentName }}</p><RouterLink class="primary" :to="`/projects/${writeSaved.projectId}/documents/${writeSaved.documentId}`" @click="closeWrite">打开文档</RouterLink></div>
       <div v-else-if="writePhase === 'loading'" class="state-panel" role="status">正在读取项目文档…</div>
       <div v-else-if="writePhase === 'error'" class="state-panel" role="alert"><strong>文档读取失败</strong><p>{{ writeError }}</p><button type="button" class="ghost" @click="loadWriteDocuments">重试</button></div>
@@ -600,119 +615,111 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
           <label>写入位置<select v-model="writeHeading" class="control" aria-label="写入位置" :disabled="writeDocumentLoading || !writeDocument" required><option value="pending" disabled>{{ writeDocumentLoading ? "正在读取章节…" : "请选择写入位置" }}</option><option value="">文档末尾</option><option v-for="item in writeHeadings" :key="item.index" :value="String(item.index)">{{ item.text }}</option></select></label>
           <fieldset class="write-cases full-row"><legend>要补充的测试项</legend><label v-for="item in writeRun?.result.cases" :key="item.caseId" class="write-case"><input v-model="writeCaseIds" type="checkbox" :value="item.caseId" :aria-label="'补充测试项：' + item.title" /><span>{{ item.title }}</span><span class="state-label" :data-state="item.status">{{ statusLabel(item.status) }}</span></label></fieldset>
         </fieldset>
-        <p v-if="writeError" class="form-error" role="alert">{{ writeError }} <button v-if="writeDocumentId && !writeDocument && !writeDocumentLoading" type="button" class="ghost" :disabled="writing" @click="loadWriteDocument">重新读取文档</button></p>
+        <p v-if="writeError" class="form-alert" role="alert">{{ writeError }} <button v-if="writeDocumentId && !writeDocument && !writeDocumentLoading" type="button" class="ghost" :disabled="writing" @click="loadWriteDocument">重新读取文档</button></p>
         <div class="dialog-actions"><button type="button" class="ghost" :disabled="writing" @click="closeWrite">取消</button><button type="submit" class="primary" :disabled="writing || writeDocumentLoading">{{ writing ? "正在补充…" : "写入测试结果" }}</button></div>
       </form>
     </dialog>
-    <dialog ref="previewDialog" class="test-dialog screenshot-dialog" aria-labelledby="screenshot-title"><div class="dialog-head"><h2 id="screenshot-title">{{ previewName || "测试截图" }}</h2><button type="button" class="ghost" @click="previewDialog?.close()">关闭截图</button></div><img v-if="previewUrl" :src="previewUrl" :alt="previewName" /></dialog>
+    <dialog ref="previewDialog" class="app-dialog test-dialog screenshot-dialog" aria-labelledby="screenshot-title"><div class="dialog-head"><h2 id="screenshot-title">{{ previewName || "测试截图" }}</h2><button type="button" class="subtle icon-close" aria-label="关闭截图" @click="previewDialog?.close()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div><img v-if="previewUrl" :src="previewUrl" :alt="previewName" /></dialog>
   </section>
 </template>
 
 <style scoped>
-.test-page { display:flex; flex:none; flex-direction:column; min-width:0; min-height:0; height:calc(100vh - var(--space-7) - var(--space-3) - var(--space-5) * 2); gap:var(--space-5); }
-.page-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-5); padding:var(--space-3) var(--space-2) 0; }
-.page-head h1 { min-width:0; margin:0; font-size:calc(var(--text-md) * 1.75); line-height:1.25; overflow-wrap:anywhere; }
-.page-head button { flex-shrink:0; }
-.test-surface { display:flex; flex:1; flex-direction:column; min-height:0; min-width:0; width:100%; background:var(--sheet); border:1px solid var(--rule); border-radius:var(--radius-sheet); }
-.task-query { display:flex; align-items:end; gap:var(--space-4); padding:var(--space-5); border-bottom:1px solid var(--rule); }
-.task-query label { display:grid; gap:var(--space-1); width:calc(var(--space-7) * 7); color:var(--ink-secondary); font-size:var(--text-sm); }
-.task-query .query-actions { display:flex; gap:var(--space-2); }
-.state-panel { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); padding:var(--space-5); min-height:calc(var(--space-7) * 5); color:var(--ink-secondary); text-align:center; }
-.state-panel strong { color:var(--ink); font-size:var(--text-md); }
-.state-panel[role="alert"] strong { color:var(--fault); }
-.state-panel p { margin:0; max-width:100%; overflow-wrap:anywhere; }
-.task-list { flex:1; min-height:0; overflow:auto; }
-.task-row { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) calc(var(--space-7) * 3) calc(var(--space-7) * 2); align-items:center; gap:var(--space-5); width:100%; min-height:calc(var(--space-7) + var(--space-2)); padding:var(--space-3) var(--space-5); border:0; border-bottom:1px solid var(--rule); background:var(--sheet); color:var(--ink); font:inherit; text-align:left; cursor:pointer; }
-.task-row > * { min-width:0; overflow-wrap:anywhere; }
-.task-row strong { font-size:var(--text-md); }
-.task-row:hover { background:var(--desk); }
-.task-row:focus-visible,.detail-tabs button:focus-visible,.result-list button:focus-visible,.evidence-image:focus-visible { outline:2px solid var(--stamp); outline-offset:-2px; }
-.task-columns { min-height:var(--space-7); background:var(--desk); color:var(--ink-secondary); cursor:default; font-size:var(--text-sm); }
-.open-link { text-align:right; color:var(--stamp); }
-.pager { flex-shrink:0; gap:var(--space-3); margin-top:auto; padding:var(--space-3) var(--space-5); border-top:1px solid var(--rule); color:var(--ink-secondary); font-size:var(--text-sm); }
-.pager .total { margin-right:auto; }
-.pager label,.pager form { display:flex; align-items:center; gap:var(--space-2); }
-.pager .control { width:calc(var(--space-7) * 2); }
-.detail-toolbar { display:flex; flex-shrink:0; align-items:center; gap:var(--space-5); padding:0 var(--space-5); min-height:calc(var(--space-7) + var(--space-4)); border-bottom:1px solid var(--rule); }
+.test-surface { overflow:hidden; }
+.task-query label { min-width:0; }
+.task-list { flex:1; min-height:0; overflow-y:auto; }
+.task-list table { table-layout:fixed; }
+.col-project { width:28%; }
+.col-state { width:14%; }
+.col-ops { width:10%; }
+.task-row { cursor:pointer; }
+.task-name { font-weight:var(--weight-medium); overflow-wrap:anywhere; white-space:normal; }
+.task-list td { white-space:normal; overflow-wrap:anywhere; }
+
+/* 状态胶囊：与全局 .status 一致，按英文状态值着色 */
+.state-label { display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 var(--space-2); border-radius:var(--radius-control); background:var(--gray-100); color:var(--gray-700); font-size:var(--text-xs); line-height:22px; font-weight:var(--weight-medium); white-space:nowrap; }
+.state-label::before { content:""; width:6px; height:6px; border-radius:var(--radius-pill); background:currentColor; }
+.state-label[data-state="passed"],.state-label[data-state="completed"] { background:var(--success-50); color:var(--success-600); }
+.state-label[data-state="running"],.state-label[data-state="analyzing"],.state-label[data-state="queued"] { background:var(--info-50); color:var(--info-600); }
+.state-label[data-state="failed"] { background:var(--danger-50); color:var(--danger-600); }
+.state-label[data-state="blocked"],.state-label[data-state="stopped"],.state-label[data-state="stopping"] { background:var(--warning-50); color:var(--warning-600); }
+
+.detail-toolbar { display:flex; flex-shrink:0; align-items:center; gap:var(--space-4); padding:0 var(--space-4); min-height:52px; border-bottom:1px solid var(--border-subtle); }
 .detail-tabs { display:flex; align-self:stretch; gap:var(--space-5); }
-.detail-tabs button { padding:0; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--ink-secondary); font:inherit; font-size:var(--text-md); cursor:pointer; }
-.detail-tabs button.active { color:var(--stamp); border-bottom-color:var(--stamp); font-weight:600; }
+.detail-tabs button { padding:0 2px; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--text-md); cursor:pointer; transition:color var(--duration); }
+.detail-tabs button:hover { color:var(--text-primary); }
+.detail-tabs button.active { color:var(--brand-600); border-bottom-color:var(--brand-600); font-weight:var(--weight-medium); }
+.detail-tabs button:focus-visible,.result-list button:focus-visible,.evidence-image:focus-visible { outline:none; box-shadow:var(--focus-shadow); }
 .toolbar-actions { display:flex; margin-left:auto; gap:var(--space-2); }
-.state-label { color:var(--ink-secondary); font-size:var(--text-sm); white-space:nowrap; }
-.state-label[data-state="passed"],.state-label[data-state="completed"] { color:var(--ok); }
-.state-label[data-state="running"],.state-label[data-state="analyzing"] { color:var(--stamp); }
-.state-label[data-state="failed"] { color:var(--fault); }
-.state-label[data-state="blocked"],.state-label[data-state="stopped"] { color:var(--warn); }
-.stop-button { color:var(--fault); }
-.error-strip { display:flex; flex-shrink:0; align-items:center; gap:var(--space-3); margin:0; padding:var(--space-3) var(--space-5); color:var(--fault); background:var(--fault-wash); border-bottom:1px solid var(--rule); overflow-wrap:anywhere; }
-.config-row { display:flex; flex-shrink:0; align-items:flex-start; gap:var(--space-4); padding:var(--space-3) var(--space-5); border-bottom:1px solid var(--rule); }
-.config-row > button { flex-shrink:0; }
-.task-config { flex:1; min-width:0; padding:var(--space-2) 0; color:var(--ink-secondary); font-size:var(--text-sm); }
+.error-strip { flex-shrink:0; margin:var(--space-3) var(--space-4) 0; }
+.config-row { display:flex; flex-shrink:0; align-items:flex-start; gap:var(--space-4); padding:var(--space-2) var(--space-4); border-bottom:1px solid var(--border-subtle); background:var(--bg-subtle); }
+.config-row > button { flex-shrink:0; margin-top:2px; }
+.task-config { flex:1; min-width:0; padding:var(--space-2) 0; color:var(--text-secondary); font-size:var(--text-sm); }
 summary { cursor:pointer; }
-summary:focus-visible { outline:2px solid var(--stamp); outline-offset:2px; }
+summary:focus-visible { outline:none; border-radius:var(--radius-control); box-shadow:var(--focus-shadow); }
 .task-config dl,.case-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-3) var(--space-5); margin:var(--space-3) 0 0; }
+.task-config dl { grid-template-columns:repeat(4,minmax(0,1fr)); }
 dl div { min-width:0; }
-dt { color:var(--ink-secondary); font-size:var(--text-sm); }
-dd { margin:var(--space-1) 0 0; color:var(--ink); overflow-wrap:anywhere; }
+dt { color:var(--text-tertiary); font-size:var(--text-xs); }
+dd { margin:2px 0 0; color:var(--text-primary); font-size:var(--text-sm); overflow-wrap:anywhere; }
 .case-area { display:flex; flex:1; flex-direction:column; min-height:0; overflow:auto; }
-.case-block { padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--rule); }
-.case-head { display:flex; align-items:center; gap:var(--space-4); }
-.case-title { display:flex; align-items:center; gap:var(--space-3); flex:1; min-width:0; color:var(--ink); font-size:var(--text-md); overflow-wrap:anywhere; }
-.case-title input { flex-shrink:0; accent-color:var(--stamp); }
-.case-title input:focus-visible { outline:2px solid var(--stamp); outline-offset:2px; }
-.kind-label { color:var(--ink-secondary); font-size:var(--text-sm); white-space:nowrap; }
+.case-block { padding:var(--space-4); border-bottom:1px solid var(--border-subtle); }
+.case-block:hover { background:var(--bg-subtle); }
+.case-head { display:flex; align-items:center; gap:var(--space-3); }
+.case-title { display:flex; align-items:center; gap:var(--space-3); flex:1; min-width:0; color:var(--text-primary); font-size:var(--text-md); overflow-wrap:anywhere; }
+.case-title strong { font-weight:var(--weight-medium); }
+.case-title input { flex-shrink:0; accent-color:var(--brand-600); }
+.case-title input:focus-visible { outline:none; box-shadow:var(--focus-shadow); }
+.kind-label { flex:none; }
+.case-block .case-facts { margin-left:calc(13px + var(--space-3)); }
 .full-row { grid-column:1 / -1; }
-.planned-steps { margin:var(--space-4) 0 0; padding-left:var(--space-5); color:var(--ink); overflow-wrap:anywhere; }
+.planned-steps { margin:var(--space-3) 0 0; padding-left:var(--space-5); color:var(--text-primary); font-size:var(--text-sm); overflow-wrap:anywhere; }
 .planned-steps li + li { margin-top:var(--space-1); }
-.test-procedure { margin-top:var(--space-4); color:var(--ink-secondary); }
-.test-procedure pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:var(--space-3); border:1px solid var(--rule); background:var(--desk); font-size:var(--text-sm); }
-.missing-input { display:flex; align-items:center; gap:var(--space-4); margin:var(--space-3) 0 0; padding:var(--space-2) var(--space-3); color:var(--warn); background:var(--warn-wash); overflow-wrap:anywhere; }
+.test-procedure { margin:var(--space-3) 0 0 calc(13px + var(--space-3)); color:var(--text-secondary); font-size:var(--text-sm); }
+.test-procedure pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:var(--space-3); border:1px solid var(--border-subtle); border-radius:var(--radius-control); background:var(--bg-subtle); font-family:var(--font-mono); font-size:var(--text-xs); }
+.missing-input { display:flex; align-items:center; gap:var(--space-4); margin:var(--space-3) 0 0 calc(13px + var(--space-3)); padding:var(--space-2) var(--space-3); border-radius:var(--radius-control); color:var(--warning-600); background:var(--warning-50); font-size:var(--text-sm); overflow-wrap:anywhere; }
 .missing-input span { flex:1; min-width:0; }
 .missing-input button { flex-shrink:0; }
 .results-area { display:flex; flex:1; flex-direction:column; min-height:0; }
-.run-toolbar { display:flex; flex-shrink:0; align-items:center; gap:var(--space-4); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--rule); }
-.run-toolbar label { display:flex; align-items:center; gap:var(--space-3); color:var(--ink-secondary); font-size:var(--text-sm); }
+.run-toolbar { display:flex; flex-shrink:0; align-items:center; gap:var(--space-4); padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-subtle); }
+.run-toolbar label { display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); font-size:var(--text-sm); }
 .run-toolbar .control { width:calc(var(--space-7) * 7); }
 .run-actions { display:flex; gap:var(--space-2); margin-left:auto; }
 .result-workspace { display:grid; flex:1; min-height:0; min-width:0; grid-template-columns:calc(var(--space-7) * 7) minmax(0,1fr); }
-.result-list { min-height:0; overflow:auto; padding:var(--space-3); border-right:1px solid var(--rule); }
-.result-list button { display:flex; align-items:start; justify-content:space-between; gap:var(--space-3); width:100%; margin:0; padding:var(--space-4) var(--space-3); border:0; border-bottom:1px solid var(--rule); border-radius:var(--radius-control); background:var(--sheet); color:var(--ink); font:inherit; text-align:left; cursor:pointer; }
-.result-list button:hover { background:var(--desk); }
-.result-list button.selected { background:var(--stamp-wash); color:var(--stamp); }
-.result-list strong { min-width:0; overflow-wrap:anywhere; }
+.result-list { min-height:0; overflow:auto; padding:var(--space-2); border-right:1px solid var(--border-subtle); }
+.result-list button { display:flex; align-items:start; justify-content:space-between; gap:var(--space-3); width:100%; margin:0 0 2px; padding:var(--space-3); border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font:inherit; font-size:var(--text-sm); text-align:left; cursor:pointer; }
+.result-list button:hover { background:var(--bg-hover); }
+.result-list button.selected { background:var(--brand-50); color:var(--brand-700); }
+.result-list strong { min-width:0; font-weight:var(--weight-medium); overflow-wrap:anywhere; }
 .result-detail { min-height:0; min-width:0; overflow:auto; padding:var(--space-5); }
-.result-head { display:flex; align-items:start; gap:var(--space-4); }
-.result-head h2 { flex:1; min-width:0; margin:0; font-size:calc(var(--text-md) * 1.25); overflow-wrap:anywhere; }
-.result-error { margin:var(--space-4) 0; padding:var(--space-3); background:var(--fault-wash); color:var(--fault); white-space:pre-wrap; overflow-wrap:anywhere; }
-.metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-4); padding:var(--space-4); margin:var(--space-4) 0; background:var(--desk); border:1px solid var(--rule); }
-.actual-steps { margin:var(--space-5) 0; padding-left:var(--space-5); }
+.result-head { display:flex; align-items:center; gap:var(--space-3); }
+.result-head h2 { flex:1; min-width:0; margin:0; font-size:var(--text-lg); font-weight:var(--weight-semibold); overflow-wrap:anywhere; }
+.result-error { margin:var(--space-4) 0; padding:var(--space-3); border-radius:var(--radius-control); background:var(--danger-50); color:var(--danger-700); font-size:var(--text-sm); white-space:pre-wrap; overflow-wrap:anywhere; }
+.metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-4); padding:var(--space-4); margin:var(--space-4) 0; border:1px solid var(--border-subtle); border-radius:var(--radius-sheet); background:var(--bg-subtle); }
+.metrics dd { font-size:var(--text-lg); font-weight:var(--weight-semibold); font-variant-numeric:tabular-nums; }
+.actual-steps { margin:var(--space-5) 0; padding-left:var(--space-5); font-size:var(--text-sm); }
 .actual-steps li { padding:0 0 var(--space-3) var(--space-2); }
 .actual-step > summary .step-head { display:inline-flex; width:calc(100% - var(--space-4)); vertical-align:middle; }
 .step-head { display:flex; gap:var(--space-4); justify-content:space-between; }
-.step-head strong { min-width:0; overflow-wrap:anywhere; }
-.actual-steps p { margin:var(--space-2) 0; white-space:pre-wrap; overflow-wrap:anywhere; }
-.evidence-image { display:block; width:calc(var(--space-7) * 12); max-width:100%; margin-top:var(--space-3); padding:0; border:1px solid var(--rule-strong); border-radius:var(--radius-sheet); background:var(--desk); cursor:pointer; }
+.step-head strong { min-width:0; font-weight:var(--weight-medium); overflow-wrap:anywhere; }
+.actual-steps p { margin:var(--space-2) 0; color:var(--text-secondary); white-space:pre-wrap; overflow-wrap:anywhere; }
+.evidence-image { display:block; width:calc(var(--space-7) * 12); max-width:100%; margin-top:var(--space-3); padding:0; overflow:hidden; border:1px solid var(--border-default); border-radius:var(--radius-sheet); background:var(--bg-subtle); cursor:zoom-in; }
 .evidence-image img { display:block; width:100%; height:auto; }
-.test-log { margin-top:var(--space-4); padding:var(--space-3); border:1px solid var(--rule); background:var(--desk); }
-.test-log pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:var(--text-sm); }
-.test-dialog { width:calc(var(--space-7) * 21); max-width:calc(100vw - var(--space-7) * 2); max-height:calc(100vh - var(--space-7)); padding:0; overflow:auto; border:1px solid var(--rule-strong); border-radius:var(--radius-sheet); background:var(--sheet); color:var(--ink); }
-.test-dialog::backdrop { background:var(--spine); opacity:.45; }
-.dialog-head { display:flex; justify-content:space-between; align-items:center; gap:var(--space-4); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--rule); }
-.dialog-head h2 { min-width:0; margin:0; font-size:calc(var(--text-md) * 1.25); overflow-wrap:anywhere; }
-.dialog-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-4) var(--space-5); min-width:0; margin:0; padding:var(--space-5); border:0; }
-.dialog-fields label { display:grid; gap:var(--space-1); min-width:0; color:var(--ink-secondary); font-size:var(--text-sm); }
-.dialog-fields label span { overflow-wrap:anywhere; }
-.write-cases { display:grid; gap:var(--space-3); min-width:0; margin:0; padding:var(--space-3) var(--space-4) var(--space-4); border:1px solid var(--rule); border-radius:var(--radius-control); }
-.write-cases legend { padding:0 var(--space-2); color:var(--ink-secondary); font-size:var(--text-sm); }
-.dialog-fields .write-case { display:flex; align-items:center; gap:var(--space-3); color:var(--ink); font-size:var(--text-md); }
-.write-case input { flex-shrink:0; accent-color:var(--stamp); }
-.write-case input:focus-visible { outline:2px solid var(--stamp); outline-offset:2px; }
-.write-case > span:first-of-type { flex:1; min-width:0; }
+.test-log { margin-top:var(--space-4); padding:var(--space-3); border:1px solid var(--border-subtle); border-radius:var(--radius-control); background:var(--bg-subtle); font-size:var(--text-sm); }
+.test-log pre { white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-mono); font-size:var(--text-xs); }
+.empty { margin:var(--space-5) 0; color:var(--text-tertiary); font-size:var(--text-sm); }
+
+.test-dialog { width:calc(var(--space-7) * 21); }
+.test-dialog .dialog-fields label { display:grid; gap:6px; min-width:0; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
+.test-dialog .dialog-fields label span { overflow-wrap:anywhere; color:var(--text-tertiary); font-size:var(--text-xs); font-weight:var(--weight-regular); }
+.test-dialog .state-panel { min-height:calc(var(--space-7) * 5); }
+.write-cases { display:grid; gap:var(--space-2); min-width:0; margin:0; padding:var(--space-3) var(--space-4) var(--space-4); border:1px solid var(--border-default); border-radius:var(--radius-control); }
+.write-cases legend { padding:0 var(--space-2); color:var(--text-secondary); font-size:var(--text-sm); }
+.test-dialog .dialog-fields .write-case { display:flex; align-items:center; gap:var(--space-3); color:var(--text-primary); font-weight:var(--weight-regular); }
+.write-case input { flex-shrink:0; accent-color:var(--brand-600); }
+.write-case > span:first-of-type { flex:1; min-width:0; color:var(--text-primary); font-size:var(--text-sm); }
+.concurrency-fields summary { color:var(--text-secondary); font-size:var(--text-sm); }
 .concurrency-fields > div { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-5); margin-top:var(--space-3); }
-.dialog-fields input[type="file"] { height:auto; min-height:var(--space-6); padding:var(--space-1) var(--space-2); }
-.dialog-fields .control:disabled { background:var(--desk); color:var(--ink-secondary); }
-.form-error { margin:0; padding:0 var(--space-5) var(--space-4); color:var(--fault); overflow-wrap:anywhere; }
-.dialog-actions { display:flex; justify-content:flex-end; gap:var(--space-2); padding:var(--space-4) var(--space-5); border-top:1px solid var(--rule); }
+.test-dialog .dialog-fields .control:disabled { background:var(--bg-subtle); color:var(--text-secondary); }
 .screenshot-dialog { width:calc(100vw - var(--space-7) * 2); }
 .screenshot-dialog > img { display:block; width:100%; height:auto; max-height:calc(100vh - var(--space-7) * 3); object-fit:contain; }
 </style>
