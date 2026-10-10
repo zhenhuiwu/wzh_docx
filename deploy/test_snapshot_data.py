@@ -185,23 +185,31 @@ def check_weak_passwords() -> None:
         ("123456", "产品编号 123456", "writer", "documents.markdown_content"),
         ("zhangsan", "普通正文", "zhangsan", "users.account"),
     ]
-    for password, document, account, where in cases:
+    for index, (password, document, account, where) in enumerate(cases):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             database, files, env_file = _weak_source(root, password, document, account)
             original = database.read_bytes()
+            # First case: the run creates new/package itself and must remove both on failure.
+            # Second case: an existing empty target belongs to the user and stays.
+            package = root / "new" / "package" if index == 0 else root / "package"
+            if index:
+                package.mkdir()
             try:
-                snapshot(database, files, env_file, root / "package", execute=True)
+                snapshot(database, files, env_file, package, execute=True)
             except CredentialLeftError as error:
                 assert where in str(error), str(error)
             else:
                 raise AssertionError(f"{where} must stop the migration")
             assert database.read_bytes() == original
-            assert not (root / "package" / "data").exists()
+            if index == 0:
+                assert not (root / "new").exists(), "failed run left its own empty target directory"
+            else:
+                assert package.is_dir() and not any(package.iterdir())
             # After a person reviewed it, the column can be allowed and ships unchanged.
-            metadata = snapshot(database, files, env_file, root / "package", execute=True,
+            metadata = snapshot(database, files, env_file, package, execute=True,
                                 allowed_leftovers=frozenset({where.split("（")[0]}) | {"users.account_key"})
-            with closing(sqlite3.connect(root / "package/data/app.db")) as copied:
+            with closing(sqlite3.connect(package / "data/app.db")) as copied:
                 assert copied.execute("SELECT markdown_content FROM documents").fetchone()[0] == document
                 assert copied.execute("SELECT account FROM users").fetchone()[0] == account
             assert metadata["scrubbed_credentials"]["accepted_leftovers"].get(where, 0) >= 1

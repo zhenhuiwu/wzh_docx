@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -301,8 +301,9 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
         if any((target / name).exists() for name in ("data", ".env", ".env.example", "部署校验.json", "使用说明.txt")):
             raise RuntimeError("目标已含部署数据或配置，拒绝覆盖；请使用新的部署目录。")
         before, env_digest = business_fingerprint(source), digest(env_file)
+        created = [path for path in (target, *target.parents) if not path.exists()]
         target.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=".snapshot-", dir=target) as temporary:
+        with remove_created_on_failure(created), TemporaryDirectory(prefix=".snapshot-", dir=target) as temporary:
             stage = Path(temporary)
             destination = stage / "data" / "app.db"
             destination.parent.mkdir()
@@ -368,6 +369,20 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
                 (stage / name).replace(target / name)
         return metadata
 
+
+
+@contextmanager
+def remove_created_on_failure(created: list[Path]):
+    """On failure remove the directories this run created (deepest first), only while empty."""
+    try:
+        yield
+    except BaseException:
+        for path in created:
+            try:
+                path.rmdir()
+            except OSError:
+                break
+        raise
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
