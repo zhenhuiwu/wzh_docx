@@ -87,7 +87,7 @@ def main() -> int:
                     failures += 1
                     E.OUT.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(E.OUT / f"identifier-{tag}-{attempt}.png"))
-                    print(f"FAIL {label}: {str(error).splitlines()[0][:300]}", flush=True)
+                    print(f"FAIL {label}: {(str(error).splitlines() or [repr(error)])[0][:300]}", flush=True)
                     page.reload()
                     expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
             final = data["zhang"].call("GET", f"/documents/{document['id']}")["markdownContent"]

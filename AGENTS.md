@@ -15,6 +15,16 @@
 - 对比度、焦点环、空态、错误态是否看得见。
 - 截图难看或错位，就继续改，不能口头说已经精致。
 
+## 自测
+
+全量 pytest 一律带 `DOCWB_E2E=1`，否则浏览器往返测试（`tests/test_editor_roundtrip.py`）会被跳过、结果不算全绿：
+
+```
+cd server && DOCWB_E2E=1 DOCWB_TEST_DATABASE_URL=sqlite:////tmp/<自己的目录>/pytest.db uv run pytest -q
+```
+
+需要本机已装 Playwright Chromium（`uv run playwright install chromium`）。报告里写“通过 N 个、跳过 M 个”，跳过数不为 0 要说明原因。
+
 ## 先读什么
 
 做界面时先读：
