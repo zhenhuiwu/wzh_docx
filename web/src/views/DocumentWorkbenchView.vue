@@ -77,7 +77,10 @@ const refreshingEditor = ref(false);
 /** 终验 F-M1：编辑区正在重绘或载入时的说明（“正在载入 张工 的更新…”等），显示在提示区。 */
 const refreshReason = ref("");
 // 终验 F-L1：打开文档后约 0.25 秒在确认其他标签与本机草稿，期间正文不可编辑——显示载入状态，不再无声丢键
-const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "") || (checkingDrafts.value && phase.value === "ready" ? "正在检查本机草稿，马上就能编辑…" : ""));
+/** 设计师建议 6：载入锁定期间已记下的字数（隐形输入框 + 缓冲的按键），在载入提示里告诉用户 */
+const loadHeld = ref(0);
+const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "")
+  || (checkingDrafts.value && phase.value === "ready" ? (loadHeld.value ? `正在检查本机草稿…已记下 ${loadHeld.value} 个字，载入后写在你点的位置。` : "正在检查本机草稿，马上就能编辑…") : ""));
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
@@ -1223,6 +1226,7 @@ function openLoadSink(event: MouseEvent) {
     sink.setAttribute("aria-label", "正文载入中，输入的内容先暂存，载入后写回");
     sink.setAttribute("data-testid", "load-sink");
     Object.assign(sink.style, { position: "fixed", left: `${event.clientX}px`, top: `${event.clientY}px`, width: "2px", height: "1.2em", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", zIndex: "1" });
+    sink.addEventListener("input", () => { loadHeld.value = [...sink.value].length; });
     sink.addEventListener("compositionstart", () => { loadSinkComposing = true; });
     sink.addEventListener("compositionend", () => { loadSinkComposing = false; if (!checkingDrafts.value) void flushLoadTyping(); });
     window.document.body.appendChild(sink);
@@ -1231,6 +1235,7 @@ function openLoadSink(event: MouseEvent) {
   loadSink.focus({ preventScroll: true });
 }
 function dropLoadSink() {
+  loadHeld.value = 0;
   loadSink?.remove();
   loadSink = null;
   loadSinkComposing = false;
@@ -1268,6 +1273,7 @@ async function flushLoadTyping() {
   }
   if (ime) noteAction("载入期间用输入法输入的内容没能写入（编辑区当时暂不可编辑），请重新输入。", 10000, "caret");
   else if (typed && !placed) noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
+  else if (typed && placed) noteAction(`载入期间输入的 ${[...typed].length} 个字已写在你点的位置。`, 3000);
 }
 function placeLoadCaret(point: { node: Node; offset: number }) {
   const root = editor.value;
@@ -1292,7 +1298,7 @@ function bufferLockedTyping(event: KeyboardEvent) {
     // 测试工程师 F-L1：载入锁定期间点了正文又打字：先记下，解锁后写回
     if (event.isComposing || event.key === "Process") { imeDuringLoad = true; return; }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.key.length === 1) { typedDuringLoad += event.key; event.preventDefault(); }
+    if (event.key.length === 1) { typedDuringLoad += event.key; loadHeld.value += 1; event.preventDefault(); }
     return;
   }
   if (!refreshingEditor.value && caretLostAt && Date.now() - caretLostAt < 30000 && event.target === window.document.body) {
