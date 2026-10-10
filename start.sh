@@ -26,11 +26,11 @@ echo "====================================="
 
 command -v uv >/dev/null 2>&1 || fail "未找到 uv，请先安装：https://docs.astral.sh/uv/"
 command -v curl >/dev/null 2>&1 || fail "未找到 curl（用于检查后端是否启动成功）"
-command -v node >/dev/null 2>&1 || fail "未找到 Node.js（需要 $MIN_NODE 及以上，见 web/.nvmrc）"
+command -v node >/dev/null 2>&1 || fail "未找到 Node.js（需要 $MIN_NODE 及以上，见 .nvmrc）"
 node -e '
   const [need, have] = [process.argv[1], process.versions.node].map(v => v.split(".").map(Number));
   process.exit(have[0] > need[0] || (have[0] === need[0] && have[1] >= need[1]) ? 0 : 1);
-' "$MIN_NODE" || fail "Node.js 版本过低：$(node --version)，需要 $MIN_NODE 及以上（见 web/.nvmrc）"
+' "$MIN_NODE" || fail "Node.js 版本过低：$(node --version)，需要 $MIN_NODE 及以上（见 .nvmrc）"
 
 # 有服务在监听该端口时返回 0。检查 127.0.0.1 和 localhost（vite 可能只监听 ::1）；
 # 不依赖 lsof/ss，Git Bash 也可用。

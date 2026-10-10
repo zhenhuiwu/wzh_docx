@@ -3,7 +3,7 @@
 面向公司内网的项目文档编制与测试取证系统：按 GJB 438C 等 Word 模板导入文档结构，由 AI 分章节辅助编写，在网页中编辑后导出 Word；并提供 AI 测试用例管理（真实执行、截图取证、生成 Word 报告），以及项目、用户、模板和 Skill 管理。
 
 - 后端：Python 3.12+、FastAPI、SQLite，依赖由 [uv](https://docs.astral.sh/uv/) 管理，代码在 `server/`。**uv 最低 0.4.30**：`server/uv.lock`（revision 5）已用 uv 0.4.30、0.5.0、0.5.31、0.6.0、0.6.17、0.7.0、0.7.22、0.8.0、0.8.24、0.9.5、0.10.0、0.12.23 实测：`uv export --frozen` / `uv lock --check` 都能读取，`uv lock` 也不会改写它；CI 固定使用 0.12.23
-- 前端：Vue 3 + TypeScript + Vite，代码在 `web/`，需要 **Node.js 22.13 及以上**（见 `web/.nvmrc`、`web/package.json` 的 `engines`；`web/.npmrc` 开启了 `engine-strict`，版本不够时 `npm ci` 直接失败）。前端依赖只以 `web/package-lock.json` 为准，仓库根目录没有 Node 工程
+- 前端：Vue 3 + TypeScript + Vite，代码在 `web/`，需要 **Node.js 22.13 及以上**（见仓库根目录的 `.nvmrc`、`web/package.json` 的 `engines`；`web/.npmrc` 开启了 `engine-strict`，版本不够时 `npm ci` 直接失败）。前端依赖只以 `web/package-lock.json` 为准，仓库根目录没有 Node 工程
 - 界面只按 1920×1080 固定桌面设计与验收，开发与验收地址固定为 http://localhost:5173 ，其他约束见 [AGENTS.md](AGENTS.md)
 - 设计与交接资料见 `docs/`；`docs/归档/` 中是已过时的历史说明
 
@@ -108,7 +108,7 @@ cd ../web && npm ci && npm run build && npm audit
 
 说明：
 
-- **运行 pytest 前先确认 `node --version` 是 22.13 及以上**（例如 `nvm use` 读取 `web/.nvmrc`）。测试执行器相关用例依赖 Node.js 22 的逐文件 `test:summary` 事件；PATH 中是更低版本时这些用例会被跳过（不是失败），跳过数会比 CI 多。
+- **运行 pytest 前先确认 `node --version` 是 22.13 及以上**（例如在仓库根目录执行 `nvm use`，读取根目录 `.nvmrc`）。测试执行器相关用例依赖 Node.js 22 的逐文件 `test:summary` 事件；PATH 中是更低版本时这些用例会被跳过（不是失败），跳过数会比 CI 多。
 - 原生 Visio 生成、Word 目录更新与版式预览需要 Windows 和本机 Microsoft Office，对应测试在其他平台跳过；非 Windows 环境调用这些功能会返回明确错误。
 - 持续集成配置见 `.github/workflows/ci.yml`（pytest + Playwright、ruff、部署快照检查、vue-tsc 构建、npm audit）。
 
