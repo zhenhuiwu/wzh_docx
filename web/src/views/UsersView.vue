@@ -13,6 +13,7 @@ import {
   type RoleDefinition,
 } from "../api/users";
 import StatePanel from "../components/StatePanel.vue";
+import { hasPermission, readSession } from "../session";
 import { formatDateTime, initialOf } from "../format";
 
 const page = ref(1);
@@ -41,6 +42,13 @@ const accountInput = ref<HTMLInputElement | null>(null);
 let usersRequest = 0;
 
 const globalRoles = computed(() => roles.value.filter((item) => item.scope === "global" && item.assignable));
+const roleHint = computed(() => {
+  const selected = globalRoles.value.find((item) => item.key === role.value);
+  return selected ? selected.description : "不选则只能访问被加入的项目；可在项目中按成员授予权限。";
+});
+const canManage = computed(() => hasPermission(readSession(), "users.manage"));
+// 给自己重置密码时后端不要求下次改密（09 审查 S2）。
+const pendingIsSelf = computed(() => Boolean(pending.value && pending.value.account === readSession()?.staffId));
 const roleName = computed(() => Object.fromEntries(roles.value.map((item) => [item.key, item.name])));
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
@@ -60,9 +68,6 @@ async function loadRoles() {
   rolesError.value = "";
   try {
     roles.value = await listRoles();
-    // 默认选最低权限的角色，避免顺手创建出系统管理员（02 评审 P1-8）。
-    const fallback = globalRoles.value.find((item) => item.key !== "system_admin") ?? globalRoles.value[0];
-    if (!role.value && fallback) role.value = fallback.key;
   } catch (error) {
     rolesError.value = messageOf(error);
   }
@@ -115,6 +120,7 @@ function cancelCreate() {
   password.value = "";
   personName.value = "";
   department.value = "";
+  role.value = "";
   formError.value = "";
 }
 
@@ -123,10 +129,6 @@ async function submitCreate() {
   formError.value = "";
   if (!account.value.trim() || !personName.value.trim()) {
     formError.value = "请填写账号和姓名";
-    return;
-  }
-  if (!role.value) {
-    formError.value = "角色还没有加载，暂时不能创建";
     return;
   }
   if (password.value.length < 12 || password.value.length > 1024) {
@@ -140,7 +142,8 @@ async function submitCreate() {
       password: password.value,
       name: personName.value.trim(),
       department: department.value.trim(),
-      globalRoles: [role.value],
+      // 不预选角色（09 审查 M3）：不选即不授予全局角色，账号只能访问被加入的项目。
+      globalRoles: role.value ? [role.value] : [],
     });
     notice.value = "账号已创建。";
     cancelCreate();
@@ -237,7 +240,7 @@ onMounted(async () => {
         <p class="page-desc">管理登录账号、全局角色与账号状态。</p>
       </div>
       <div class="page-actions">
-        <button type="button" class="primary" :disabled="submitting" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建用户</button>
+        <button v-if="canManage" type="button" class="primary" :disabled="submitting" @click="openCreate"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建用户</button>
       </div>
     </header>
 
@@ -327,10 +330,12 @@ onMounted(async () => {
           <div class="field"><label for="user-name" class="required">姓名</label><input id="user-name" v-model="personName" class="control" type="text" autocomplete="off" :disabled="submitting" /></div>
           <div class="field"><label for="user-department">部门</label><input id="user-department" v-model="department" class="control" type="text" autocomplete="off" :disabled="submitting" /></div>
           <div class="field">
-            <label for="user-role" class="required">角色</label>
-            <select id="user-role" v-model="role" class="control" :disabled="submitting || globalRoles.length === 0">
+            <label for="user-role">全局角色</label>
+            <select id="user-role" v-model="role" class="control" aria-describedby="user-role-hint" :disabled="submitting">
+              <option value="">不分配全局角色（仅项目成员）</option>
               <option v-for="item in globalRoles" :key="item.key" :value="item.key">{{ item.name }}</option>
             </select>
+            <p id="user-role-hint" class="hint">{{ roleHint }}</p>
           </div>
           <div class="field span-2">
             <label for="user-password" class="required">初始密码</label>
@@ -353,7 +358,8 @@ onMounted(async () => {
           <p class="dialog-text">
             <template v-if="pendingAction === 'disable'">停用后不能登录，已有会话会失效。</template>
             <template v-else-if="pendingAction === 'enable'">启用后可以重新登录。</template>
-            <template v-else-if="pendingAction === 'reset'">重置后原密码与已有会话失效，用户下次登录须修改密码。</template>
+            <template v-else-if="pendingAction === 'reset' && pendingIsSelf">重置后原密码与已有会话失效。</template>
+              <template v-else-if="pendingAction === 'reset'">重置后原密码与已有会话失效，用户下次登录须修改密码。</template>
             <template v-else>撤销后该账号需要重新登录。</template>
           </p>
           <div v-if="pendingAction === 'reset'" class="field">
