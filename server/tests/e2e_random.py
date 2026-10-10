@@ -59,8 +59,16 @@ def run_once(ctx: fb.Ctx, browser, rnd: random.Random, steps: int, big: int, lab
         elif action == "zhang":
             target = rnd.choice(TARGETS)
             marker = f"「Z{label}{step:02d}」"
-            ctx.zpatch(doc_id, lambda md, t=target, m=marker: md.replace(next(b for b in md.split("\n\n") if b.startswith(t)),
-                                                                        next(b for b in md.split("\n\n") if b.startswith(t)) + m, 1))
+            def change(md, t=target, m=marker):
+                block = next(b for b in md.split("\n\n") if b.startswith(t))
+                return md.replace(block, block + m, 1)
+            for attempt in range(3):
+                try:
+                    ctx.zpatch(doc_id, change)
+                    break
+                except Exception as error:  # noqa: BLE001 - 读和写之间我刚好存了一版：张工按新版重做（他自己的冲突不计入）
+                    if "409" not in str(error) or attempt == 2:
+                        raise
             theirs.append(marker)
             log.append(f"zhang {target} {marker}")
         elif action == "drop":
@@ -81,10 +89,13 @@ def run_once(ctx: fb.Ctx, browser, rnd: random.Random, steps: int, big: int, lab
     fb.settle(page, 8000)
     md = ctx.zhang.call("GET", f"/documents/{doc_id}")["markdownContent"]
     editor = page.locator(".paper-content").inner_text()
-    items = fb.conflict_items(doc_id)
     from app.db import connect
     with connect() as connection:
-        rows = connection.execute("SELECT status, payload_json FROM document_conflicts WHERE document_id=%s", (doc_id,)).fetchall()
+        # 只看我（李工）的冲突记录；张工重做时自己产生的冲突不计入
+        rows = connection.execute("SELECT c.status, c.payload_json FROM document_conflicts c JOIN users u ON u.id = c.actor_id "
+                                  "WHERE c.document_id=%s AND u.name <> '张工'", (doc_id,)).fetchall()
+    items = [{"theirs": (item.get("theirs") or {}).get("markdown") or "", "by": ((item.get("theirs") or {}).get("updatedBy") or {}).get("name")}
+             for row in rows for item in json.loads(row["payload_json"]).get("conflicts", [])]
     open_mines = "\n".join(((item.get("mine") or {}).get("markdown") or "") for row in rows if row["status"] == "open"
                            for item in json.loads(row["payload_json"]).get("conflicts", []))
     lost = [m for m in mine if m not in md and m not in open_mines and m not in editor]
