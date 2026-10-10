@@ -105,8 +105,10 @@ describe("终审必改：重复段落时写回位置按序列对齐换算", () =
     expect(mapBlockIndex(["甲", "无。", "乙"], ["甲", "无。改", "乙"], 1)).toBe(-1);
     // 越界；超出上限时去掉前后相同部分，文字唯一的仍能定位，重复的放弃
     expect(mapBlockIndex(["甲"], ["甲"], 3)).toBe(-1);
-    expect(mapBlockIndex(["甲", "乙"], ["甲", "乙"], 0, 1)).toBe(0);
-    expect(mapBlockIndex(["无。", "无。"], ["无。", "无。"], 0, 1)).toBe(-1);
+    expect(mapBlockIndex(["甲", "乙"], ["甲", "乙"], 0, 1, 0)).toBe(0);
+    expect(mapBlockIndex(["无。", "无。"], ["无。", "无。"], 0, 1, 0)).toBe(-1);
+    // 小规模直接精确计算：两个“无。”原样不变时确定配对
+    expect(mapBlockIndex(["无。", "无。"], ["无。", "无。"], 0, 1)).toBe(0);
   });
 });
 
