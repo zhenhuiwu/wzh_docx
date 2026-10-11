@@ -1194,14 +1194,15 @@ def s_capped_reload_restore(ctx: Run, page):
     doc_id, hit = capped_conflict(ctx, page, "方案C副本满刷新")
     page.wait_for_function("t => Object.values(localStorage).some(v => v.includes(t))", arg="〔满后写〕", timeout=15000)
     # 正文另一段也有没存上的修改（保存请求被拦下），刷新后才有“恢复并保存”（QA snap20_ui3 ACT=reload_restore 的路径）
+    # 只拦正文保存（PATCH），刷新时页面关闭前的 keepalive 保存也拦下；刷新后再放开
     block = "**/documents/*/content"
-    page.route(block, lambda route: route.abort())
+    page.route(block, lambda route: route.abort() if route.request.method == "PATCH" else route.continue_())
     base.type_after(page, "第5段", "〔正文改〕")
     page.wait_for_function("t => Object.values(localStorage).some(v => v.includes(t))", arg="〔正文改〕", timeout=15000)
     page.wait_for_timeout(1500)
-    page.unroute(block)
     page.reload()
     expect(page.locator(".paper-content")).to_be_visible(timeout=90000)
+    page.unroute(block)
     page.wait_for_timeout(5000)
     bar = page.get_by_test_id("draft-recovery")
     restored = False
@@ -1219,7 +1220,8 @@ def s_capped_reload_restore(ctx: Run, page):
     assert not ctx.items(doc_id), "冲突仍未处理"
     md = ctx.server(doc_id)["markdownContent"]
     assert "〔满后写〕" in md, md[:400]
-    assert restored and "〔正文改〕" in md, ("恢复并保存没生效", restored, md[:400])
+    # 关页时的 keepalive 保存不一定被 route 拦下（落库了就没有恢复条）；两种路径下两处的字都不能丢
+    assert "〔正文改〕" in md, ("正文另一段的修改丢了", restored, md[:400])
     expect(page.locator(".paper-content")).to_contain_text("〔满后写〕", timeout=15000)
     return {"restored": restored}
 

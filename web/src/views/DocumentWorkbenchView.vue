@@ -2843,6 +2843,9 @@ async function reattachLeftover(text: string, conflictId: string, find: (root: H
     selection?.addRange(range);
     if (window.document.execCommand("insertText", false, text)) {
       persistLocalDraft();
+      // N1 复核（mtab T3）：接回后马上保存，不等停手 3 秒（用户可能接着就关页）
+      syncValueFromEditor();
+      if (isDirty.value) void save("auto");
       sinkNote.value = { conflictId: "", text: `这条冲突已在你另一个标签页处理。你之后在这里写的“${quoted}”已接到这一段末尾，请检查。` };
       return true;
     }
