@@ -200,7 +200,14 @@ async function missingOtherTabs(item: ConflictItem): Promise<OtherTab[]> {
 function mergeWithOthers(item: ConflictItem) {
   const pending = othersConfirm.value[id(item)];
   if (!pending) return;
-  manualOpen.value = { ...manualOpen.value, [id(item)]: [mineText(item), ...pending.others.map(other => other.markdown)].join("\n\n") };
+  // 设计师复验 2 S-C1 / 测试工程师提示：两份的公共开头只放一次，另一份只放它多出来的部分
+  const ours = mineText(item);
+  const rest = pending.others.map(other => {
+    let same = 0;
+    while (same < ours.length && same < other.markdown.length && ours[same] === other.markdown[same]) same += 1;
+    return other.markdown.slice(same).trim();
+  }).filter(Boolean);
+  manualOpen.value = { ...manualOpen.value, [id(item)]: [ours, ...rest].join("\n\n") };
   delete othersConfirm.value[id(item)];
 }
 function keepOnlyThisTab(item: ConflictItem) {

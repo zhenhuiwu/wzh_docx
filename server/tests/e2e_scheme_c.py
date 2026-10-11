@@ -1521,6 +1521,7 @@ def s_two_tabs_first_409_closes(ctx: Run, page):
     confirm.get_by_role("button", name="手动合并（两份都放进去）").click()
     value = card(page).locator("textarea").input_value()
     assert "【甲写】" in value and "【乙写】" in value, value
+    assert value.count("第3段：原始内容 3。") == 1, f"公共开头在合并框里重复：{value}"
     card(page).get_by_role("button", name="采用合并结果").click()
     deadline = time.time() + 20
     while ctx.items(doc_id) and time.time() < deadline:
