@@ -34,6 +34,7 @@ class OfflineConnection:
         self.count = 0
         self.queries = []
         self.plan = None
+        self.archived_at = None
 
     def __enter__(self):
         return self
@@ -48,6 +49,8 @@ class OfflineConnection:
         self.queries.append((sql, params))
         if "from project_members" in sql:
             return Result({"role": self.role} if self.role else None)
+        if "select archived_at from projects" in sql:  # A05 R3：归档项目只读
+            return Result({"archived_at": self.archived_at})
         if "from templates where id" in sql:
             return Result({"id": params[0]} if self.template_exists else None)
         if "from document_plans where project_id" in sql and "count(*)" not in sql:
@@ -83,6 +86,13 @@ class DocumentPlanTests(unittest.TestCase):
 
     def create(self, body=None):
         return plans.create_document_plan(self.project_id, self.request, body or self.body())
+
+    def test_archived_project_rejects_new_plans(self):
+        self.connection.archived_at = "2026-10-11 00:00:00"
+        with self.assertRaises(AppError) as raised:
+            self.create()
+        self.assertEqual((raised.exception.status_code, raised.exception.code), (409, "PROJECT_ARCHIVED"))
+        self.assertIsNone(self.connection.plan)
 
     def test_offline_create_and_response_never_claim_template_is_published(self):
         result = self.create()
