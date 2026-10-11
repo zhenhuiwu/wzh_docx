@@ -101,21 +101,32 @@ def _require_base(connection, base_id: UUID, user_id: UUID, admin: bool) -> dict
 
 def _require_writer(connection, base_id: UUID, user_id: UUID, admin: bool) -> dict:
     if admin:
-        return _require_base(connection, base_id, user_id, True)
+        return _writable(connection, _require_base(connection, base_id, user_id, True))
     row = connection.execute("select * from knowledge_bases where id = %s", (base_id,)).fetchone()
     if row is None:
         raise AppError(404, "NOT_FOUND", "没有这个知识库。")
     if row["owner_id"] == user_id:
-        return row
+        return _writable(connection, row)
     access = connection.execute(
         "select role from knowledge_access where base_id = %s and user_id = %s",
         (base_id, user_id),
     ).fetchone()
     if access is not None and access["role"] == "maintainer":
-        return row
+        return _writable(connection, row)
     if access is not None:
         raise AppError(403, "FORBIDDEN", "当前授权只能阅读这个知识库。")
     raise AppError(404, "NOT_FOUND", "没有这个知识库。")
+
+
+def _writable(connection, row: dict) -> dict:
+    """A05 C-1（2026-10-11）：归档项目完全只读——所属项目已归档的项目范围知识库，
+    改资料、改授权、归档、登记资料/新版本、上传文件一律 409 PROJECT_ARCHIVED（在可见性与权限检查之后）。
+    单位知识库（scope='organization'）不受影响。"""
+    if row["scope"] == "project" and row["project_id"] is not None:
+        from app.document_access import ensure_project_writable
+
+        ensure_project_writable(connection, row["project_id"])
+    return row
 
 
 def _public_base(row: dict) -> dict[str, object]:
@@ -201,9 +212,14 @@ def create_base(request: Request, body: KnowledgeCreateBody) -> dict[str, object
             if owner is None or owner["status"] != "active":
                 raise AppError(422, "VALIDATION_FAILED", "维护人需要是启用中的账号。")
             if project_id is not None:
-                project = connection.execute("select id from projects where id = %s", (project_id,)).fetchone()
+                project = connection.execute("select id, archived_at from projects where id = %s", (project_id,)).fetchone()
                 if project is None:
                     raise AppError(422, "VALIDATION_FAILED", "找不到这个项目。")
+                if project["archived_at"] is not None:
+                    # A05 C-1：归档项目不能新建项目范围知识库
+                    from app.document_access import PROJECT_ARCHIVED_MESSAGE
+
+                    raise AppError(409, "PROJECT_ARCHIVED", PROJECT_ARCHIVED_MESSAGE, details={"readonlyReason": "archived"})
             connection.execute(
                 """
                 insert into knowledge_bases (id, name, summary, scope, project_id, owner_id, state)
