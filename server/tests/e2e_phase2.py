@@ -417,18 +417,21 @@ def main() -> int:
             assert "（紧接着输入）" in server and "（张工第四次）" in server, server[-400:]
             # 3) 自动保存合并了他人修改、载入重绘期间继续打字：有“正在合并…”提示（aria-busy），
             #    编辑区不锁、不重绘，字留在编辑区；下次保存按原基准再合并，停手后再显示他人修改
-            # 方案 C 后载入提示延迟 350ms 才出现（T-S2），重绘快时看不到提示条；改为观察编辑区本身进入重绘（aria-busy / refreshing）
-            b.evaluate("""() => { window.__sawRefresh = false; const el = document.querySelector('.paper-content');
-                const check = () => { if (el.getAttribute('aria-busy') === 'true' || el.classList.contains('refreshing') || document.querySelector('[data-testid=editor-refreshing]')) window.__sawRefresh = true; };
-                new MutationObserver(check).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-busy', 'class', 'contenteditable'] }); }""")
+            # 审查员 M4：F-M1 后合并重绘先在后台取版式、不锁编辑区，载入提示条 350ms 后才出现，快的重绘看不到任何提示。
+            # 把后台取版式（/preview）拖慢 4 秒，确认重绘已在途（请求已发出）再继续打字——真正走到“重绘期间输入”的路径
+            b.evaluate("""() => { const original = window.__origFetch || window.fetch; window.__origFetch = original; window.__previewDelayed = 0;
+                window.fetch = (input, init) => { const url = String(input instanceof Request ? input.url : input);
+                    if (!url.includes('/preview')) return original(input, init);
+                    window.__previewDelayed += 1; return new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)); }; }""")
             api_append(p_upd, "（张工第五次）")
             target = paragraph(b, p_upd2)
             target.click()
             b.keyboard.press("End")
             b.keyboard.type("（锁前）", delay=40)
             # 停止输入 3 秒触发自动保存，服务器合并张工的修改后重绘编辑区；重绘一开始就继续打字
-            b.wait_for_function("window.__sawRefresh === true", timeout=20000, polling=20)
+            b.wait_for_function("window.__previewDelayed > 0", timeout=30000, polling=20)
             b.keyboard.type("（锁定中输入）", delay=60)
+            b.evaluate("() => { window.fetch = window.__origFetch; }")
             wait_saved(b, 40000)
             b.wait_for_timeout(3500)
             wait_saved(b, 40000)
@@ -438,7 +441,6 @@ def main() -> int:
                 return server[max(0, at - 120):at + 160] if at >= 0 else f"缺少 {word}"
             assert "（锁前）" in server and "（张工第五次）" in server, (around("（锁前）"), around("（张工第五次）"), around(p_upd2[:8]))
             assert "锁定中输入" in server, around("（锁前）")
-            assert b.evaluate("window.__sawRefresh"), "重绘期间没有出现“正在载入/合并”提示"
             expect(b.locator(".paper-content")).to_contain_text("（张工第五次）", timeout=20000)
             expect(b.locator(".paper-content")).to_contain_text("（锁定中输入）")
             shot(b, "28-他人更新时打字不丢字")
@@ -599,7 +601,9 @@ def main() -> int:
             api_append(p_member, "（张工抢先）")
             bar = b.get_by_test_id("auto-conflict")
             expect(bar).to_be_visible(timeout=30000)  # 停止输入 3 秒后自动保存，遇冲突只提示
-            expect(bar).to_contain_text("有 1 处修改与 张工 的修改冲突，已单独保存，不会丢失。")
+            # 方案 C 文案（14 §3.4）：冲突段冻结，可以继续写，续写存为冲突副本
+            expect(bar).to_contain_text("这一段和 张工 的修改冲突。")
+            expect(bar).to_contain_text("不会丢失")
             expect(b.locator(".conflict-panel")).to_have_count(0)
             shot(b, "06-自动保存冲突-提示条")
             open_doc(a, data)
@@ -881,7 +885,9 @@ def main() -> int:
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
             open_pages.append(page)
-            # 终验 F-L1：打开文档后检查本机草稿的约 0.25 秒内正文不可编辑，要有载入提示
+            # 终验 F-L1：打开文档后检查本机草稿的约 0.25 秒内正文不可编辑，要有载入提示。
+            # 设计师 T-S2 后载入提示延迟 350ms 才出现，真实的 250ms 锁定看不到提示：与 e2e_scheme_c 的 F-L1 一样把这一个 250ms 等待拉长到 2.5s
+            page.add_init_script("""(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 ? 2500 : ms, ...rest); })()""")
             page.add_init_script("""window.__notices = []; new MutationObserver(() => {
                 const node = document.querySelector('[data-testid=editor-refreshing]');
                 if (node && !window.__notices.includes(node.textContent)) window.__notices.push(node.textContent);
