@@ -205,6 +205,34 @@ def _windows_user_sid() -> str:
     return next(csv.reader([out.strip()]))[1]
 
 
+def _full_sid(sid: str) -> str:
+    """CI（PR #1）：以内置 Administrator（RID 500）运行时 SDDL 里写的是别名 LA，不是完整 SID。
+    比较前用 ConvertStringSidToSidW → ConvertSidToStringSidW 把别名（LA、BA、SY…）解析成完整 SID 字符串（ctypes，不依赖 pywin32）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    binary = ctypes.c_void_p()
+    if not advapi32.ConvertStringSidToSidW(sid, ctypes.byref(binary)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        text = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(binary, ctypes.byref(text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return text.value or ""
+        finally:
+            kernel32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+    finally:
+        kernel32.LocalFree(binary)
+
+
 def _icacls_dacl(path) -> tuple[bool, list[tuple[str, str, str]]]:
     """Independent of pywin32: ``icacls /save`` writes the SDDL (locale-independent)."""
     import re
@@ -234,7 +262,7 @@ def test_windows_acl_seen_by_icacls(tmp_path):
     assert len(aces) == 1, aces
     kind, flags, sid = aces[0]
     assert kind == "A" and "ID" not in flags
-    assert sid == _windows_user_sid()
+    assert _full_sid(sid) == _full_sid(_windows_user_sid()), (sid, _windows_user_sid())
     ordinary = tmp_path / "ordinary.txt"
     ordinary.write_text("x", encoding="utf-8")
     protected, aces = _icacls_dacl(ordinary)
