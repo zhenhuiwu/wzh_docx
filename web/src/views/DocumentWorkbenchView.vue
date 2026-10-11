@@ -10,7 +10,8 @@ import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
-import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { readonlyBlockedText, readonlyText } from "../memberModel";
+import { type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
@@ -152,6 +153,8 @@ let actionNoteTimer: number | undefined;
 // 保存状态（02 §3.2）：胶囊由这些标志按优先级得出。
 const readonly = ref(false);
 const readonlyReason = ref("");
+/** A05：只读成员被调整为可编辑时的提示（不自动切换，16 §2.10）。 */
+const permissionUpgrade = ref("");
 const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string; deletedText?: string } | null>(null);
 const revertingBlock = ref(false);
 const retrying = ref(false);
@@ -555,9 +558,8 @@ async function load() {
       // 01 §6.1：canEdit=false 直接只读，不必等第一次 403。
       readonly.value = true;
       // 终审：非成员 auditor 不是“项目中的某个角色”，写成以审计身份只读查看
-      readonlyReason.value = record.permissions.projectRole === "auditor"
-        ? "你以审计身份只读查看该项目，可以查看和导出，不能修改正文。"
-        : `你在该项目中是${PROJECT_ROLE_TEXT[record.permissions.projectRole || ""] || "成员"}，可以查看和导出，不能修改正文。`;
+      // A05（16 §2.10）：按 readonlyReason 枚举选文案（archived / role），不拼后端 message
+      readonlyReason.value = readonlyText(record.permissions.readonlyReason, record.permissions.projectRole);
     }
     markdownContent.value = record.markdownContent;
     savedContent.value = record.markdownContent;
@@ -591,6 +593,7 @@ function resetSaveState() {
   window.clearTimeout(savingTimer);
   readonly.value = false;
   readonlyReason.value = "";
+  permissionUpgrade.value = "";
   blocked.value = null;
   retrying.value = false;
   failures.value = 0;
@@ -995,6 +998,7 @@ async function checkOthersUpdated() {
     const since = await getObjectsSince(record.id, record.revision);
     if (document.value !== record) return;
     objectModel.value = since.objectModel;
+    applyPolledPermissions(record, since.permissions);
     if (since.documentRevision <= record.revision) return;
     void refreshLastEditor();
     const names = since.changedBy.map(person => person.name);
@@ -1023,11 +1027,37 @@ async function checkOthersUpdated() {
     } else {
       othersUpdated.value = { names, objects };
     }
-  } catch {
-    // 查询失败不影响编辑，下次再查。
+  } catch (error) {
+    // A05（16 §2.10）：被移出项目后轮询直接 404 → 与保存遇到 404 相同的状态；其他失败不影响编辑，下次再查。
+    if (error instanceof ApiError && error.status === 404 && document.value === record) enterGone(markdownContent.value, error.code);
   } finally {
     checkingUpdates = false;
   }
+}
+/** A05（17 B-8）：轮询带回的权限。可编辑 → 只读立即生效（有未保存内容时给下载）；只读 → 可编辑只提示，不打断阅读。 */
+function applyPolledPermissions(record: NonNullable<typeof document.value>, permissions: typeof record.permissions | undefined) {
+  if (!permissions) return;
+  const before = record.permissions;
+  record.permissions = permissions;
+  if (!permissions.canEdit && !readonly.value) {
+    readonly.value = true;
+    retrying.value = false;
+    readonlyReason.value = readonlyText(permissions.readonlyReason, permissions.projectRole, permissions.readonlyReason !== "archived");
+    if (isDirty.value) blocked.value = { message: readonlyBlockedText(permissions.readonlyReason, permissions.projectRole), content: markdownContent.value, code: "FORBIDDEN" };
+    return;
+  }
+  if (permissions.canEdit && readonly.value && before && !before.canEdit && !permissionUpgrade.value) {
+    permissionUpgrade.value = `你的权限已调整为${PROJECT_ROLE_LABEL[permissions.projectRole || ""] || "可编辑成员"}，刷新后可以编辑。`;
+  }
+}
+function reloadPage() { window.location.reload(); }
+const PROJECT_ROLE_LABEL: Record<string, string> = { owner: "负责人", editor: "编写人员" };
+/** 项目不存在或已无权访问（被移出项目）：进入只读，未保存的修改可以下载（16 §2.10，沿用 404 定稿文案）。 */
+function enterGone(content: string, code = "NOT_FOUND") {
+  readonly.value = true;
+  retrying.value = false;
+  readonlyReason.value = "项目不存在或你无权访问。";
+  blocked.value = { message: "项目不存在或你无权访问。未保存的修改可以下载。", content, code };
 }
 /** T-M2：光标所在顶层块及前后各一块是否在服务器上被改（按对象 ID）。 */
 function caretTouched(objects: Array<{ id: string; deleted?: boolean }>): boolean {
@@ -3047,11 +3077,25 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       retryTimer = window.setTimeout(() => void save("auto"), backoffMs(failures.value));
       return;
     }
-    case "readonly":
+    case "readonly": {
       readonly.value = true;
-      readonlyReason.value = accessText(apiError);
       retrying.value = false;
-      blocked.value = { message: `${accessText(apiError)}未保存的修改可以下载。`, content, code: apiError.code };
+      // A05：归档（409 PROJECT_ARCHIVED）与权限被调整（403 带 projectRole）按枚举选文案；其余沿用 403 定稿文案
+      const role = typeof apiError.details?.projectRole === "string" ? apiError.details.projectRole : null;
+      if (apiError.code === "PROJECT_ARCHIVED") {
+        readonlyReason.value = readonlyText("archived", role);
+        blocked.value = { message: readonlyBlockedText("archived", role), content, code: apiError.code };
+      } else if (role && role !== "auditor") {
+        readonlyReason.value = readonlyText("role", role, true);
+        blocked.value = { message: readonlyBlockedText("role", role), content, code: apiError.code };
+      } else {
+        readonlyReason.value = accessText(apiError);
+        blocked.value = { message: `${accessText(apiError)}未保存的修改可以下载。`, content, code: apiError.code };
+      }
+      return;
+    }
+    case "gone":
+      enterGone(content, apiError.code);
       return;
     case "rekey":
       pendingKey = null;
@@ -3682,6 +3726,10 @@ onUnmounted(() => {
           <span v-else-if="autoConflict.whole" data-testid="whole-conflict-note">{{ autoConflict.whole }}</span>
           <span v-else>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
           <span class="acts"><button type="button" class="ghost sm" @click="openConflicts('mine')">查看冲突</button></span>
+        </div>
+        <div v-if="permissionUpgrade" class="wb-notice info" role="status" data-testid="permission-upgrade">
+          <span>{{ permissionUpgrade }}</span>
+          <span class="acts"><button type="button" class="ghost sm" :disabled="isDirty" @click="reloadPage">刷新</button></span>
         </div>
         <p v-if="actionNote && !actionNoteOthers" class="wb-notice info" role="status"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ actionNote }}</span></p>
         <!-- T-S2：他人类短提示与载入提示浮在编辑区上方，不推挤正文 -->
