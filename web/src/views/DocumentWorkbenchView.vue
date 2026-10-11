@@ -1398,13 +1398,34 @@ function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined, ex
   if (!item) return null;
   const norm = (text: string) => text.replace(/[*_`~\\]/g, "").replace(/\s+/g, " ").trim();
   const lines = (item.theirs?.markdown || "").split("\n").map(line => norm(line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\|/, "").replace(/\|$/, ""))).filter(Boolean);
-  const candidates = [...root.querySelectorAll("li, p, td, th, h1, h2, h3, h4, h5, h6")] as HTMLElement[];
-  for (const line of lines) {
-    const own = (el: HTMLElement) => norm([...el.childNodes].filter(node => !(node instanceof HTMLElement && /^(UL|OL)$/.test(node.tagName))).map(node => node.textContent || "").join(""));
-    const hit = candidates.find(el => own(el) === line) || (exactOnly ? undefined : candidates.find(el => line.length >= 6 && own(el).startsWith(line.slice(0, 12))));
-    if (hit) return hit;
+  const selector = "li, p, td, th, h1, h2, h3, h4, h5, h6";
+  const candidates = [...root.querySelectorAll(selector)] as HTMLElement[];
+  const own = (el: HTMLElement) => norm([...el.childNodes].filter(node => !(node instanceof HTMLElement && /^(UL|OL)$/.test(node.tagName))).map(node => node.textContent || "").join(""));
+  // 设计师复验 2 A1：同名条目时先在冲突所在的块（列表 / 表格）里找；块里多个同名项取离换版前光标最近的一项；都找不到才退到全文
+  const scope = findConflictBlock(item).block;
+  const pools: HTMLElement[][] = [];
+  if (scope && root.contains(scope)) pools.push([scope, ...scope.querySelectorAll<HTMLElement>(selector)].filter(el => el.matches(selector)));
+  pools.push(candidates);
+  for (const pool of pools) {
+    for (const line of lines) {
+      let hits = pool.filter(el => own(el) === line);
+      if (!hits.length && !exactOnly) hits = pool.filter(el => line.length >= 6 && own(el).startsWith(line.slice(0, 12)));
+      if (hits.length) return nearestToCaret(hits);
+    }
   }
-  return exactOnly ? null : findConflictBlock(item).block ?? null;
+  return exactOnly ? null : scope ?? null;
+}
+/** 多个同名候选时取离换版前光标位置（caretSinkFallback，纸面坐标）最近的一项 */
+function nearestToCaret(hits: HTMLElement[]): HTMLElement {
+  const paper = editor.value?.parentElement;
+  if (hits.length === 1 || !caretSinkFallback || !paper) return hits[0];
+  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const top = paper.getBoundingClientRect().top;
+  const want = caretSinkFallback.top;
+  return hits.reduce((best, el) => {
+    const distance = (el2: HTMLElement) => Math.abs((el2.getBoundingClientRect().bottom - top) / zoom + 4 - want);
+    return distance(el) < distance(best) ? el : best;
+  });
 }
 let caretSinkAnchor: HTMLElement | null = null;
 let caretSinkItem: ConflictItem | undefined;
@@ -1445,6 +1466,16 @@ function growCaretSink() {
   const max = line * 4 + pad;
   sink.style.height = `${Math.min(max, Math.max(line + pad, sink.scrollHeight + 2))}px`;
   sink.style.overflowY = sink.scrollHeight + 2 > max ? "auto" : "hidden";
+  window.requestAnimationFrame(revealCaretSink);
+}
+/** 设计师复验 2 A2：输入框（含增高后）要完整落在 .desk 可视区内，超出就把 .desk 滚过去（输入法候选框锚点随之回到屏内） */
+function revealCaretSink() {
+  const sink = caretSink;
+  const desk = sink?.closest<HTMLElement>(".desk");
+  if (!sink || !desk) return;
+  const box = sink.getBoundingClientRect(), view = desk.getBoundingClientRect();
+  if (box.bottom > view.bottom - 8) desk.scrollTop += box.bottom - view.bottom + 8;
+  else if (box.top < view.top + 8) desk.scrollTop -= view.top + 8 - box.top;
 }
 function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string; item?: ConflictItem }, caretRect: DOMRect | null = null) {
   dropCaretSink();

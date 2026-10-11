@@ -1364,5 +1364,73 @@ def main() -> int:
     return 0 if passed == len(rows) else 1
 
 
+def sink_gap(page, item) -> float:
+    s, i = page.get_by_test_id("caret-sink").bounding_box(), item.bounding_box()
+    return s["y"] - (i["y"] + i["height"])
+
+
+@scenario("A1 同名条目 输入框贴在冲突所在列表的那一项下")
+def s_sink_duplicate_name(ctx: Run, page):
+    """设计师复验 2 A1：前文另一个列表里已有同名的“列表项一（对方改）”，输入框仍须贴在冲突那一项下面，而不是全文第一个同名项。"""
+    selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+    doc_id = selfconf.make_doc(ctx.data, f"方案C同名条目-{time.strftime('%H%M%S')}", 0)
+    ctx.zhang_edit(doc_id, "第2段：原始内容 2。", "第2段：原始内容 2。\n\n- 列表项一（对方改）\n- 另一组的项")
+    ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + LIST)
+    ctx.open(page, doc_id)
+    page.locator(".paper-content li").filter(has_text=re.compile(r"^列表项一$")).first.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    ctx.zhang_edit(doc_id, "- 列表项一\n- 列表项二", "- 列表项一（对方改）\n- 列表项二")
+    page.keyboard.press("Control+s")
+    page.keyboard.type("，续零】", delay=150)
+    expect(page.get_by_test_id("caret-sink")).to_be_visible(timeout=20000)
+    target = page.locator(".paper-content").locator("xpath=.//li[following-sibling::li[1][normalize-space()='列表项二']]")
+    expect(target).to_have_count(1, timeout=20000)
+    expect(target).to_contain_text("列表项一（对方改）", timeout=20000)
+    page.wait_for_timeout(800)
+    decoy = page.locator(".paper-content").locator("xpath=.//li[following-sibling::li[1][normalize-space()='另一组的项']]")
+    gap = sink_gap(page, target)
+    assert -1 <= gap <= 24, f"输入框没贴在冲突那一项下：gap={gap} 同名项 gap={sink_gap(page, decoy)}"
+    return {"gap": round(gap, 1)}
+
+
+@scenario("A2 条目在视口底部 输入框滚入可视区")
+def s_sink_bottom_visible(ctx: Run, page):
+    """设计师复验 2 A2：冲突项在可视区最底部时，输入框（含增高后）要完整可见。"""
+    selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 41)]
+    doc_id = selfconf.make_doc(ctx.data, f"方案C底部输入框-{time.strftime('%H%M%S')}", 30)
+    ctx.zhang_edit(doc_id, "第38段：原始内容 38。", "第38段：原始内容 38。\n\n" + LIST)
+    ctx.open(page, doc_id)
+    item = page.locator(".paper-content li", has_text="列表项一").first
+    item.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    page.locator(".desk").evaluate("""(desk) => {
+        const li = [...desk.querySelectorAll('.paper-content li')].find(el => el.textContent.startsWith('列表项一'));
+        desk.scrollTop += li.getBoundingClientRect().bottom - desk.getBoundingClientRect().bottom + 4;
+    }""")
+    page.wait_for_timeout(300)
+    lift = item.evaluate("el => el.closest('.desk').getBoundingClientRect().bottom - el.getBoundingClientRect().bottom")
+    assert -2 <= lift <= 30, f"前置条件：列表项没有停在可视区底部（距底 {lift}）"
+    ctx.zhang_edit(doc_id, "列表项一", "列表项一（对方改）")
+    page.keyboard.press("Control+s")
+    page.keyboard.type("，续零】", delay=150)
+    sink = page.get_by_test_id("caret-sink")
+    expect(sink).to_be_visible(timeout=20000)
+    page.wait_for_timeout(800)
+    inside = "el => { const d = el.closest('.desk').getBoundingClientRect(), b = el.getBoundingClientRect(); return [b.top - d.top, d.bottom - b.bottom]; }"
+    top, room = sink.evaluate(inside)
+    assert top >= 0 and room >= 0, f"输入框不在可视区：上 {top} 下余 {room}"
+    sink.focus()
+    page.keyboard.type("这是一句很长的续写内容，用来检查输入框增高后仍然完整可见。" * 3, delay=5)
+    page.wait_for_timeout(500)
+    top2, room2 = sink.evaluate(inside)
+    assert top2 >= 0 and room2 >= 0, f"增高后输入框超出可视区：上 {top2} 下余 {room2}"
+    return {"room": [round(room), round(room2)]}
+
+
+SCENARIOS += [s_sink_duplicate_name, s_sink_bottom_visible]
+
+
 if __name__ == "__main__":
     sys.exit(main())
