@@ -73,3 +73,30 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
             assert connection.execute(f"select count(*) from {TABLE}").fetchone()[0] == 0
     finally:
         config.get_settings.cache_clear()
+
+
+def test_migration_116_on_a_115_database_keeps_old_rows(tmp_path, monkeypatch):
+    """17 §2.7：在 115 的库上执行 116：列存在，旧行 created_at 为 NULL，members_revision=1；重复 migrate 不报错；旧成员可读。"""
+    from app import config
+    from app.db import connect, migrate
+    from app.identity import create_user
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'app.db'}")
+    config.get_settings.cache_clear()
+    try:
+        _migrate_until(tmp_path, monkeypatch, 115)
+        owner = create_user(account="m116-owner", name="旧负责人", password="migration-116-pw", roles=["project_creator"])
+        project = uuid4()
+        with connect() as connection:
+            connection.execute("insert into projects(id, name, owner_id) values (%s, %s, %s)", (project, "旧项目", owner))
+            connection.execute("insert into project_members(project_id, user_id, role) values (%s, %s, 'owner')", (project, owner))
+            connection.commit()
+        assert migrate() == ["116_project_members_v2.sql"]
+        assert migrate() == []
+        with sqlite3.connect(tmp_path / "app.db") as connection:
+            assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
+            assert connection.execute("select created_at, updated_at, updated_by from project_members where project_id = ?",
+                                      (str(project),)).fetchone() == (None, None, None)
+            assert connection.execute(f"select count(*) from {TABLE}").fetchone()[0] == 0
+    finally:
+        config.get_settings.cache_clear()

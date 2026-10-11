@@ -486,33 +486,81 @@ def test_disable_and_demote_race_keeps_an_active_owner(ctx):
     assert _active_owner_count(ctx.project) == 1
 
 
+def test_disable_sole_owner_and_add_second_owner_race_is_consistent(ctx):
+    """17 §2.7：“停用唯一启用 owner”与“添加第二位 owner”并发，两种顺序都得到一致结果。"""
+    revision = ctx.rev()
+    app = ctx.client.app
+    barrier = threading.Barrier(2, timeout=30)
+    results = {}
+
+    def disable_alice():
+        with TestClient(app) as client:
+            headers = _login(client, "a05-admin")
+            user_revision = _user_revision(ctx.users["alice"])
+            barrier.wait()
+            results["disable"] = client.post(f"/api/v1/users/{ctx.users['alice']}/disable",
+                                             json={"expectedRevision": user_revision, "reason": "并发停用"}, headers=headers).status_code
+
+    def add_bob():
+        with TestClient(app) as client:
+            headers = _login(client, "a05-admin")
+            barrier.wait()
+            results["add"] = client.put(f"/api/v1/projects/{ctx.project}/members/{ctx.users['bob']}",
+                                        json={"role": "owner", "expectedMembersRevision": revision}, headers=headers).status_code
+
+    threads = [threading.Thread(target=disable_alice), threading.Thread(target=add_bob)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results["add"] == 200, results
+    assert results["disable"] in (200, 409), results
+    assert _active_owner_count(ctx.project) == 1
+    with connect() as connection:
+        alice = connection.execute("select status from users where id = %s", (ctx.users["alice"],)).fetchone()[0]
+        owner_id = connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0]
+    assert (alice == "disabled") == (results["disable"] == 200)
+    # 主负责人：alice 被停用后仍可能留在 owner_id 上（停用不改指，见 18 偏差），但启用负责人只剩 bob 时必须是 bob 或 alice
+    assert str(owner_id) in {str(ctx.users["alice"]), str(ctx.users["bob"])}
+
+
 def test_random_member_operations_keep_invariants(ctx):
+    """17 §2.7 fuzz：添加、改角色、移除、停用、启用随机 1000 步；每步后启用负责人 ≥1（或本来就没有且这一步没让它减少）。"""
     rng = random.Random(116)
     ctx.as_("admin")
     names = ["alice", "bob", "carol", "dave"]
     successes = 0
-    for _ in range(60):
+    for _ in range(1000):
         who = rng.choice(names)
-        op = rng.choice(["put", "put", "delete", "batch"])
-        before = ctx.rev()
+        op = rng.choice(["put", "put", "delete", "batch", "disable", "enable"])
+        before, owners_before = ctx.rev(), _active_owner_count(ctx.project)
         if op == "put":
             response = ctx.put(who, rng.choice(["owner", "editor", "viewer"]))
         elif op == "delete":
             response = ctx.delete(who)
-        else:
+        elif op == "batch":
             response = ctx.batch(rng.sample(names, 2), rng.choice(["owner", "editor", "viewer"]))
-        assert response.status_code in (200, 204, 409), response.text
-        if response.status_code == 409:
-            assert response.json()["error"]["code"] == "LAST_OWNER"
+        elif op == "disable":
+            response = ctx.req("POST", f"/users/{ctx.users[who]}/disable", {"expectedRevision": _user_revision(ctx.users[who]), "reason": "fuzz"})
+        else:
+            response = ctx.req("POST", f"/users/{ctx.users[who]}/enable", {"expectedRevision": _user_revision(ctx.users[who]), "reason": "fuzz"})
+        assert response.status_code in (200, 204, 409, 422), response.text
+        if response.status_code in (409, 422):
+            assert response.json()["error"]["code"] in ("LAST_OWNER", "USER_DISABLED"), response.text
             assert ctx.rev() == before
-        elif ctx.rev() != before:
+        changed = op in ("put", "delete", "batch") and response.status_code == 200 and ctx.rev() != before
+        if changed:
             assert ctx.rev() == before + 1
             successes += 1
-        assert _active_owner_count(ctx.project) >= 1
-        with connect() as connection:
-            owner_id = connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0]
-            role = connection.execute("select role from project_members where project_id = %s and user_id = %s",
-                                      (ctx.project, owner_id)).fetchone()
-        assert role is not None and role[0] == "owner"  # R4：主负责人总是启用中的负责人之一
+        owners_after = _active_owner_count(ctx.project)
+        assert owners_after >= 1 or owners_after >= owners_before
+        if changed:
+            with connect() as connection:
+                owner_id = connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0]
+                role = connection.execute(
+                    """select m.role, u.status from project_members m join users u on u.id = m.user_id
+                       where m.project_id = %s and m.user_id = %s""", (ctx.project, owner_id)).fetchone()
+            # R4：有变化的成员操作之后，主负责人是启用中的负责人（停用账号本身不改指，下一次成员变更时顺延，见 18 偏差 B-4）
+            assert role is not None and role[0] == "owner" and role[1] == "active"
     assert ctx.rev() == 1 + successes
     assert {event["members_revision"] for event in ctx.events()} == set(range(1, ctx.rev() + 1))
