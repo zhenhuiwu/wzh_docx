@@ -10,7 +10,8 @@ E2E_SHOTS（截图目录，默认系统临时目录/e2e_a05/shots）、E2E_OUT�
 覆盖：V1 无成员导航；V2 添加编写人员（默认编写人员）；V3 停用账号不在候选里；V4 普通账号进入所分配项目并能编写、没有管理入口、
 未加入的项目 404；V5 降为只读后正在编辑的人保存即只读、可下载；V6 最后负责人（前端禁用 + 后端 409）；V7 停用的负责人不计数；
 V8 并发 409 提示并刷新；V9 自身降级确认；V10 负责人移除自己跳回列表；V11 归档只读（成员区与文档）；V14 主负责人改指；
-V15 成员操作不让项目资料 409；V16 缺版本号 422；V17 reviewer；V18 成员不能自己退出；V19–V22 用户管理停用唯一负责人。
+V15 成员操作不让项目资料 409；V16 缺版本号 422；V17 reviewer；V18 成员不能自己退出；V19–V22 用户管理停用唯一负责人
+（含 Q-2：已归档项目也挡，列表标“（已归档）”）；V23 Q-1 归档项目事实/测试任务/知识库关联写入 409、读照常。
 admin/admin123 登录、不改密（用户决定）。
 """
 
@@ -402,6 +403,10 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             p2 = admin.project(f"唯一负责人项目{RUN}", users["solo"])
             p3b = admin.project(f"另有负责人项目{RUN}", users["solo"])
             admin.set_role(p3b["id"], users["helper"], "owner")
+            # Q-2：已归档项目里的唯一负责人也挡停用，列表里标“（已归档）”
+            p2a = admin.project(f"已归档唯一负责人项目{RUN}", users["solo"])
+            admin.call("POST", f"/projects/{p2a['id']}/archive",
+                       json={"expectedRevision": admin.call("GET", f"/projects/{p2a['id']}")["revision"], "reason": "A05 Q-2 验收"})
             page.goto(f"{WEB}/users")
             page.locator(".query input").nth(1).fill(f"solo{RUN}")
             page.locator(".query button[type=submit]").click()
@@ -410,9 +415,13 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             page.locator("dialog[open] button[type=submit]").click()
             blocked = page.get_by_test_id("user-disable-blocked")
             expect(blocked).to_be_visible(timeout=10000)
-            expect(blocked).to_contain_text(re.compile("是以下 1 个项目唯一的启用负责人"))
+            expect(blocked).to_contain_text(re.compile("是以下 2 个项目唯一的启用负责人"))
             expect(blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p2["id"]}"]')).to_be_visible()
             expect(blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p3b["id"]}"]')).to_have_count(0)
+            archived_row = blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p2a["id"]}"]')
+            expect(archived_row).to_contain_text(f"已归档唯一负责人项目{RUN}（已归档）")
+            expect(blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p2["id"]}"]')).not_to_contain_text("（已归档）")
+            expect(blocked).to_contain_text("标“（已归档）”的项目需先恢复，才能调整负责人。")
             expect(page.locator("dialog[open] h2")).to_have_text(f"不能停用 郑唯一（solo{RUN}）")
             shot(page, "A05-06-用户管理-不能停用唯一负责人")
             # V22：账号仍是启用
@@ -424,6 +433,14 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(popup.get_by_test_id("members-section")).to_be_in_viewport(timeout=30000)
             popup.close()
             admin.set_role(p2["id"], users["helper"], "owner")
+            # 归档项目要先恢复才能补负责人，补完再归档
+            assert admin.raw("PUT", f"/projects/{p2a['id']}/members/{users['helper']}",
+                             json={"role": "owner", "expectedMembersRevision": admin.members_revision(p2a["id"])}).json()["error"]["code"] == "PROJECT_ARCHIVED"
+            admin.call("POST", f"/projects/{p2a['id']}/unarchive",
+                       json={"expectedRevision": admin.call("GET", f"/projects/{p2a['id']}")["revision"], "reason": "补负责人"})
+            admin.set_role(p2a["id"], users["helper"], "owner")
+            admin.call("POST", f"/projects/{p2a['id']}/archive",
+                       json={"expectedRevision": admin.call("GET", f"/projects/{p2a['id']}")["revision"], "reason": "补完再归档"})
             page.get_by_test_id("user-disable-recheck").click()
             expect(page.locator("dialog[open]")).to_have_count(0, timeout=10000)
             expect(page.get_by_text("账号已停用。")).to_be_visible()
@@ -452,6 +469,20 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page2.get_by_test_id("save-status")).to_have_attribute("title", "项目已归档，可以查看和导出，不能修改正文。")
             shot(page2, "A05-07-归档项目文档只读")
         v11()
+
+        @step("V23 Q-1 归档项目完全只读：事实、测试任务、知识库关联写入 409 PROJECT_ARCHIVED，读照常（资料页当前未开放路由，只验接口）")
+        def v23():
+            revision = admin.call("GET", f"/projects/{pid}")["revision"]
+            for method, path, body in (
+                ("POST", f"/projects/{pid}/facts", {"key": "a05_q1", "label": "归档后事实", "value": "x", "decisionReason": "验收"}),
+                ("PUT", f"/projects/{pid}/knowledge-bindings", {"expectedProjectRevision": revision, "baseIds": []}),
+                ("POST", "/test-tasks", {"name": "归档后任务", "projectId": pid, "planFileId": str(uuid.uuid4())}),
+            ):
+                response = admin.raw(method, path, json=body)
+                assert response.status_code == 409 and response.json()["error"]["code"] == "PROJECT_ARCHIVED", (path, response.text)
+            assert admin.raw("GET", f"/projects/{pid}/facts").status_code == 200
+            assert admin.raw("GET", f"/projects/{pid}/knowledge-bindings").status_code == 200
+        v23()
 
         browser.close()
     failed = [item for item in results if not item[1]]
