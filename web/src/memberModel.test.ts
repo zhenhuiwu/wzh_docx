@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addButtonText, assignmentParts, batchResultText, candidateNote, changeOutcomeText, classifyMemberError, contactNames,
-  disableBlockedMoreText, disableBlockedText, isLockedOwner, memberErrorText, membersConflictText, membersNote, ownersText,
+  blockedProjectLabel, disableBlockedArchivedHint, disableBlockedMoreText, disableBlockedText, isLockedOwner, memberErrorText, membersConflictText, membersNote, ownersText,
   pickError, readonlyBlockedText, readonlyText, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
 } from "./memberModel";
 
@@ -134,5 +134,13 @@ describe("工作台只读与停用被拒", () => {
     expect(disableBlockedText("赵工", 1)).toContain("是以下 1 个项目唯一的启用负责人");
     expect(disableBlockedMoreText(25, 20)).toBe("另有 5 个项目未列出，处理完以上项目后再次停用会继续列出。");
     expect(disableBlockedMoreText(3, 3)).toBe("");
+  });
+
+  it("LAST_OWNER 列表给已归档项目加“（已归档）”并提示先恢复（Q-2）", () => {
+    expect(blockedProjectLabel({ id: "1", name: "甲项目", archived: true })).toBe("甲项目（已归档）");
+    expect(blockedProjectLabel({ id: "2", name: "乙项目", archived: false })).toBe("乙项目");
+    expect(blockedProjectLabel({ id: "3", name: "丙项目" })).toBe("丙项目");
+    expect(disableBlockedArchivedHint([{ id: "1", name: "甲", archived: true }, { id: "2", name: "乙" }])).toContain("需先恢复");
+    expect(disableBlockedArchivedHint([{ id: "2", name: "乙", archived: false }])).toBe("");
   });
 });

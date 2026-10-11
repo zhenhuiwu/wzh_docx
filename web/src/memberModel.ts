@@ -229,7 +229,17 @@ export function readonlyBlockedText(reason: ReadonlyReason, projectRole: string 
   return `你的权限已调整为${roleLabel(projectRole)}，刚才的修改没有保存，可以下载。`;
 }
 
-export interface DisableBlockedProject { id: string; name: string }
+export interface DisableBlockedProject { id: string; name: string; archived?: boolean }
+
+// A05 Q-2（2026-10-11）：已归档项目里的唯一负责人照样挡停用；列表里在项目名后标“（已归档）”，
+// 并提示归档项目要先恢复才能调整成员（归档项目成员只读）。
+export const ARCHIVED_MARK = "（已归档）";
+export function blockedProjectLabel(item: DisableBlockedProject): string {
+  return item.archived ? `${item.name}${ARCHIVED_MARK}` : item.name;
+}
+export function disableBlockedArchivedHint(projects: DisableBlockedProject[]): string {
+  return projects.some((item) => item.archived) ? "标“（已归档）”的项目需先恢复，才能调整负责人。" : "";
+}
 
 /** 用户管理：停用唯一负责人被拒（16 §2.13）。 */
 export function disableBlockedText(name: string, total: number): string {

@@ -16,7 +16,7 @@ import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { formatDateTime, initialOf } from "../format";
 import { useFieldErrors } from "../fieldErrors";
-import { disableBlockedMoreText, disableBlockedText, type DisableBlockedProject } from "../memberModel";
+import { ARCHIVED_MARK, blockedProjectLabel, disableBlockedArchivedHint, disableBlockedMoreText, disableBlockedText, type DisableBlockedProject } from "../memberModel";
 
 const page = ref(1);
 const pageSize = 10;
@@ -369,12 +369,13 @@ onMounted(async () => {
               <thead><tr><th>项目</th><th class="th-right">操作</th></tr></thead>
               <tbody>
                 <tr v-for="item in blocked.projects" :key="item.id" data-testid="user-disable-project" :data-project-id="item.id">
-                  <td><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener">{{ item.name }}</a></td>
-                  <td class="cell-right"><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener" :aria-label="`打开项目概述：${item.name}`">打开项目概述</a></td>
+                  <td><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener">{{ item.name }}</a><span v-if="item.archived" class="archived-mark" data-testid="user-disable-project-archived">{{ ARCHIVED_MARK }}</span></td>
+                  <td class="cell-right"><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener" :aria-label="`打开项目概述：${blockedProjectLabel(item)}`">打开项目概述</a></td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <p v-if="disableBlockedArchivedHint(blocked.projects)" class="hint">{{ disableBlockedArchivedHint(blocked.projects) }}</p>
           <p v-if="disableBlockedMoreText(blocked.total, blocked.projects.length)" class="hint">{{ disableBlockedMoreText(blocked.total, blocked.projects.length) }}</p>
           <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         </div>
@@ -421,6 +422,7 @@ onMounted(async () => {
 .role-list { display:inline-flex; flex-wrap:wrap; gap:var(--space-1); }
 .confirm-body { display:grid; gap:var(--space-4); }
 .confirm-body .dialog-text { margin:0; }
+.archived-mark { color:var(--text-secondary); }
 .blocked-projects { max-height:calc(44px * 8); overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-control); }
 .create { display:block; padding:0; }
 .create label { margin:0; }
