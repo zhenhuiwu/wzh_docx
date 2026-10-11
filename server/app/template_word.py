@@ -794,7 +794,13 @@ def apply_draft(base_path: str | Path, draft: dict, base_styles: dict, draft_sty
             anchor = body.sectPr
         before = anchor.getprevious()
         try:
-            _insert_block(doc, html_paragraph(block["text"].strip(), tag), anchor, outline_headings=True)
+            try:
+                _insert_block(doc, html_paragraph(block["text"].strip(), tag), anchor, outline_headings=True)
+            except KeyError:
+                # 模板没有“Heading N”样式、附近也没有同级标题可仿：按正文插入，下面用大纲级别设成标题（fuzz 发现）
+                if tag == "p":
+                    raise
+                _insert_block(doc, html_paragraph(block["text"].strip(), "p"), anchor, outline_headings=True)
         except (ValueError, KeyError) as exc:
             errors.append({"blockId": block["id"], "message": str(exc)})
             continue
