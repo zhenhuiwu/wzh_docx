@@ -251,10 +251,12 @@ def _carry_plan(connection, conflict_id, body) -> dict[int, dict]:
         if state.get(item.itemIndex) != "open":
             continue  # 由后面的“已处理 / 重放”分支回应
         now_id = (latest.get(item.itemIndex) or {}).get("id") or ""
-        if item.mineSnapshotId is not None and item.mineSnapshotId != now_id:
+        # 带了内容就必须核对：没给 id（null）按“客户端没见过任何快照”处理，不能当作不核对（审查 M7 并发 20 轮）
+        seen = item.mineSnapshotId or ""
+        if seen != now_id:
             raise _snapshot_changed(conflict_id, item.itemIndex, payload, latest.get(item.itemIndex))
         plan[item.itemIndex] = {"markdown": item.mineMarkdown, "key": f"resolve:{body.clientSaveKey}:{item.itemIndex}",
-                                "seen": now_id}
+                                "seen": seen}
     return plan
 
 

@@ -465,3 +465,15 @@ def test_carried_mine_races_with_other_tab_snapshot_returns_409_not_silent_swap(
     text = current(client, did)["markdownContent"]
     assert "X 确认的" not in text and "Y 另一标签" not in text
     assert [row["markdown"] for row in _snap_rows(cid)] == ["B2。S", "B2。Y 另一标签。"]
+
+
+def test_carried_mine_without_snapshot_id_means_saw_none(team):
+    """代码审查 M7：带内容但 mineSnapshotId 为 null 时按“没见过任何快照”核对——别的标签页已存了 Y 就 409，不用 X 盖掉 Y。"""
+    client, did, _ = team
+    cid = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})["conflictId"]
+    assert _mine(client, did, cid, 0, "B2。Y 另一标签。", "none-key-0001", tab="tab-Y").status_code == 200
+    rev = current(client, did)["revision"]
+    response = _resolve(client, did, cid, rev, [{"itemIndex": 0, "action": "keep_mine", "mineMarkdown": "B2。X 确认的。",
+                                                  "mineSnapshotId": None}], "none-resolve-1")
+    assert response.status_code == 409 and response.json()["error"]["code"] == "MINE_SNAPSHOT_CHANGED", response.text
+    assert "X 确认的" not in current(client, did)["markdownContent"]
