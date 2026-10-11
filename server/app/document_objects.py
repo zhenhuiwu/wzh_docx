@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Query, Request
 
 from app.db import MAINTENANCE_BUSY_MS, connect
-from app.document_access import document_principal, is_admin, load_document
+from app.document_access import document_principal, is_admin, load_document, permissions_of
 from app.document_location import LocItem, compute_locations
 from app.errors import AppError
 from app.markdown_blocks import Block, assemble, canonical_key, heading_text, split
@@ -355,11 +355,14 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
     principal = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
-        load_document(conn, did, principal.user_id, is_admin(principal), "read")
+        document = load_document(conn, did, principal.user_id, is_admin(principal), "read")
+        # A05 B-8：轮询带 permissions（与文档详情同一来源），权限被调整或项目归档后 45 秒内可感知
+        permissions = permissions_of(document.project_role, document.admin, document.archived)
         available = ensure_committed(conn, did)
         revision = int(conn.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()["revision"])
         if not available:
-            return {"data": {"documentRevision": revision, "objectModel": False, "objects": [], "changedBy": []},
+            return {"data": {"documentRevision": revision, "objectModel": False, "objects": [], "changedBy": [],
+                             "permissions": permissions},
                     "requestId": request.state.request_id}
         rows = live_objects(conn, did)
         names = {str(row["id"]): row["name"] for row in conn.execute(
@@ -395,7 +398,8 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
                                 "deletedAt": format_timestamp(row["deleted_at"]),
                                 "location": json.loads(row["location_json"]) if row["location_json"] else None})
         changed_by = _changed_by(conn, did, sinceRevision if sinceRevision is not None else revision, principal.user_id)
-        return {"data": {"documentRevision": revision, "objectModel": True, "objects": objects, "changedBy": changed_by},
+        return {"data": {"documentRevision": revision, "objectModel": True, "objects": objects, "changedBy": changed_by,
+                         "permissions": permissions},
                 "requestId": request.state.request_id}
 
 

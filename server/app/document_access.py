@@ -51,6 +51,8 @@ class DocumentRow:
     # 以下为按名访问的新列，不参与下标（追加列不会让旧下标错位）。
     project_role: str | None = None
     admin: bool = False
+    # A05 / P-4：项目已归档时文档只读（可查看、可导出）。
+    archived: bool = False
 
     def __getitem__(self, key: int | str):
         if isinstance(key, str):
@@ -72,7 +74,8 @@ _SELECT = """
            d.status, d.owner_id, owner.name as owner_name, d.revision, d.updated_at,
            p.name as project_name,
            td.name as template_document_name,
-           p.owner_id as project_owner_id
+           p.owner_id as project_owner_id,
+           p.archived_at as project_archived_at
     FROM documents d
     JOIN projects p ON p.id = d.project_id
     JOIN users owner ON owner.id = d.owner_id
@@ -110,12 +113,38 @@ def member_role(connection, project_id: UUID, user_id: UUID) -> str | None:
 
 
 def _owner_name(connection, project_id: UUID) -> str | None:
-    row = connection.execute(
-        """select u.name from project_members m join users u on u.id = m.user_id
-           where m.project_id = %s and m.role = 'owner' order by u.name limit 1""",
+    """403 details.ownerName（A05 B-9）：启用中的负责人，主负责人在前，最多 2 位，再多加“等”。"""
+    return owner_names_text(active_owner_names(connection, project_id))
+
+
+def active_owner_names(connection, project_id: UUID) -> list[str]:
+    """启用中的负责人姓名：主负责人（projects.owner_id）在前，其余按加入时间（无时间的排后）、姓名、账号。"""
+    rows = connection.execute(
+        """select u.name from project_members m
+           join users u on u.id = m.user_id
+           join projects p on p.id = m.project_id
+           where m.project_id = %s and m.role = 'owner' and u.status = 'active'
+           order by case when m.user_id = p.owner_id then 0 else 1 end,
+                    case when m.created_at is null then 1 else 0 end, m.created_at, u.name, u.account""",
         (project_id,),
-    ).fetchone()
-    return None if row is None else str(row["name"])
+    ).fetchall()
+    return [str(row["name"]) for row in rows]
+
+
+def owner_names_text(names: list[str]) -> str | None:
+    if not names:
+        return None
+    return "、".join(names[:2]) + ("等" if len(names) > 2 else "")
+
+
+PROJECT_ARCHIVED_MESSAGE = "项目已归档，恢复后才能修改。"
+
+
+def ensure_project_writable(connection, project_id: UUID) -> None:
+    """A05 R3 / P-4：归档项目的成员和文档写操作一律 409 PROJECT_ARCHIVED（在可见性与角色检查之后调用）。"""
+    row = connection.execute("select archived_at from projects where id = %s", (project_id,)).fetchone()
+    if row is not None and row["archived_at"] is not None:
+        raise AppError(409, "PROJECT_ARCHIVED", PROJECT_ARCHIVED_MESSAGE, details={"readonlyReason": "archived"})
 
 
 def check_project(connection, project_id: UUID, role: str | None, admin: bool, need: Need,
@@ -148,6 +177,8 @@ def project_access(connection, principal: Principal, project_id: UUID, need: Nee
     if exists is None:
         raise AppError(404, "NOT_FOUND", _NOT_FOUND_PROJECT)
     check_project(connection, project_id, role, admin, need, _NOT_FOUND_PROJECT)
+    if need == "edit":
+        ensure_project_writable(connection, project_id)
     return role
 
 
@@ -156,28 +187,37 @@ def document_access(connection, principal: Principal, document_id: UUID, need: N
     return load_document(connection, document_id, principal.user_id, is_admin(principal), need)
 
 
-def load_document(connection, document_id: UUID, user_id: UUID, admin: bool, need: Need = "read") -> DocumentRow:
+def load_document(connection, document_id: UUID, user_id: UUID, admin: bool, need: Need = "read",
+                  *, allow_archived: bool = False) -> DocumentRow:
+    """allow_archived：只追加私人副本、不改正文的写入（冲突“我的版本”快照）在归档项目里仍允许，保证字不丢。"""
     row = connection.execute(_SELECT, (document_id,)).fetchone()
     if row is None:
         raise AppError(404, "NOT_FOUND", _NOT_FOUND_DOCUMENT)
     role = member_role(connection, row["project_id"], user_id)
     check_project(connection, row["project_id"], role, admin, need, _NOT_FOUND_DOCUMENT)
+    archived = row["project_archived_at"] is not None
+    if need == "edit" and archived and not allow_archived:
+        ensure_project_writable(connection, row["project_id"])
     values = {item.name: row[item.name] for item in _LEGACY}
-    return DocumentRow(**values, project_role=role, admin=admin)
+    return DocumentRow(**values, project_role=role, admin=admin, archived=archived)
 
 
-def permissions_of(role: str | None, admin: bool) -> dict[str, object]:
-    """4.7 permissions 字段（仅展示；写接口仍独立检查）。"""
+def permissions_of(role: str | None, admin: bool, archived: bool = False) -> dict[str, object]:
+    """4.7 permissions 字段（仅展示；写接口仍独立检查）。
+
+    readonlyReason：None | "role" | "archived"（A05 R3 / P-4：归档项目所有人只读，可查看和导出）；
+    "assignment" 留给 A07。"""
     if admin:
-        return {"projectRole": role, "canEdit": True, "canExport": True, "canResolveConflicts": True,
-                "canViewMemberConflicts": True, "readonlyReason": None}
-    granted = project_permissions(role) if role else frozenset()
-    can_edit = "documents.edit" in granted
+        granted_edit, can_export, member_conflicts = True, True, True
+    else:
+        granted = project_permissions(role) if role else frozenset()
+        granted_edit, can_export, member_conflicts = "documents.edit" in granted, "documents.export" in granted, role == "owner"
+    can_edit = granted_edit and not archived
     return {
         "projectRole": role,
         "canEdit": can_edit,
-        "canExport": "documents.export" in granted,
+        "canExport": can_export,
         "canResolveConflicts": can_edit,
-        "canViewMemberConflicts": role == "owner",
-        "readonlyReason": None if can_edit else "role",
+        "canViewMemberConflicts": member_conflicts,
+        "readonlyReason": None if can_edit else ("archived" if archived else "role"),
     }

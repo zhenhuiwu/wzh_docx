@@ -34,7 +34,8 @@ from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
 from app.document_commit import _version_markdown, commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
-from app.document_access import DocumentRow, Need, check_project, document_principal, load_document, member_role, permissions_of
+from app.document_access import (DocumentRow, Need, check_project, document_principal, ensure_project_writable, load_document, member_role,
+                                 permissions_of)
 from app.models import format_timestamp
 from app.writing_skills import load_skill_snapshot
 
@@ -456,6 +457,8 @@ def _project_visible(connection, project_id: UUID, user_id: UUID, admin: bool, n
         raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
     role = member_role(connection, project_id, user_id)
     check_project(connection, project_id, role, admin, need)
+    if need == "edit":
+        ensure_project_writable(connection, project_id)
     return role
 
 
@@ -479,7 +482,8 @@ def list_documents(request: Request, project_id: str) -> dict[str, object]:
 
     with connect() as conn:
         role = _project_visible(conn, pid, session.user_id, admin)
-        permissions = permissions_of(role, admin)
+        archived = conn.execute("SELECT archived_at FROM projects WHERE id = %s", [pid]).fetchone()["archived_at"] is not None
+        permissions = permissions_of(role, admin, archived)
 
         where = ["d.project_id = %s"]
         params: list[object] = [pid]
@@ -726,7 +730,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "projectName": row[14],
                 "templateDocumentName": row[15],
                 "templateName": None if group is None else group[0],
-                "permissions": permissions_of(row.project_role, row.admin),
+                "permissions": permissions_of(row.project_role, row.admin, row.archived),
             },
             "requestId": request.state.request_id,
         }

@@ -1194,8 +1194,9 @@ def save_mine_snapshot(request: Request, document_id: str, conflict_id: str, bod
         conflict = _load_conflict(connection, did, conflict_id)
         if str(conflict["actor_id"]) != str(principal.user_id):
             raise AppError(403, "FORBIDDEN", "只有提交这份修改的人可以保存冲突副本。")
-        # 已定：被降为没有编辑权限的作者不能再存快照（与处理冲突一致）
-        load_document(connection, did, principal.user_id, is_admin(principal), "edit")
+        # 已定：被降为没有编辑权限的作者不能再存快照（与处理冲突一致）。
+        # A05：归档项目里仍可追加（只存私人副本、不改正文，保证字不丢；17 §4.5.4 同理）。
+        load_document(connection, did, principal.user_id, is_admin(principal), "edit", allow_archived=True)
         if connection.in_transaction:
             connection.commit()
         with write_transaction(connection):
