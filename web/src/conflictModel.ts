@@ -99,11 +99,13 @@ export function changedByText(changedBy: Array<Person & { objects: number }> | u
 }
 
 /** 他人更新提示条（02 §3.3，界面验收 M6）：本地没有未保存修改时已自动刷新；有修改时常驻提示。 */
-export function othersUpdatedText(names: string[], objects: number, refreshed: boolean): string {
+export function othersUpdatedText(names: string[], objects: number, refreshed: boolean, frozen = false): string {
   const unique = [...new Set(names.filter(Boolean))];
   const who = !unique.length ? "其他成员" : unique.length === 1 ? unique[0] : `${unique[0]} 等 ${unique.length} 人`;
   const count = objects > 0 ? ` ${objects} 处` : "";
   if (refreshed) return `已显示 ${who} 的最新修改。`;
+  // 方案 C：编辑区有冻结的冲突段时保存后也不自动重绘，要点“立即刷新”（冲突段保持不变）
+  if (frozen) return `${who}${unique.length > 1 ? "" : " "}更新了${count}内容。编辑区里有未处理的冲突段，点“立即刷新”显示${unique.length > 1 ? "他们" : "他"}的更新（冲突段保持不变）。`;
   return `${who}${unique.length > 1 ? "" : " "}更新了${count}内容。你的修改保存后会自动显示${unique.length > 1 ? "他们" : "他"}的更新。`;
 }
 

@@ -538,10 +538,11 @@ def main() -> int:
             expect(panel.locator(".ccard-side.mine")).to_contain_text("（李工的写法）")
             expect(panel.locator(".ccard-side.theirs")).to_contain_text("（张工的写法）")
             expect(b.get_by_test_id("conflict-toggle")).to_contain_text("冲突 1")
-            # 冲突部分不写入正文：编辑区显示对方（已在正文中）的版本，我的版本只在面板里
-            expect(paragraph(b, "（张工的写法）")).to_be_visible(timeout=15000)
-            expect(b.locator(".paper-content", has_text="（李工的写法）")).to_have_count(0, timeout=15000)
+            # 方案 C：冲突部分不写入正文——编辑区里这一段冻结（红框）、仍显示我的版本，正文是对方的版本
+            expect(b.locator(".paper-content [data-frozen]", has_text="（李工的写法）")).to_have_count(1, timeout=15000)
             wait_saved(b)
+            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+            assert "（张工的写法）" in server and "（李工的写法）" not in server, "冲突段不该写入正文"
             # 正文冲突标记与目录红点（验收 M5）
             mark = b.get_by_test_id("conflict-mark")
             expect(mark).to_have_count(1, timeout=15000)

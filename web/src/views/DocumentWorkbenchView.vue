@@ -3341,7 +3341,7 @@ onUnmounted(() => {
           <div v-if="othersUpdated" class="wb-notice info floating" role="status" data-testid="others-updated">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
             <span v-if="othersUpdated.here" data-testid="others-here">{{ othersUpdated.names[0] || '其他成员' }} 更新了你正在看的这一段。</span>
-            <span v-else>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false) }}</span>
+            <span v-else>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false, frozenOpen.length > 0) }}</span>
             <span class="acts">
               <button type="button" class="ghost sm" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>
               <button type="button" class="subtle sm" :disabled="opBusy" @click="openHistory">查看修改记录</button>

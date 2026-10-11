@@ -127,8 +127,13 @@ def check(ctx: Ctx, name: str, page, doc_id: str, owners: dict[str, str], genuin
         hits = [block for block in blocks if marker in block]
         if len(hits) != 1 or owner not in hits[0].split(marker)[0] and not hits[0].lstrip("-| ").startswith(owner):
             problems.append(f"{marker}→{[hit[:30] for hit in hits]}")
-    editor = page.locator(".paper-content").inner_text()
     items = conflict_items(doc_id)
+    refresh = page.get_by_role("button", name="立即刷新")
+    if genuine and refresh.count():
+        # 方案 C：有冻结的冲突段时，合并进来的他人修改要点“立即刷新”才显示（冲突段保持冻结）
+        refresh.first.click()
+        page.wait_for_timeout(3000)
+    editor = page.locator(".paper-content").inner_text()
     # 方案 C：真冲突那一段在编辑区冻结、显示我的版本（对方版本在正文和冲突卡里），所以只属于对方版本的标记不要求出现在编辑区
     frozen_theirs = [marker for marker in owners if genuine and len(items) == 1 and marker in items[0]["theirs"] and marker not in items[0]["latest"]]
     missing = [marker for marker in owners if marker not in editor and marker not in frozen_theirs]

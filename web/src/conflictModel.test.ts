@@ -51,6 +51,7 @@ describe("冲突入口与他人更新文案（界面验收 M2/M3/M6）", () => {
     expect(conflictToggle(null, 1)).toMatchObject({ label: "冲突 1" });
     expect(othersUpdatedText(["李工"], 1, true)).toBe("已显示 李工 的最新修改。");
     expect(othersUpdatedText(["李工", "王工", "李工"], 3, false)).toBe("李工 等 2 人更新了 3 处内容。你的修改保存后会自动显示他们的更新。");
+    expect(othersUpdatedText(["张工"], 2, false, true)).toBe("张工 更新了 2 处内容。编辑区里有未处理的冲突段，点“立即刷新”显示他的更新（冲突段保持不变）。");
   });
 });
 
