@@ -830,8 +830,11 @@ def main() -> int:
             assert "还没存上服务器" not in page.locator("body").inner_text(), "冲突时仍显示“正在自动重试”"
             # 恢复条换成 B；冲突未处理时恢复 B 被拒绝并提示
             expect(page.locator(".draft-recovery")).to_contain_text("【B稿】", timeout=20000)
-            bar.get_by_role("button", name="恢复并保存").click()
-            expect(page.locator(".wb-notice.info")).to_contain_text("还有未处理的冲突", timeout=20000)
+            # 设计师 T-S1：拒绝原因常驻在恢复条里，“恢复并保存”置灰并带提示（不再点了才弹短提示）
+            restore = bar.get_by_role("button", name="恢复并保存")
+            expect(restore).to_be_disabled(timeout=20000)
+            expect(restore).to_have_attribute("title", "请先处理未完成的冲突")
+            expect(page.locator(".draft-recovery")).to_contain_text("冲突")
             page.wait_for_timeout(2000)
             from app.db import connect
             with connect() as connection:

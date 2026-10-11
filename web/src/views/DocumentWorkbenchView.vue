@@ -663,7 +663,7 @@ async function settlePendingSaves(record: DocumentRecord, retried = false) {
   if (waiting && !retried) window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, true); }, 1500);
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
-async function refreshFromServer(options: AcceptOptions = {}): Promise<boolean> {
+async function refreshFromServer(options: AcceptOptions = {}, force = false): Promise<boolean> {
   const record = document.value;
   if (!record || isDirty.value || saving.value) return false;
   const stopReason = options.yieldToTyping ? reasonLater(options.reason || "正在载入最新内容…") : () => undefined;
@@ -671,7 +671,8 @@ async function refreshFromServer(options: AcceptOptions = {}): Promise<boolean> 
   try { latest = await getDocument(record.id); }
   finally { stopReason(); }
   if (document.value !== record) return false;
-  if (latest.revision === record.revision) return true;
+  // force：有冻结冲突段时保存已把修订号推到最新，但编辑区没重绘（他人修改还没显示），“立即刷新”要按服务器正文重绘
+  if (latest.revision === record.revision && !force) return true;
   if (options.yieldToTyping && (isDirty.value || saving.value)) return false;
   if (latest.formatTemplate) record.formatTemplate = latest.formatTemplate;
   const accepted = await acceptContent({ markdownContent: latest.markdownContent, revision: latest.revision, status: latest.status }, options);
@@ -1047,7 +1048,7 @@ async function refreshOthersNow() {
   if (isDirty.value) await save("manual");
   if (savePromise) await savePromise.catch(() => undefined);
   if (isDirty.value) return;
-  await refreshFromServer().catch(() => false);
+  await refreshFromServer({}, true).catch(() => false);
   othersUpdated.value = null;
 }
 function headingPathsOf(markdown: string): string[][] {
