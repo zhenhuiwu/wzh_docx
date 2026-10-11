@@ -26,7 +26,6 @@ from app.identity import (
     create_user,
     hash_password,
     password_change_guard,
-    verify_password,
 )
 
 _ACCOUNT = "BOOTSTRAP_ADMIN_ACCOUNT"

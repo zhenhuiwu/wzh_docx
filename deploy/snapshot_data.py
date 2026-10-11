@@ -23,7 +23,7 @@ README = """文档工作室 · 一键启动说明
 
 1. 将整个文件夹解压到可写目录，双击“文档工作室.exe”。
 2. 在浏览器打开 http://localhost:5173 ，用原有账号登录。
-   仍在使用旧版固定密码 admin123 的账号，登录后会被要求先修改密码。
+   已有账号和密码继续有效，包括 admin / admin123。
    全新安装（没有任何账号）时，首次启动会生成随机初始密码，
    保存到“初始管理员密码.txt”并显示在启动窗口；首次改密成功后该文件自动删除。
 3. 使用结束后，可在启动窗口按 Ctrl+C 停止；再次双击即可启动。
@@ -41,13 +41,14 @@ README = """文档工作室 · 一键启动说明
 确认是普通业务内容后用 build.ps1 -AllowCredentialText 表.列 放行，放行的表列和次数记在“部署校验.json”的 accepted_leftovers 中；
 若确是泄露的密码，应先在原系统中删除该内容再打包。
 
-部署包不包含 AI 密钥。需要 AI 编写时：
-  把 .env.example 复制为 .env，在 AI_API_KEY= 后填写本机使用的密钥，然后重启程序。
-  .env.example 已带上原环境的 AI 服务地址、模型和思考强度，数据库与文件目录为相对路径。
+build.ps1 生成的是私有迁移包：.env 已包含当前 AI 地址、模型、密钥和思考强度，可继续使用。
+私有迁移包包含数据和 AI 密钥，请勿公开分享或提交到 Git。
+单独使用快照工具默认不携带密钥；若包内只有 .env.example，将其复制为 .env 并填写 AI_API_KEY 后重启。
+数据库与文件目录已改为包内相对路径；.env.example 始终不包含密钥。
 
 数据与配置：
   .env.example            配置模板（不含密钥）
-  .env                    本机配置，自行创建，含 API Key，请勿外传
+  .env                    私有迁移配置，含 API Key，请勿外传
   data/app.db             SQLite 业务数据库
   data/files/             Word 文档、截图与其他业务文件
   logs/                   启动与服务日志
@@ -64,7 +65,7 @@ AI_REASONING_EFFORT 配置思考强度；留空使用模型默认值。可选 no
 部署校验.json 记录迁移时间、业务数量、清除的凭据数量和文件校验值，不包含任何密钥。
 """
 
-# Never ship these from the source environment, whatever the caller passes.
+# The example never carries credentials; private migration only includes the AI key.
 SECRET_KEYS = frozenset({"AI_API_KEY", "BOOTSTRAP_ADMIN_PASSWORD"})
 
 
@@ -279,7 +280,7 @@ def file_manifest(root: Path) -> dict[str, tuple[int, int]]:
 
 def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execute: bool,
              env_updates: dict[str, str] | None = None,
-             allowed_leftovers: frozenset[str] = frozenset()) -> dict:
+             allowed_leftovers: frozenset[str] = frozenset(), include_ai_config: bool = False) -> dict:
     database, files, env_file, target = (path.resolve() for path in (database, files, env_file, target))
     if not database.is_file() or not files.is_dir() or not env_file.is_file():
         raise RuntimeError("数据库、文件数据目录或 .env 不存在。")
@@ -358,14 +359,26 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
             ensure_idle(source)
             if business_fingerprint(source) != before or file_manifest(files) != manifest or digest(env_file) != env_digest:
                 raise RuntimeError("迁移期间数据或配置发生变化，请重试。")
-            # The source .env holds secrets; ship a template instead of copying it.
             updates = {**(env_updates or {}), "DATABASE_URL": "sqlite:///./data/app.db", "FILE_DATA_DIR": "./data/files"}
+            entries = ["data", ".env.example", "使用说明.txt", "部署校验.json"]
+            if include_ai_config:
+                from dotenv import dotenv_values
+
+                keys = ("DATABASE_URL", "FILE_DATA_DIR", "FILE_MAX_BYTES", "AI_BASE_URL", "AI_MODEL",
+                        "AI_CONTEXT_TOKENS", "AI_REASONING_EFFORT", "AI_API_KEY")
+                values = dotenv_values(env_file)
+                updates = {**{key: values[key] for key in keys if key in values}, **updates}
+                private_config = "# 私有迁移配置：包含 AI 密钥，请勿外传或提交到 Git。\n" + "".join(
+                    f"{key}={env_quote(str(updates[key] or ''))}\n" for key in keys if key in updates)
+                (stage / ".env").write_text(private_config, encoding="utf-8")
+                entries.append(".env")
             (stage / ".env.example").write_text(env_example(updates), encoding="utf-8")
             (stage / "使用说明.txt").write_text(README, encoding="utf-8-sig")
             metadata.update(database_bytes=destination.stat().st_size,
-                            database_sha256=digest(destination), files_sha256=hashes)
+                            database_sha256=digest(destination), files_sha256=hashes,
+                            includes_ai_config=include_ai_config)
             (stage / "部署校验.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-            for name in ("data", ".env.example", "使用说明.txt", "部署校验.json"):
+            for name in entries:
                 (stage / name).replace(target / name)
         return metadata
 
@@ -389,6 +402,7 @@ def main() -> int:
     parser.add_argument("--source-server", type=Path, default=Path(__file__).resolve().parents[1] / "server")
     parser.add_argument("--target", type=Path, default=Path(__file__).resolve().parents[1] / "release" / "文档工作室")
     parser.add_argument("--execute", action="store_true", help="copy; without this flag inspect only")
+    parser.add_argument("--include-ai-config", action="store_true", help="私有迁移：携带当前 AI 配置和密钥，请勿外传")
     parser.add_argument("--allow-credential-text", action="append", default=[], metavar="TABLE.COLUMN",
                         help="经人工确认后，允许该表列中出现与测试密码相同的独立词（原样迁移并记录次数）")
     args = parser.parse_args()
@@ -402,8 +416,10 @@ def main() -> int:
         result = snapshot(server / settings.database_url.removeprefix("sqlite:///"),
                           server / settings.file_data_dir, server / ".env", args.target,
                           execute=args.execute, allowed_leftovers=frozenset(args.allow_credential_text),
+                          include_ai_config=args.include_ai_config,
                           env_updates={
                               "AI_BASE_URL": settings.ai_base_url, "AI_MODEL": settings.ai_model,
+                              "AI_API_KEY": settings.ai_api_key,
                               "AI_CONTEXT_TOKENS": str(settings.ai_context_tokens),
                               "AI_REASONING_EFFORT": settings.ai_reasoning_effort,
                               "FILE_MAX_BYTES": str(settings.file_max_bytes),

@@ -2,8 +2,10 @@
 
 from fastapi.testclient import TestClient
 import pytest
+import sys
+from types import SimpleNamespace
 
-from app.ai_capability import ai_status, require_ai
+from app.ai_capability import _office, ai_status, require_ai
 from app.config import clear_settings_cache
 from app.db import migrate
 from app.errors import AppError
@@ -29,6 +31,7 @@ def _env(monkeypatch, values):
 
 @pytest.mark.parametrize(("values", "available", "reason"), CASES)
 def test_capabilities_match_call_sites(monkeypatch, values, available, reason):
+    monkeypatch.setattr("app.ai_capability._office", lambda name: {"available": False, "reason": f"{name.lower()}_not_installed"})
     _env(monkeypatch, values)
     migrate()
     create_user(account="cap-user", name="普通", password="capabilities-pass", roles=["template_manager"])
@@ -58,3 +61,36 @@ def test_capabilities_require_login():
     migrate()
     with TestClient(create_app()) as client:
         assert client.get("/api/v1/capabilities").status_code == 401
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_office_cache_and_com_release_order(monkeypatch, failed):
+    events = []
+
+    class Application:
+        def Quit(self):
+            events.append("quit")
+            if failed:
+                raise RuntimeError("Office unavailable")
+
+        def __del__(self):
+            events.append("release")
+
+    def dispatch(name):
+        events.append(name)
+        return Application()
+
+    com = SimpleNamespace(CoInitialize=lambda: events.append("init"), CoUninitialize=lambda: events.append("uninit"))
+    client = SimpleNamespace(DispatchEx=dispatch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "pythoncom", com)
+    monkeypatch.setitem(sys.modules, "win32com", SimpleNamespace(client=client))
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    _office.cache_clear()
+    try:
+        for name in ("Word", "Visio", "Word", "Visio"):
+            assert _office(name)["available"] is not failed
+        assert events == ["init", "Word.Application", "quit", "release", "uninit",
+                          "init", "Visio.Application", "quit", "release", "uninit"]
+    finally:
+        _office.cache_clear()

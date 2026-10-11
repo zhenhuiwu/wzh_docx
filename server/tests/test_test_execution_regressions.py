@@ -195,7 +195,7 @@ def test_report_uses_full_frame_instead_of_existing_legacy_crop_and_requires_com
     (tmp_path / "real.png").write_bytes(png)
     (tmp_path / "legacy-detail.png").write_bytes(bad_crop)
     run = {"id": str(uuid4()), "status": "completed", "result": {"cases": [
-        {"title": "neutral", "kind": "functional", "status": "passed", "steps": [
+        {"caseId": str(uuid4()), "title": "neutral", "kind": "functional", "status": "passed", "steps": [
             {"action": "assert_text", "status": "passed", "screenshot": "real.png", "reportScreenshot": "legacy-detail.png"},
         ]},
     ]}}
@@ -222,7 +222,7 @@ def test_report_crops_display_from_complete_image_and_ignores_unsafe_regions(tmp
     rect = {"x": 480, "y": 270, "width": 960, "height": 270}
     common = {"status": "passed", "screenshot": "real.png"}
     run = {"id": str(uuid4()), "status": "completed", "result": {"cases": [
-        {"title": "neutral", "kind": "functional", "status": "passed", "steps": [
+        {"caseId": str(uuid4()), "title": "neutral", "kind": "functional", "status": "passed", "steps": [
             {**common, "action": "assert_text", "focusRect": rect},
             {**common, "action": "click", "focusRect": rect},
             {**common, "action": "assert_text", "focusRect": {**rect, "x": 1920}},

@@ -29,7 +29,7 @@ from docx.shared import Mm, Pt, RGBColor
 from app.config import get_settings
 from app.db import connect
 from app.files import resolve_object
-from app.docx_export import crop_picture as _crop_report_picture
+from app.docx_export import _finish_document, _html_blocks, _insert_block, diagram_images
 from app.docx_parser import _markdown_text
 
 logger = logging.getLogger(__name__)
@@ -657,6 +657,8 @@ def result_markdown(task: dict, run: dict, cases: list[dict], *, heading_level: 
     blocks.append("#" * level + " " + _markdown_text(_redact(task, task["name"]).replace("\n", " ") + " 实测记录"))
     paragraph(f"执行时间：{run.get('startedAt', '')} 至 {run.get('endedAt') or '尚未结束'}")
     paragraph("本次执行结果：" + _STATUS.get(run["status"], run["status"]))
+    paragraph(f"前端地址：{task.get('frontendUrl') or '未配置'}")
+    paragraph(f"后端地址：{task.get('backendUrl') or '未配置'}")
     paragraph("测试数据范围：" + (task.get("dataScope") or "未配置"))
     for case in cases:
         if case.get("kind") == "functional" and case.get("status") == "passed" and not case.get("steps"):
@@ -676,7 +678,11 @@ def result_markdown(task: dict, run: dict, cases: list[dict], *, heading_level: 
             data = picture.read_bytes()
             if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > 20 * 1024 * 1024:
                 raise MissingInput("测试截图不是有效的 PNG 图片。")
-            ref = f"docx-image:test-{run['id']}-{case['caseId']}-{index}"
+            try:
+                case_id = str(UUID(str(case.get("caseId"))))
+            except ValueError:
+                raise MissingInput("测试结果标识不正确，无法关联完整截图证据。") from None
+            ref = f"docx-image:test-{run['id']}-{case_id}-{index}"
             rect = step.get("focusRect") if step.get("action") in _FOCUS_ACTIONS else None
             if not isinstance(rect, dict) or any(isinstance(rect.get(key), bool) or not isinstance(rect.get(key), (int, float))
                 or not math.isfinite(rect[key]) or abs(rect[key]) > 1e9 for key in ("x", "y", "width", "height")):
@@ -705,9 +711,7 @@ def build_report(task: dict, run: dict) -> Path:
             raise MissingInput("待补充的原 Word 文件不存在。")
         original = resolve_object(get_settings().file_data_dir, str(row["storage_key"]))
     document = Document(str(original)) if original else Document()
-    if original:
-        document.add_page_break()
-    else:
+    if not original:
         section = document.sections[0]
         section.page_width, section.page_height = Mm(210), Mm(297)
         section.left_margin = section.right_margin = Mm(25)
@@ -716,56 +720,21 @@ def build_report(task: dict, run: dict) -> Path:
             style.font.name, style.font.size, style.font.color.rgb = "宋体", Pt(size), RGBColor(0, 0, 0)
             style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
             style.paragraph_format.space_after = Pt(6)
-    heading = "Heading 1" if "Heading 1" in document.styles else "Normal"
-    subheading = "Heading 2" if "Heading 2" in document.styles else heading
-    table_style = document.tables[0].style if document.tables else document.styles["Table Grid"] if "Table Grid" in document.styles else None
-    document.add_paragraph(_redact(task, task["name"]) + " 实测记录", heading)
-    document.add_paragraph(f"执行时间：{run.get('startedAt', '')} 至 {run.get('endedAt') or '尚未结束'}")
-    document.add_paragraph("结果：" + _STATUS.get(run["status"], run["status"]))
-    document.add_paragraph(_redact(task, f"前端地址：{task.get('frontendUrl') or '未配置'}\n后端地址：{task.get('backendUrl') or '未配置'}"))
-    document.add_paragraph("测试数据范围：" + _redact(task, task.get("dataScope") or "未配置"))
     result = run.get("result") or {}
     results = result.get("cases", [])
+    content, pictures = result_markdown(task, run, results, heading_level=1)
     if not results:
-        document.add_paragraph("未取得任何测试执行结果。")
-    available_width = document.sections[-1].page_width - document.sections[-1].left_margin - document.sections[-1].right_margin
-    for case in results:
-        if case.get("status") == "passed" and case.get("kind") == "functional" and (
-            not case.get("steps") or any(not step.get("screenshot") for step in case["steps"])
-        ):
-            raise MissingInput("通过用例的完整截图证据缺失，无法生成完整测试报告。")
-        document.add_paragraph(_redact(task, case["title"]), subheading)
-        for value in _case_paragraphs(task, case):
-            document.add_paragraph(value)
-        for index, step in enumerate(case.get("steps", [])):
-            caption_text, actual_text = _step_paragraphs(task, step, index)
-            caption = document.add_paragraph(caption_text)
-            actual = document.add_paragraph(actual_text)
-            if step.get("screenshot"):
-                caption.paragraph_format.keep_with_next = actual.paragraph_format.keep_with_next = True
-                full_image = _report_image(folder, case, step)
-                # Old detail captures can show a different navigation frame.
-                # A partial image must never replace the full operation evidence.
-                image = full_image
-                if image is None:
-                    document.add_paragraph("该步骤截图缺失。")
-                else:
-                    shape = document.add_picture(str(image), width=available_width)
-                    if step.get("action") in _FOCUS_ACTIONS:
-                        _crop_report_picture(document, shape, step.get("focusRect"))
-        metrics = case.get("metrics")
-        if metrics:
-            table = document.add_table(rows=1, cols=2)
-            if table_style:
-                table.style = table_style
-            table.rows[0].cells[0].text, table.rows[0].cells[1].text = "并发指标", "实测值"
-            for label, value in _metric_rows(case):
-                cells = table.add_row().cells
-                cells[0].text, cells[1].text = label, value
-        if case.get("log"):
-            document.add_paragraph("执行日志")
-            for line in _redact(task, str(case["log"])).splitlines():
-                document.add_paragraph(line)
+        content += "\n\n<p>未取得任何测试执行结果。</p>"
+    sources = diagram_images(pictures)
+    anchor = document.element.body.sectPr
+    test_pictures = []
+    for index, block in enumerate(_html_blocks(content)):
+        _insert_block(document, block, anchor, image_sources=sources, outline_headings=True)
+        if original and index == 0:
+            document.paragraphs[-1].paragraph_format.page_break_before = True
+        if block.xpath('./img[starts-with(@src,"docx-image:test-")]'):
+            test_pictures.append(anchor.getprevious())
+    _finish_document(document, test_pictures)
     output = folder / "test-report.docx"
     temporary = folder / "test-report.tmp.docx"
     document.save(str(temporary))

@@ -24,6 +24,8 @@ const editing = ref(false);
 const saving = ref(false);
 const formError = ref("");
 const form = ref({ name: "", description: "", organization: "", department: "", group: "", clientContact: "", status: "not_started" as ProjectRecord["status"], periodStart: "", periodEnd: "" });
+const savedForm = ref("");
+const dirty = computed(() => editing.value && JSON.stringify(form.value) !== savedForm.value);
 let projectRequest = 0;
 let documentRequest = 0;
 let saveRequest = 0;
@@ -38,6 +40,7 @@ function fillForm(value: ProjectRecord) {
     department: value.department, group: value.group, clientContact: value.clientContact,
     status: value.status, periodStart: value.periodStart ?? "", periodEnd: value.periodEnd ?? "",
   };
+  savedForm.value = JSON.stringify(form.value);
 }
 
 async function loadDocuments() {
@@ -118,13 +121,32 @@ async function saveInfo() {
 }
 
 function canLeave() {
-  if (!saving.value) return true;
-  formError.value = "正在保存项目，请稍候。";
-  return false;
+  if (saving.value) {
+    formError.value = "正在保存项目，请稍候。";
+    return false;
+  }
+  return !dirty.value || window.confirm("项目资料尚未保存，确定放弃修改？");
+}
+
+function cancelEdit() {
+  if (!project.value || !canLeave()) return;
+  fillForm(project.value);
+  editing.value = false;
+  formError.value = "";
+  fields.clear();
+}
+
+function toggleEditing() {
+  if (editing.value) { cancelEdit(); return; }
+  if (!project.value || saving.value) return;
+  fillForm(project.value);
+  editing.value = true;
+  formError.value = "";
+  fields.clear();
 }
 
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (!saving.value) return;
+  if (!saving.value && !dirty.value) return;
   event.preventDefault();
   event.returnValue = "";
 }
@@ -160,7 +182,7 @@ onBeforeUnmount(() => {
       <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
           <h2 id="overview-title" class="section-title">项目概述</h2>
-          <button v-if="project.permissions?.canEdit !== false" type="button" class="ghost" :disabled="saving" @click="editing = !editing; formError = ''; fields.clear()">{{ editing ? "收起编辑" : "编辑项目" }}</button>
+          <button v-if="project.permissions?.canEdit !== false" type="button" class="ghost" :disabled="saving" @click="toggleEditing">{{ editing ? "收起编辑" : "编辑项目" }}</button>
         </div>
         <form v-if="editing" class="edit-form" :aria-busy="saving" novalidate @submit.prevent="saveInfo">
           <div class="form-grid">
@@ -175,7 +197,7 @@ onBeforeUnmount(() => {
             <label class="wide">项目说明<textarea v-model="form.description" class="control" rows="3" :disabled="saving" /></label>
           </div>
           <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
-          <div class="form-actions"><button type="submit" class="primary" :disabled="saving">{{ saving ? "正在保存…" : "保存项目" }}</button><button type="button" class="ghost" :disabled="saving" @click="editing = false; fillForm(project)">取消</button></div>
+          <div class="form-actions"><button type="submit" class="primary" :disabled="saving">{{ saving ? "正在保存…" : "保存项目" }}</button><button type="button" class="ghost" :disabled="saving" @click="cancelEdit">取消</button></div>
         </form>
         <template v-else>
           <p v-if="project.description" class="description">{{ project.description }}</p>

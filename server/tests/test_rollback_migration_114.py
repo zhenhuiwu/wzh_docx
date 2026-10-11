@@ -52,6 +52,7 @@ def test_rollback_114_refuses_while_service_running(tmp_path, monkeypatch, capsy
     """终验回归 M1：服务持有运行标记时 --yes 拒绝执行（退出码 2），库不变；停服务后可回滚。"""
     import subprocess
     import sys
+    import time
 
     from app import config, service_lock
 
@@ -76,6 +77,10 @@ def test_rollback_114_refuses_while_service_running(tmp_path, monkeypatch, capsy
         finally:
             holder.terminate()
             holder.wait(10)
+        # Windows 进程退出信号到达后，系统可能仍在释放文件锁。
+        deadline = time.monotonic() + 1
+        while service_lock.service_running(path) and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert not service_lock.service_running(path)
         assert rollback(path, apply=True) == 0
         assert "旧版本程序" in capsys.readouterr().out

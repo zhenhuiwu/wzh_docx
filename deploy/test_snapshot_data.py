@@ -1,10 +1,14 @@
 """Run with server/.venv/Scripts/python.exe deploy/test_snapshot_data.py."""
 
 from contextlib import closing
+from contextlib import redirect_stdout
 import hashlib
+from io import StringIO
 import json
+import os
 from pathlib import Path
 import sqlite3
+import sys
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -115,7 +119,8 @@ def check() -> None:
             "keys_removed": {"test_task_runs.snapshot_json": 1, "test_tasks.config_json": 2},
             "masked_occurrences": {"test_task_runs.result_json": 1},
         }
-        source_config = json.loads(sqlite3.connect(database).execute("SELECT config_json FROM test_tasks").fetchone()[0])
+        with closing(sqlite3.connect(database)) as connection:
+            source_config = json.loads(connection.execute("SELECT config_json FROM test_tasks").fetchone()[0])
         assert source_config["testPassword"] == "tester-secret-123"
         assert "do-not-print-this" not in json.dumps(metadata)
         try:
@@ -234,7 +239,8 @@ def check_weak_passwords() -> None:
                 connection.execute("UPDATE test_task_runs SET result_json=?",
                                    (json.dumps({"log": f"fill {password}", "steps": [{"value": password}]}),))
                 connection.commit()
-            raw = sqlite3.connect(database).execute("SELECT result_json FROM test_task_runs").fetchone()[0]
+            with closing(sqlite3.connect(database)) as connection:
+                raw = connection.execute("SELECT result_json FROM test_task_runs").fetchone()[0]
             assert password not in raw  # only the escaped form is stored
             metadata = snapshot(database, files, env_file, root / "package", execute=True)
             with closing(sqlite3.connect(root / "package/data/app.db")) as copied:
@@ -277,7 +283,92 @@ def check_weak_passwords() -> None:
     print("weak password check passed: leftovers outside test tables stop the migration, business tables unchanged")
 
 
+def check_private_ai_config() -> None:
+    from dotenv import dotenv_values
+    import snapshot_data
+
+    keys = ("fixture-ai-key", "fixture-密钥'\"\\尾", "fixture-line\nsecond\r\n\tend", "$HOME/plain-key", "")
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        database, files, env_file = _weak_source(root, "test-password-123", "正文", "writer")
+        for index, key in enumerate(keys):
+            source_values = {"AI_API_KEY": key, "AI_BASE_URL": "https://fixture.invalid/v1", "AI_MODEL": "fixture-model",
+                             "AI_REASONING_EFFORT": "high", "AI_CONTEXT_TOKENS": "64000", "FILE_MAX_BYTES": "40000000",
+                             "BOOTSTRAP_ADMIN_PASSWORD": "fixture-bootstrap-password",
+                             "DOCWB_INITIAL_PASSWORD_FILE": r"C:\private\password.txt",
+                             "DATABASE_URL": "sqlite:///old.db", "FILE_DATA_DIR": r"D:\old-files"}
+            env_file.write_text("".join(f"{name}={env_quote(value)}\n" for name, value in source_values.items()), encoding="utf-8")
+            original_database, original_env = database.read_bytes(), env_file.read_bytes()
+            output = root / f"private-{index}"
+            metadata = snapshot(database, files, env_file, output, execute=True, include_ai_config=True)
+            values = dotenv_values(output / ".env")
+            assert values["AI_API_KEY"] == key
+            assert values["DATABASE_URL"] == "sqlite:///./data/app.db" and values["FILE_DATA_DIR"] == "./data/files"
+            assert values["AI_MODEL"] == source_values["AI_MODEL"] and values["AI_BASE_URL"] == source_values["AI_BASE_URL"]
+            assert values["AI_REASONING_EFFORT"] == "high" and values["AI_CONTEXT_TOKENS"] == "64000"
+            assert values["FILE_MAX_BYTES"] == "40000000"
+            assert "BOOTSTRAP_ADMIN_PASSWORD" not in values and "DOCWB_INITIAL_PASSWORD_FILE" not in values
+            assert metadata["includes_ai_config"] is True
+            assert database.read_bytes() == original_database and env_file.read_bytes() == original_env
+            assert dotenv_values(output / ".env.example")["AI_API_KEY"] == ""
+            for file in output.rglob("*"):
+                if file.is_file() and file.name != ".env":
+                    content = file.read_bytes()
+                    assert not key or key.encode() not in content
+                    assert b"fixture-bootstrap-password" not in content
+            try:
+                snapshot(database, files, env_file, output, execute=True, include_ai_config=True)
+            except RuntimeError as error:
+                assert "拒绝覆盖" in str(error)
+            else:
+                raise AssertionError("Private config must never be overwritten")
+
+        refused = root / "refused-private"
+        try:
+            snapshot(database, files, env_file, refused, execute=True, include_ai_config=True,
+                     env_updates={"AI_API_KEY": "${HOME}/fixture-key"})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Interpolated secrets must not be silently changed")
+        assert not (refused / "data").exists() and not (refused / ".env").exists()
+
+        scrub = snapshot_data.scrub_credentials
+
+        def change_config(connection, *args):
+            result = scrub(connection, *args)
+            env_file.write_text("AI_API_KEY='changed-fixture-key'\n", encoding="utf-8")
+            return result
+
+        changed = root / "changed-private"
+        with patch.object(snapshot_data, "scrub_credentials", change_config):
+            try:
+                snapshot(database, files, env_file, changed, execute=True, include_ai_config=True)
+            except RuntimeError as error:
+                assert "发生变化" in str(error)
+            else:
+                raise AssertionError("Changed config must prevent publishing the private snapshot")
+        assert not (changed / "data").exists() and not (changed / ".env").exists()
+
+        effective_key = "effective-process-fixture-key"
+        output = root / "effective-config"
+        stdout = StringIO()
+        with patch.dict(os.environ, {"DATABASE_URL": "sqlite:///./app.db", "FILE_DATA_DIR": "./files",
+                                     "AI_API_KEY": effective_key, "AI_BASE_URL": "https://effective.invalid/v1",
+                                     "AI_MODEL": "effective-model", "AI_REASONING_EFFORT": "low"}), \
+             patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "server"), *sys.path]), \
+             patch.object(sys, "argv", ["snapshot_data.py", "--source-server", str(database.parent),
+                                         "--target", str(output), "--execute", "--include-ai-config"]), redirect_stdout(stdout):
+            assert snapshot_data.main() == 0
+        values = dotenv_values(output / ".env")
+        assert values["AI_API_KEY"] == effective_key and values["AI_MODEL"] == "effective-model"
+        assert values["AI_BASE_URL"] == "https://effective.invalid/v1" and values["AI_REASONING_EFFORT"] == "low"
+        assert effective_key not in stdout.getvalue() and "changed-fixture-key" not in stdout.getvalue()
+    print("private AI config check passed: 5 key roundtrips, effective process config, no metadata/example leaks, refused overwrite/interpolation/concurrent changes")
+
+
 if __name__ == "__main__":
     check_env_quoting()
     check_weak_passwords()
     check()
+    check_private_ai_config()

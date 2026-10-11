@@ -237,6 +237,7 @@ def _section_agent(
     source_revision: int = 0, planned_sections: set[int] | None = None,
     writing_skill: dict | None = None,
     template_structure: dict | None = None,
+    memory_targets: dict[int, str] | None = None,
 ):
     # Snapshot once: callers changing their dictionary after construction cannot
     # change constraints half-way through reading or planning this draft.
@@ -270,6 +271,13 @@ def _section_agent(
     headings = list(re.finditer(r"^(#{1,6})[ \t]+([^\n]+)$", full_markdown, re.MULTILINE))
     read_coverage: dict[int, int] = {}
 
+    def memory_target(index: int | None) -> str:
+        if index is None or index < 0:
+            return ""
+        if memory_targets is not None:
+            return memory_targets.get(index, "")
+        return headings[index].group(2).strip()[:120]
+
     def section_text(index: int) -> str:
         start = 0 if index == -1 else headings[index].end()
         end = headings[index + 1].start() if index + 1 < len(headings) else len(full_markdown)
@@ -296,7 +304,7 @@ def _section_agent(
                            "rules": chapter_rules,
                            "templateGuidance": template_guidance(index),
                            "memory": load_task_memory(document_id, scope="section",
-                               target=headings[index].group(2).strip()[:120] if index >= 0 else "正文",
+                               target=memory_target(index),
                                instruction=instruction, max_chars=2000)}, ensure_ascii=False)
 
     @tool
@@ -389,7 +397,7 @@ def _section_agent(
                     heading=headings[index].group(2).strip() if index >= 0 else "正文", document_name=document_name,
                     template_name=template_name, instruction=instruction, existing=section_text(index), writing_skill=writing_skill),
                 "templateGuidance": template_guidance(index),
-                "memory": load_task_memory(document_id, scope="section", target=headings[index].group(2).strip()[:120] if index >= 0 else "正文",
+                "memory": load_task_memory(document_id, scope="section", target=memory_target(index),
                     instruction=instruction, max_chars=2000)} for index in indices]}
         source["objective"] = objective.strip()
         guidance = source.get("templateGuidance", []) + [item for section in source.get("sections", []) for item in section["templateGuidance"]]
@@ -477,7 +485,7 @@ def _section_agent(
                 "writingSkill": rules.get("writingSkill"),
                 "templateGuidance": initial_guidance,
                 "projectOverview": overview}, ensure_ascii=False),
-                load_task_memory(document_id, scope=scope, target=heading[:120], instruction=instruction) or "暂无相关的已采纳要求。",
+                load_task_memory(document_id, scope=scope, target=heading[:120] if whole_document else memory_target(heading_index), instruction=instruction) or "暂无相关的已采纳要求。",
                 preparation, context_tokens, initial_content, context)],
         tools=[read_project_overview, read_document_section, read_document_sections, search_writing_memory, prepare_document_edit],
         skills=skill_paths or None,

@@ -95,7 +95,7 @@ cd server && uv run python -m app.reset_admin <账号>      # 重置指定账号
 # 后端测试：必须指定一个与业务库不同的测试库地址（每个用例实际使用临时目录中的独立 SQLite）
 cd server
 uv run playwright install chromium        # 首次：浏览器测试需要
-DOCWB_TEST_DATABASE_URL=sqlite:////tmp/docwb-test.db uv run pytest -q
+DOCWB_E2E=1 DOCWB_TEST_DATABASE_URL=sqlite:////tmp/docwb-test.db uv run pytest -q -rs
 
 # 代码检查（规则见 server/pyproject.toml 的 [tool.ruff]）
 uvx ruff check . ../deploy ../test_csrf.py --config pyproject.toml
@@ -126,8 +126,8 @@ cd deploy
 - `deploy/build.ps1` 与 `*.bat` 以 CRLF 换行保存，`.gitattributes` 禁止 Git 转换它们的换行。
 - 程序入口为 `server/desktop.py`，PyInstaller 配置为 `deploy/文档工作室.spec`，同时提供前端页面与 API，默认端口 5173，只监听 127.0.0.1。
 - 数据迁移由 `deploy/snapshot_data.py` 完成：只读校验源数据，清空会话等临时表，拒绝覆盖已有部署目录。
-- 部署包在 `deploy/.build/package` 中**按允许清单**重新组装（程序、`_internal`、迁移的 `data`、`.env.example`、`使用说明.txt`、`部署校验.json`），每次先清空；`release/` 中本机试用留下的 `.env`、数据、日志、密码文件不会进入 zip。出现清单外的文件时打包直接失败。`-NoZip` 只刷新 `release/文档工作室` 中的程序文件，保留其旁边的数据和 `.env`。
-- **部署包不含 `.env` 和 AI 密钥**，只生成 `.env.example`（带原环境的 AI 地址、模型等非敏感配置，值按 python-dotenv 规则转义）。目标电脑需要 AI 功能时，复制为 `.env` 并填写 `AI_API_KEY`。
+- 部署包在 `deploy/.build/package` 中**按允许清单**重新组装（程序、`_internal`、迁移的 `data`、`.env`、`.env.example`、`使用说明.txt`、`部署校验.json`），每次先清空；`release/` 中本机试用留下的配置、数据、日志、密码文件不会被直接复制。出现清单外的文件时打包直接失败。`-NoZip` 只刷新 `release/文档工作室` 中的程序文件，保留其旁边的数据和 `.env`。
+- **`build.ps1` 生成私有迁移包，按用户要求携带有效 AI 配置和密钥**；快照重新生成 `.env`，使用包内相对数据库/文件路径，不携带引导密码。密钥仅在 `.env` 中，`.env.example`、说明和校验文件保持脱敏，私有包不得公开上传。单独调用 `snapshot_data.py` 默认只生成 `.env.example`，需要私有迁移时加 `--include-ai-config`。
 - **部署包不含被测系统的登录密码**：只在测试执行相关的列（`test_tasks.config_json/cases_json/error`、`test_task_runs.snapshot_json/result_json`）中删除 `testPassword` 等凭据键（password、secret、apiKey、token），并把这些列里残留的明文替换为 `******`，按“表.列”记入 `部署校验.json`；其他列保证原样，迁移时会校验。密码含引号、反斜杠或中文时，JSON 中的转义写法（如 `\"`、`\u5bc6`）同样会被遮盖和检查。数据库随后 VACUUM 重建。 **部署后请在“测试用例管理”中逐个任务重新填写被测系统密码再执行测试。** 账号密码以哈希形式迁移，原密码继续有效。
 - **测试密码与正文或账号名相同会阻止打包**：如果某个测试任务的被测系统密码（至少 4 个字符）作为独立的词还出现在测试执行记录以外的地方，例如弱密码 `123456` 写在文档正文“产品编号 123456”里，或者密码恰好等于某个账号名，`build.ps1` 会停止并报出“表.列（次数）”。程序不会自动替换这些内容，以免改坏业务数据。只作为更长字符串的一部分出现（例如 `A1234567`）不算。处理办法：
   1. 按报错的“表.列”查看命中的内容。历史执行记录中保存过的密码同样参与检查，所以只清空测试任务里当前的密码并不能解除阻止；

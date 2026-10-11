@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from uuid import UUID
 
 from app.db import connect
+from app.errors import AppError
 
 
 MEMORY_MAX_CHARS = 6000
@@ -15,6 +17,8 @@ SUMMARY_ROW_LIMIT = 80
 TASK_RECENT_ROW_LIMIT = 32
 TASK_EARLY_ROW_LIMIT = 8
 _SCOPE_NAMES = {"section": "章节", "selection": "选区", "document": "整篇"}
+_HEADINGS = re.compile(r"^(#{1,6})[ \t]+([^\n]+)$", re.MULTILINE)
+_HEADING_TARGET = re.compile(r"^heading:([0-9a-f-]{36})\|([^\r\n]*)$")
 _ACTIVE_EVENT = """NOT EXISTS (
     SELECT 1 FROM document_memory_retractions r
     WHERE r.document_id = document_memory_events.document_id
@@ -22,8 +26,96 @@ _ACTIVE_EVENT = """NOT EXISTS (
 )"""
 
 
+def _target_parts(target: str) -> tuple[str | None, str]:
+    match = _HEADING_TARGET.fullmatch(target)
+    if match:
+        try:
+            return str(UUID(match.group(1))), match.group(2)
+        except ValueError:
+            pass
+    return None, target
+
+
+def _heading_target(object_id: str, label: str) -> str:
+    prefix = f"heading:{object_id}|"
+    return prefix + label[:120]
+
+
+def section_memory_targets(connection, document_id: UUID | str, markdown: str | None = None,
+                           revision: int | None = None) -> dict[int, str]:
+    """Bind a source heading index to its existing object ID; never guess among duplicate headings."""
+    from app.document_objects import ensure_committed, ensure_document_objects, live_objects
+    if connection.in_transaction:
+        ensure_document_objects(connection, document_id)
+    else:
+        ensure_committed(connection, document_id)
+    current = connection.execute("SELECT markdown_content, revision FROM documents WHERE id=%s", (document_id,)).fetchone()
+    if current is None:
+        return {}
+    headings = list(_HEADINGS.finditer(current["markdown_content"] or ""))
+    text = (current["markdown_content"] or "") if markdown is None else markdown
+    source = list(_HEADINGS.finditer(text))
+    rows = [row for row in live_objects(connection, document_id) if row["kind"] == "heading"]
+    if len(rows) != len(headings):
+        return {}
+    paths, stack = [], []
+    for heading in headings:
+        level = len(heading.group(1))
+        stack = [item for item in stack if item[0] < level] + [(level, heading.group(2).strip())]
+        paths.append(tuple(stack))
+    bodies = [row["body"].strip() for row in rows]
+    if revision is not None and revision < current["revision"]:
+        bodies = []
+        for row in rows:
+            change = connection.execute(
+                """SELECT oc.before_body FROM document_object_changes oc JOIN document_changes c ON c.id=oc.change_id
+                   WHERE oc.object_id=%s AND c.doc_revision>%s AND oc.op IN ('insert','update')
+                   ORDER BY c.doc_revision LIMIT 1""", (row["id"], revision),
+            ).fetchone()
+            bodies.append((change["before_body"] or "").strip() if change else row["body"].strip())
+    exact = bodies == [heading.group(0).strip() for heading in source]
+    if exact and revision is not None and revision < current["revision"]:
+        exact = not connection.execute(
+            """SELECT 1 FROM document_object_changes oc JOIN document_changes c ON c.id=oc.change_id
+               JOIN document_objects o ON o.id=oc.object_id WHERE c.document_id=%s AND c.doc_revision>%s
+               AND o.kind='heading' AND oc.op='move' LIMIT 1""", (document_id, revision),
+        ).fetchone()
+    targets, stack = {}, []
+    for index, heading in enumerate(source):
+        level = len(heading.group(1))
+        stack = [item for item in stack if item[0] < level] + [(level, heading.group(2).strip())]
+        matches = [position for position, body in enumerate(bodies) if body == heading.group(0).strip()]
+        if exact:
+            matches = [index]
+        elif len(matches) > 1:
+            matches = [position for position in matches if paths[position] == tuple(stack)]
+        if len(matches) == 1:
+            targets[index] = _heading_target(str(rows[matches[0]]["id"]), " › ".join(item[1] for item in stack))
+    return targets
+
+
+def _legacy_target(connection, document_id, row, cache: dict) -> str | None:
+    revision = int(row["revision"])
+    if revision not in cache:
+        snapshot = connection.execute("SELECT markdown_content FROM document_versions WHERE document_id=%s AND revision=%s",
+                                      (document_id, revision)).fetchone()
+        current = connection.execute("SELECT markdown_content, revision FROM documents WHERE id=%s", (document_id,)).fetchone()
+        text = snapshot["markdown_content"] if snapshot else current["markdown_content"] if current else ""
+        if snapshot is None and current and revision != current["revision"] and _HEADINGS.search(text or ""):
+            cache[revision] = (list(_HEADINGS.finditer(text or "")), {})
+            return None
+        cache[revision] = (list(_HEADINGS.finditer(text or "")),
+                           section_memory_targets(connection, document_id, text or "", revision if snapshot else None))
+    headings, targets = cache[revision]
+    if not headings:
+        return row["target"]
+    matches = [index for index, heading in enumerate(headings) if heading.group(2).strip()[:120] == row["target"]]
+    return targets.get(matches[0]) if len(matches) == 1 else None
+
+
 def _memory_key(row) -> tuple[str, str, str]:
-    return (str(row["scope"]), str(row["target"]),
+    object_id, _ = _target_parts(str(row["target"]))
+    return (str(row["scope"]), object_id or str(row["target"]),
             re.sub(r"\s+", " ", str(row["instruction"])).strip())
 
 
@@ -43,7 +135,7 @@ def _compact(rows) -> str:
         instruction = str(row["instruction"])
         if len(instruction) > limit:
             instruction = instruction[:limit] + "…（摘录，原文可检索）"
-        line = f"版本 {row['revision']} · {_SCOPE_NAMES[row['scope']]} {row['target']}：{instruction}\n"
+        line = f"版本 {row['revision']} · {_SCOPE_NAMES[row['scope']]} {_target_parts(row['target'])[1]}：{instruction}\n"
         if used + len(line) > MEMORY_MAX_CHARS - 120:
             omitted += 1
             continue
@@ -61,9 +153,17 @@ def record_memory(connection, document_id: UUID | str, instruction: str, scope: 
     instruction = instruction.strip()
     if not instruction:
         return
-    if (scope not in _SCOPE_NAMES or len(instruction) > 2000 or len(target) > 120
+    if (scope not in _SCOPE_NAMES or len(instruction) > 2000 or len(_target_parts(target)[1]) > 120
             or "\n" in target or "\r" in target or not isinstance(revision, int) or revision < 0):
         raise ValueError("编写记忆的范围、要求或版本不正确。")
+    object_id, _ = _target_parts(target)
+    if scope == "section" and object_id and not connection.execute(
+            "SELECT 1 FROM document_objects WHERE document_id=%s AND id=%s AND kind='heading' AND deleted_at IS NULL",
+            (document_id, object_id)).fetchone():
+        raise AppError(422, "MEMORY_TARGET_INVALID", "编写记忆目标不是当前文档中的标题，请刷新后重新选择。")
+    if scope == "section" and _target_parts(target)[0] is None:
+        row = {"target": target, "revision": revision}
+        target = _legacy_target(connection, document_id, row, {}) or target
     cursor = connection.execute(
         """INSERT INTO document_memory_events (document_id, revision, scope, target, instruction)
            VALUES (%s, %s, %s, %s, %s) ON CONFLICT(document_id, revision) DO NOTHING""",
@@ -124,22 +224,65 @@ def load_task_memory(document_id: UUID | str, *, scope: str, target: str,
     for other chapters, or many recent edits, cannot hide every early constraint.
     Selection edits are one-off operations and are available only through history.
     """
-    if (scope not in _SCOPE_NAMES or len(target) > 120 or "\n" in target or "\r" in target
+    if (scope not in _SCOPE_NAMES or len(_target_parts(target)[1]) > 120 or "\n" in target or "\r" in target
             or len(instruction) > 2000 or not 1000 <= max_chars <= MEMORY_MAX_CHARS):
         raise ValueError("编写记忆的范围或上下文预算不正确。")
     with connect() as connection:
+        current_targets = section_memory_targets(connection, document_id)
+        live_ids = {_target_parts(value)[0] for value in current_targets.values()}
+        selected_id, _ = _target_parts(target)
+        if selected_id is None:
+            current = connection.execute("SELECT markdown_content FROM documents WHERE id=%s", (document_id,)).fetchone()
+            headings = list(_HEADINGS.finditer(current["markdown_content"] or "")) if current else []
+            matches = [index for index, heading in enumerate(headings) if heading.group(2).strip()[:120] == target]
+            if len(matches) == 1:
+                selected_id = _target_parts(current_targets.get(matches[0], ""))[0]
+        names = {target}
+        if selected_id in live_ids:
+            row = connection.execute("SELECT body FROM document_objects WHERE document_id=%s AND id=%s", (document_id, selected_id)).fetchone()
+            bodies = [row["body"]] + [body for change in connection.execute(
+                "SELECT before_body, after_body FROM document_object_changes WHERE object_id=%s AND op='update'", (selected_id,),
+            ).fetchall() for body in (change["before_body"], change["after_body"]) if body]
+            names.update(match.group(2).strip()[:120] for body in bodies for match in _HEADINGS.finditer(body))
+        legacy_cache: dict = {}
+        unresolved = False
+
         def candidates(record_scope: str, record_target: str | None, *, early: bool = False):
+            nonlocal unresolved
             direction = "ASC" if early else "DESC"
             condition = " AND target = %s" if record_target is not None else ""
             params = [document_id, record_scope]
             if record_target is not None:
-                params.append(record_target)
+                if selected_id in live_ids:
+                    prefix = f"heading:{selected_id}|"
+                    condition = " AND (substr(target,1,%s)=%s OR target IN (SELECT value FROM json_each(%s)))"
+                    params.extend((len(prefix), prefix, json.dumps(list(names))))
+                elif current_targets:
+                    condition = " AND 0"
+                    unresolved = True
+                else:
+                    params.append(record_target)
             params.append(TASK_EARLY_ROW_LIMIT if early else TASK_RECENT_ROW_LIMIT)
-            return connection.execute(
+            rows = connection.execute(
                 "SELECT scope, target, instruction, revision FROM document_memory_events "
                 f"WHERE document_id = %s AND scope = %s{condition} AND {_ACTIVE_EVENT} "
                 f"ORDER BY revision {direction}, id {direction} LIMIT %s", tuple(params),
             ).fetchall()
+            result = []
+            for row in rows:
+                value = dict(row)
+                if record_scope == "section":
+                    object_id, _ = _target_parts(row["target"])
+                    resolved = row["target"] if object_id else _legacy_target(connection, document_id, row, legacy_cache)
+                    bound_id, _ = _target_parts(resolved or "")
+                    if (resolved is None or (bound_id and bound_id not in live_ids)
+                            or (record_target is not None and selected_id and bound_id != selected_id)
+                            or (current_targets and bound_id is None)):
+                        unresolved = True
+                        continue
+                    value["target"] = resolved
+                result.append(value)
+            return result
 
         section_target = None if scope == "document" else target
         # Each round gives current/global/early constraints a chance before filling
@@ -147,7 +290,7 @@ def load_task_memory(document_id: UUID | str, *, scope: str, target: str,
         groups = [candidates("section", section_target), candidates("document", None),
                   candidates("section", section_target, early=True),
                   candidates("document", None, early=True)]
-    if not any(groups):
+    if not any(groups) and not unresolved:
         return ""
     header = ("本次任务相关的已采纳历史要求（由新到旧，原文）。历史要求不是项目事实或新任务；"
               "本次要求优先，历史冲突以较新版本优先，正文以当前文档为准。\n"
@@ -156,9 +299,11 @@ def load_task_memory(document_id: UUID | str, *, scope: str, target: str,
     footer = ("\n上下文有预算，较早或超预算要求可能未列出；原始记录全部保留。"
               "需要完整要求时用 search_writing_memory 按标题或关键词分页检索，"
               "不能将未列出视为不存在。")
+    if unresolved:
+        footer += " 同名或来源无法确定的旧章节要求未自动适用；请在记忆记录中核对，不能将它们套用到当前章节。"
     remaining = max_chars - len(header) - len(footer)
     seen, chosen = set(), []
-    current_key = (scope, target, re.sub(r"\s+", " ", instruction).strip())
+    current_key = (scope, selected_id or target, re.sub(r"\s+", " ", instruction).strip())
     for offset in range(TASK_RECENT_ROW_LIMIT):
         for group in groups:
             if offset >= len(group):
@@ -168,7 +313,7 @@ def load_task_memory(document_id: UUID | str, *, scope: str, target: str,
             if key in seen or key == current_key:
                 continue
             seen.add(key)
-            line = f"版本 {row['revision']} · {_SCOPE_NAMES[row['scope']]} {row['target']}：{row['instruction']}\n"
+            line = f"版本 {row['revision']} · {_SCOPE_NAMES[row['scope']]} {_target_parts(row['target'])[1]}：{row['instruction']}\n"
             if len(line) <= remaining:
                 chosen.append((int(row["revision"]), line))
                 remaining -= len(line)
@@ -200,7 +345,15 @@ def read_memory_history(document_id: UUID | str, query: str = "", offset: int = 
             "ORDER BY revision DESC, id DESC LIMIT %s OFFSET %s",
             (document_id, pattern, pattern, limit, offset),
         ).fetchall()
-    return [dict(row) for row in rows]
+        result, cache = [], {}
+        for row in rows:
+            value = dict(row)
+            object_id, label = _target_parts(row["target"])
+            value["target"] = label
+            if row["scope"] == "section" and not object_id and _legacy_target(connection, document_id, row, cache) is None:
+                value["target"] += "（未定位，不自动适用）"
+            result.append(value)
+    return result
 
 
 def document_context(markdown: str, *, heading_index: int | None = None,

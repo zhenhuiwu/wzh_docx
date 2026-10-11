@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import StatePanel from "../components/StatePanel.vue";
 import { useRoute } from "vue-router";
 import { ApiError, isMissingResource } from "../api/client";
@@ -24,16 +24,26 @@ const tab = ref<"materials" | "search">("materials");
 const notFound = ref(false);
 const fields = useFieldErrors<"name" | "file">("source");
 const canManage = computed(() => hasPermission(readSession(), "knowledge.manage"));
+let loadRequest = 0;
+let submitRequest = 0;
 
 async function load() {
+  const target = baseId.value;
+  const request = ++loadRequest;
   phase.value = "loading";
+  base.value = null;
+  sources.value = [];
+  errorText.value = "";
+  notFound.value = false;
   try {
-    notFound.value = false;
-    base.value = await getKnowledgeBase(baseId.value);
-    rememberCrumb(`knowledge:${base.value.id}`, base.value.name);
-    sources.value = await listSources(baseId.value);
+    const [record, items] = await Promise.all([getKnowledgeBase(target), listSources(target)]);
+    if (request !== loadRequest || target !== baseId.value) return;
+    base.value = record;
+    sources.value = items;
+    rememberCrumb(`knowledge:${record.id}`, record.name);
     phase.value = "ready";
   } catch (error) {
+    if (request !== loadRequest || target !== baseId.value) return;
     phase.value = "error";
     notFound.value = isMissingResource(error);
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
@@ -41,31 +51,44 @@ async function load() {
 }
 
 async function submitFile() {
+  if (submitting.value) return;
   notice.value = "";
-  // 字段级校验（08 复验 N-S3）
-  if (await fields.report({
-    name: name.value.trim() ? "" : "请填写资料名称。",
-    file: file.value ? "" : "请选择文件。",
-  }) || !file.value) return;
   const targetBase = baseId.value;
   const targetName = name.value.trim();
   const targetFile = file.value;
+  const request = ++submitRequest;
+  // 字段级校验（08 复验 N-S3）
+  if (await fields.report({
+    name: targetName ? "" : "请填写资料名称。",
+    file: targetFile ? "" : "请选择文件。",
+  }) || !targetFile || request !== submitRequest || targetBase !== baseId.value) return;
   submitting.value = true;
   try {
     const stored = await uploadFile(targetFile, "source", { baseId: targetBase, idempotencyKey: crypto.randomUUID() });
     await createSource(targetBase, targetName, stored.id);
+    if (request !== submitRequest || targetBase !== baseId.value) return;
     name.value = "";
     file.value = null;
     notice.value = "已登记。这份资料尚未解析，不能检索。";
     await load();
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
+    if (request === submitRequest && targetBase === baseId.value) notice.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   } finally {
-    submitting.value = false;
+    if (request === submitRequest) submitting.value = false;
   }
 }
 
-onMounted(() => void load());
+watch(baseId, () => {
+  ++submitRequest;
+  submitting.value = false;
+  name.value = "";
+  file.value = null;
+  notice.value = "";
+  tab.value = "materials";
+  fields.clear();
+  void load();
+}, { immediate: true });
+onBeforeUnmount(() => { ++loadRequest; ++submitRequest; });
 </script>
 
 <template>

@@ -28,6 +28,10 @@ const view = ref<"content" | "previous" | "current">("content");
 const previous = ref<{ revision: number; markdown: string } | null>(null);
 const previousMissing = ref(false);
 const previousLoading = ref(false);
+const previousError = ref("");
+let previousRequest = 0;
+const comparisonReady = computed(() => view.value === "current" ? props.current !== undefined
+  : previous.value?.revision === detail.value?.revision && Boolean(previous.value));
 const diffRows = computed(() => {
   if (!detail.value || view.value === "content") return [];
   if (view.value === "current") return blockDiff(detail.value.markdownContent, props.current ?? "");
@@ -51,8 +55,10 @@ const diffShown = computed(() => {
 async function loadPrevious() {
   const current = detail.value;
   // previous.revision 记的是“它是哪一版的上一版本”
-  if (!current || previous.value?.revision === current.revision || previousLoading.value) return;
-  previous.value = null; previousMissing.value = false;
+  if (!current || previous.value?.revision === current.revision) return;
+  const request = ++previousRequest;
+  previous.value = null; previousMissing.value = false; previousError.value = "";
+  previousLoading.value = false;
   if (current.revision <= 1) { previousMissing.value = true; return; }
   previousLoading.value = true;
   try {
@@ -60,9 +66,14 @@ async function loadPrevious() {
     const cached = markdownCache.get(current.revision - 1) ?? detailCache.get(current.revision - 1)?.markdownContent;
     const markdown = cached ?? (await getDocumentVersion(props.documentId, current.revision - 1, false)).markdownContent;
     markdownCache.set(current.revision - 1, markdown);
-    if (detail.value === current) previous.value = { revision: current.revision, markdown };
-  } catch { if (detail.value === current) previousMissing.value = true; }
-  finally { previousLoading.value = false; }
+    if (request === previousRequest && detail.value?.revision === current.revision) previous.value = { revision: current.revision, markdown };
+  } catch (e) {
+    if (request === previousRequest && detail.value?.revision === current.revision) {
+      if (e instanceof ApiError && e.status === 404) previousMissing.value = true;
+      else previousError.value = message(e);
+    }
+  }
+  finally { if (request === previousRequest) previousLoading.value = false; }
 }
 function chooseView(next: "content" | "previous" | "current") {
   view.value = next;
@@ -99,7 +110,8 @@ async function select(item: DocumentVersion) {
   detailLoading.value = true;
   detailError.value = "";
   detail.value = null;
-  previous.value = null; previousMissing.value = false;
+  ++previousRequest;
+  previous.value = null; previousMissing.value = false; previousLoading.value = false; previousError.value = "";
   try {
     // 比较视图只要 markdown：先不渲染 Word 版式；切回“正文”时再补取
     const withHtml = view.value === "content";
@@ -164,9 +176,10 @@ onMounted(() => void load());
           <div v-if="view === 'content'" class="version-preview" aria-label="历史版本正文" v-html="html"></div>
           <div v-else class="version-diff" :aria-label="view === 'previous' ? '与上一版本的差异' : '与当前正文的差异'">
             <div v-if="view === 'previous' && previousLoading" class="skel" role="status" aria-label="正在读取上一版本…"><span></span><span></span><span class="short"></span></div>
+            <div v-else-if="view === 'previous' && previousError"><p class="history-error" role="alert">{{ previousError }}</p><button type="button" class="ghost sm" @click="loadPrevious">重试比较</button></div>
             <p v-else-if="view === 'previous' && previousMissing" class="hint">没有更早的版本可以比较。</p>
-            <p v-else-if="!diffChanged" class="hint">{{ view === 'previous' ? '与上一版本相同。' : '与当前正文相同。' }}</p>
-            <template v-else>
+            <p v-else-if="comparisonReady && !diffChanged" class="hint">{{ view === 'previous' ? '与上一版本相同。' : '与当前正文相同。' }}</p>
+            <template v-else-if="comparisonReady">
               <p class="hint">{{ view === 'previous' ? `这一版改动了 ${diffChanged} 段（绿色为新增，红色删除线为删除）。` : `当前正文与这一版相差 ${diffChanged} 段（以这一版为原文）。` }}</p>
               <template v-for="(entry, index) in diffShown" :key="index">
                 <p v-if="entry.skipped" class="skip">… {{ entry.skipped }} 段未变 …</p>

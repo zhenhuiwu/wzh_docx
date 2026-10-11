@@ -46,7 +46,7 @@ def require_ai(feature: Feature, settings=None) -> None:
                        details={"reason": status["reason"]})
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=2)
 def _office(app_name: str) -> dict[str, object]:
     """进程启动后检测一次 Word/Visio COM 能否创建。"""
     if sys.platform != "win32":
@@ -56,12 +56,18 @@ def _office(app_name: str) -> dict[str, object]:
         import win32com.client
 
         pythoncom.CoInitialize()
+        application = None
+        available = True
         try:
             application = win32com.client.DispatchEx(f"{app_name}.Application")
             application.Quit()
+        except Exception:  # pragma: no cover - Windows only
+            available = False
         finally:
+            # COM 包装对象必须在线程仍初始化时释放。
+            application = None
             pythoncom.CoUninitialize()
-        return {"available": True, "reason": None}
+        return {"available": available, "reason": None if available else f"{app_name.lower()}_not_installed"}
     except Exception:  # pragma: no cover - Windows only
         return {"available": False, "reason": f"{app_name.lower()}_not_installed"}
 

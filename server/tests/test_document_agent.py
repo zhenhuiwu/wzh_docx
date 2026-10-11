@@ -149,6 +149,32 @@ def test_task_memory_uses_current_scope_and_target(monkeypatch):
         assert requested[-1]["instruction"] == values["instruction"]
 
 
+@pytest.mark.parametrize("selected_only", [False, True])
+def test_agent_uses_stable_heading_memory_target_in_initial_context_reads_and_preparation(monkeypatch, selected_only):
+    requested = []
+    target = f"heading:{uuid4()}|模块 › 目标"
+    monkeypatch.setattr(module, "load_task_memory", lambda document_id, **kwargs: requested.append(kwargs) or "")
+    model = ObservedModel(responses=[call("read_document_section", index=0),
+                                    call("prepare_document_edit", objective="只润色当前范围。"),
+                                    AIMessage(content="修改后的正式正文。")])
+    values = context(model, monkeypatch, selected_only=selected_only, memory_targets={0: target})
+    assert module.draft_section_text(**values) == "修改后的正式正文。"
+    assert len(requested) >= 2 and all(item["target"] == target for item in requested)
+    assert requested[0]["scope"] == ("selection" if selected_only else "section")
+
+
+def test_preface_memory_does_not_borrow_a_section_named_body(monkeypatch):
+    requested = []
+    monkeypatch.setattr(module, "load_task_memory", lambda document_id, **kwargs: requested.append(kwargs) or "")
+    model = ObservedModel(responses=[call("read_document_section", index=-1),
+                                    call("prepare_document_edit", objective="润色前言。"),
+                                    AIMessage(content="润色后的前言。")])
+    values = context(model, monkeypatch, full_markdown="前言。\n\n# 正文\n\n真实章节正文。",
+                     selected_only=True, heading_index=None, heading="选中内容", existing="前言。", memory_targets={0: f"heading:{uuid4()}|正文"})
+    assert module.draft_section_text(**values) == "润色后的前言。"
+    assert all(item["target"] == "" for item in requested)
+
+
 def test_whole_document_prepare_requires_every_nonempty_section_and_valid_plan(monkeypatch):
     responses = [
         call("prepare_document_edit", objective="只润色甲节。", sections=[0]),

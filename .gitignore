@@ -6,6 +6,7 @@
 !.env.sample
 *.db
 *.db-*
+server/.runtime-backups/
 *.sqlite
 *.sqlite3
 /data/

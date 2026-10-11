@@ -77,6 +77,7 @@ const writeOpen = ref(false);
 const writeRun = ref<TestRun | null>(null);
 const writePhase = ref<"loading" | "ready" | "error">("loading");
 const writeDocuments = ref<DocumentRecord[]>([]);
+const writeCanCreateDocument = ref(false);
 const writeDocumentId = ref("");
 const writeDocument = ref<DocumentRecord | null>(null);
 const writeDocumentLoading = ref(false);
@@ -391,14 +392,16 @@ async function loadWriteDocuments() {
   const projectId = task.value.projectId;
   writePhase.value = "loading";
   writeError.value = "";
+  writeCanCreateDocument.value = false;
   try {
     const items: DocumentRecord[] = [];
     let requestedPage = 1;
     while (writeOpen.value && !disposed) {
       const response = await listDocuments(projectId, requestedPage, "", 100);
       if (request !== writeRequest || !writeOpen.value || disposed) return;
-      items.push(...response.items);
-      if (items.length >= response.total || !response.items.length) break;
+      writeCanCreateDocument.value = response.permissions?.canEdit === true;
+      items.push(...response.items.filter(item => item.permissions?.canEdit === true));
+      if (requestedPage * response.pageSize >= response.total || !response.items.length) break;
       requestedPage += 1;
     }
     writeDocuments.value = items;
@@ -441,7 +444,10 @@ async function loadWriteDocument() {
   writeDocumentLoading.value = true;
   try {
     const value = await getDocument(id);
-    if (request === writeRequest && writeOpen.value && !disposed) writeDocument.value = value;
+    if (request === writeRequest && writeOpen.value && !disposed) {
+      if (value.permissions?.canEdit === true) writeDocument.value = value;
+      else writeError.value = "你没有编写这篇文档的权限，请选择可编辑的文档。";
+    }
   } catch (error) {
     if (request === writeRequest && writeOpen.value && !disposed) writeError.value = messageOf(error);
   } finally {
@@ -453,6 +459,7 @@ async function writeResults() {
   if (writing.value || !task.value || !writeRun.value) return;
   writeError.value = "";
   if (!writeDocument.value) { writeError.value = "请选择要补充的文档。"; return; }
+  if (writeDocument.value.permissions?.canEdit !== true) { writeError.value = "你没有编写这篇文档的权限，请选择可编辑的文档。"; return; }
   if (writeHeading.value === "pending") { writeError.value = "请选择写入位置。"; return; }
   if (!writeCaseIds.value.length) { writeError.value = "请选择要补充的测试项。"; return; }
   const target = writeDocument.value;
@@ -629,7 +636,7 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
       <div v-if="writeSaved" class="state-panel" role="status"><strong>{{ writeSaved.insertedCount ? "已补充测试结果" : "这些测试结果已在文档中" }}</strong><p>{{ writeSaved.documentName }}</p><RouterLink class="primary" :to="`/projects/${writeSaved.projectId}/documents/${writeSaved.documentId}`" @click="closeWrite">打开文档</RouterLink></div>
       <div v-else-if="writePhase === 'loading'" class="state-panel" role="status">正在读取项目文档…</div>
       <div v-else-if="writePhase === 'error'" class="state-panel" role="alert"><strong>文档读取失败</strong><p>{{ writeError }}</p><button type="button" class="ghost" @click="loadWriteDocuments">重试</button></div>
-      <div v-else-if="!writeDocuments.length" class="state-panel"><strong>项目中还没有文档</strong><RouterLink v-if="task" class="primary" :to="`/projects/${task.projectId}/documents`" @click="closeWrite">新建文档</RouterLink></div>
+      <StatePanel v-else-if="!writeDocuments.length" :kind="writeCanCreateDocument ? 'empty' : 'denied'" title="没有可编辑的文档" :text="writeCanCreateDocument ? '请先在项目中新建文档。' : '当前账号可以查看项目文档，但不能写入测试结果。'"><RouterLink v-if="task && writeCanCreateDocument" class="primary" :to="`/projects/${task.projectId}/documents`" @click="closeWrite">新建文档</RouterLink></StatePanel>
       <form v-else novalidate @submit.prevent="writeResults">
         <fieldset class="dialog-fields" :disabled="writing">
           <label>目标文档<select v-model="writeDocumentId" class="control" aria-label="目标文档" required @change="loadWriteDocument"><option value="">请选择文档</option><option v-for="item in writeDocuments" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
@@ -637,7 +644,7 @@ onUnmounted(() => { disposed = true; stopPolling(); listController?.abort(); det
           <fieldset class="write-cases full-row"><legend>要补充的测试项</legend><label v-for="item in writeRun?.result.cases" :key="item.caseId" class="write-case"><input v-model="writeCaseIds" type="checkbox" :value="item.caseId" :aria-label="'补充测试项：' + item.title" /><span>{{ item.title }}</span><span class="state-label" :data-state="item.status">{{ statusLabel(item.status) }}</span></label></fieldset>
         </fieldset>
         <p v-if="writeError" class="form-alert" role="alert">{{ writeError }} <button v-if="writeDocumentId && !writeDocument && !writeDocumentLoading" type="button" class="ghost" :disabled="writing" @click="loadWriteDocument">重新读取文档</button></p>
-        <div class="dialog-actions"><button type="button" class="ghost" :disabled="writing" @click="closeWrite">取消</button><button type="submit" class="primary" :disabled="writing || writeDocumentLoading">{{ writing ? "正在补充…" : "写入测试结果" }}</button></div>
+        <div class="dialog-actions"><button type="button" class="ghost" :disabled="writing" @click="closeWrite">取消</button><button type="submit" class="primary" :disabled="writing || writeDocumentLoading || writeDocument?.permissions?.canEdit !== true">{{ writing ? "正在补充…" : "写入测试结果" }}</button></div>
       </form>
     </dialog>
     <dialog ref="previewDialog" class="app-dialog test-dialog screenshot-dialog" aria-labelledby="screenshot-title"><div class="dialog-head"><h2 id="screenshot-title">{{ previewName || "测试截图" }}</h2><button type="button" class="subtle icon-close" aria-label="关闭截图" @click="previewDialog?.close()"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div><img v-if="previewUrl" :src="previewUrl" :alt="previewName" /></dialog>

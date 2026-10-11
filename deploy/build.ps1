@@ -59,9 +59,9 @@ foreach ($folder in $browserFolders) {
 }
 
 # Assemble the package from an allowlist in a freshly emptied directory, so files left in
-# release/ by earlier builds or local runs (.env, data, logs, password files) never ship.
+# release/ by earlier builds or local runs never ship; only the freshly generated private config is included.
 $programEntries = @('文档工作室.exe', '_internal')
-$snapshotEntries = @('data', '.env.example', '使用说明.txt', '部署校验.json')
+$snapshotEntries = @('data', '.env', '.env.example', '使用说明.txt', '部署校验.json')
 
 function Remove-Under([string]$Path, [string]$Parent) {
     $full = [IO.Path]::GetFullPath($Path)
@@ -93,11 +93,11 @@ New-Item -ItemType Directory -Path $zipPackage -Force | Out-Null
 foreach ($entry in $programEntries) {
     Copy-Item -LiteralPath (Join-Path $stagingRoot $entry) -Destination $zipPackage -Recurse -Force
 }
-$snapshotArguments = @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $zipPackage, '--execute')
+$snapshotArguments = @((Join-Path $PSScriptRoot 'snapshot_data.py'), '--target', $zipPackage, '--execute', '--include-ai-config')
 foreach ($column in $AllowCredentialText) { $snapshotArguments += @('--allow-credential-text', $column) }
 Invoke-Checked $python $snapshotArguments
 Assert-Allowlisted $zipPackage ($programEntries + $snapshotEntries)
-foreach ($private in @('.env', '初始管理员密码.txt', 'logs')) {
+foreach ($private in @('初始管理员密码.txt', 'logs')) {
     if (Test-Path -LiteralPath (Join-Path $zipPackage $private)) { throw "发布目录含有本机私密文件 $private，拒绝打包。" }
 }
 New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
@@ -105,3 +105,4 @@ $zip = Join-Path $releaseRoot '文档工作室-Windows.zip'
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -LiteralPath $zipPackage -DestinationPath $zip
 Write-Host "部署包已生成：$zip"
+Write-Host '此为包含当前数据和 AI 密钥的私有迁移包，请勿公开分享。'

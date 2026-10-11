@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.db import connect
 from app.document_agent import draft_section_text, stream_section_text
 from app.document_rules import DraftFormatError, section_rules, validate_draft, validate_constraints
-from app.document_memory import clear_memory, load_memory, record_memory, read_memory_history, retract_memory
+from app.document_memory import clear_memory, load_memory, record_memory, read_memory_history, retract_memory, section_memory_targets
 from app.document_versions import record_current_version, router as versions_router
 from app.docx_parser import parse_docx
 from app.ai_capability import require_ai
@@ -1036,6 +1036,8 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     base_url, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()
     read_sections: set[int] = set()
     planned_sections: set[int] = set()
+    with connect() as connection:
+        memory_targets = section_memory_targets(connection, did, row[7], row[12])
     inputs = dict(
         project_id=row[1], heading=str(heading["text"]), level=int(heading["level"]),
         existing=existing, instruction=body.instruction, base_url=base_url, model=model,
@@ -1046,6 +1048,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         read_sections=read_sections, planned_sections=planned_sections, source_revision=row[12],
         writing_skill=_writing_skill(row),
         template_structure=(row[6] or {}).get("importStructure"),
+        memory_targets=memory_targets,
     )
     rules = section_rules(heading=inputs["heading"], document_name=row[2], template_name=row[15] or "",
                           instruction=body.instruction, existing=existing, selected_only=inputs["selected_only"], writing_skill=_writing_skill(row))
@@ -1188,16 +1191,18 @@ def insert_section(request: Request, document_id: str, body: SectionInsertBody) 
             updated = _section_update(row, body.headingIndex, content, body.mode, body.instruction)
         except DraftFormatError as exc:
             raise AppError(422, "AI_FORMAT_INVALID", str(exc)) from None
+        target = section_memory_targets(conn, did, row[7], row[12]).get(body.headingIndex)
+        if body.instruction.strip() and target is None:
+            raise revision_conflict(conn, did, "目标标题已变化，无法确定编写要求所属章节，请刷新后重新生成。")
         if body.allowMerge:
-            target = str(heading["text"])[:120]
             data = commit_derived(conn, session, did, row, updated, kind="ai_section", client_save_key=body.clientSaveKey,
                                   after_write=lambda c, revision: record_memory(c, did, body.instruction, scope="section",
-                                                                                 target=target, revision=revision),
+                                                                                 target=target or "", revision=revision),
                                   extra={"instruction": body.instruction})
             return _merged_result(request, conn, session, did, data)
         _check_word(conn, row, updated)
         _save_markdown(conn, did, updated, row[12], kind="ai_section")
-        record_memory(conn, did, body.instruction, scope="section", target=str(heading["text"])[:120], revision=row[12] + 1)
+        record_memory(conn, did, body.instruction, scope="section", target=target or "", revision=row[12] + 1)
         conn.commit()
         return _content_result(request, _document_row(conn, did, session.user_id, _admin(session.roles)))
 

@@ -195,6 +195,10 @@ def _tree_bytes(root: Path) -> bytes:
         return b""
     for path in root.rglob("*"):
         if path.is_file():
+            if path.name.endswith(".service.lock"):
+                # Windows 不允许读取已锁定字节；运行标记本身必须始终为空。
+                assert path.stat().st_size == 0
+                continue
             chunks.append(path.read_bytes())
     return b"".join(chunks)
 
