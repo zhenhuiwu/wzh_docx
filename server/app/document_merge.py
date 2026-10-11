@@ -170,6 +170,9 @@ def _positional_is_unique_best(a: list[str], b: list[str]) -> bool:
 # 审查 M5：精确判定（匈牙利最优匹配）最多 60 块（模板化最坏约 0.2s）；更大的等长替换区间不再按旧的逐对规则拆，
 # 一律整块作为结构冲突——旧规则在模板化“整章修改 / 挪动粘贴”里会错配，重交后正文出现同一段的两个版本
 PAIR_EXACT_LIMIT = 60
+# 代码审查 M6：参与逐对比较的总字数上限（两侧合计）。长段落大范围修改时逐对相似度是“块数² × 段长²”量级
+# （60 段 × 1000 字要 33s）；超过就整块作为结构冲突，不做精确配对判定
+PAIR_CHAR_LIMIT = 20_000
 
 
 def _pairable(ops, a_blocks, b_blocks):
@@ -182,7 +185,8 @@ def _pairable(ops, a_blocks, b_blocks):
             size = i2 - i1
             a = [block.body for block in a_blocks[i1:i2]]
             b = [block.body for block in b_blocks[j1:j2]]
-            if size > PAIR_EXACT_LIMIT or not _positional_is_unique_best(a, b):
+            if size > PAIR_EXACT_LIMIT or sum(map(len, a)) + sum(map(len, b)) > PAIR_CHAR_LIMIT \
+                    or not _positional_is_unique_best(a, b):
                 tag = "replace_whole"
         out.append((tag, i1, i2, j1, j2))
     return out
