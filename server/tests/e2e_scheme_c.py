@@ -780,7 +780,7 @@ def s_reopen_self_edit(ctx: Run, page):
     """测试工程师 K1-M1（设计师定稿）：刷新后在正文第 3 段（对方版本）续写，再点“保留我的”：
     提示引用补写的字；标题“正文当前版本（含 张工 的修改和你刚补的内容）”；差异里补字单独标出；
     按钮临时改为“仍然保留我的（覆盖刚补的内容）”。"""
-    doc_id = reopen_self_edit_setup(ctx, page, "方案C重开后改正文")
+    reopen_self_edit_setup(ctx, page, "方案C重开后改正文")
     card(page).get_by_role("button", name="保留我的").click()
     notice = card(page).locator(".ccard-notice")
     expect(notice).to_contain_text("你重新打开后在正文里又改了这一段（“〔后补XY〕”）", timeout=20000)
