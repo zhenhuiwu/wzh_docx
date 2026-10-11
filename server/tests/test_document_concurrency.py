@@ -244,8 +244,10 @@ def test_merge_that_breaks_word_becomes_format_conflict(team, monkeypatch):
     assert save(client, did, 1, TEXT.replace("第一段。", "A。"), _as(client, "editor")).status_code == 200
     from app.errors import AppError
 
-    def failing(*args, **kwargs):
-        raise AppError(422, "AI_FORMAT_INVALID", "合并后无法写回。")
+    def failing(connection, row, content, **kwargs):
+        # 设计师复验 2 C（f7f561b）：只有合并结果写不回才是 FORMAT 冲突；“我的版本”本身就写不回时按单人路径 422
+        if ("A。" in content and "B。" in content) or "C。" in content:
+            raise AppError(422, "AI_FORMAT_INVALID", "合并后无法写回。")
 
     monkeypatch.setattr("app.documents._check_word", failing)
     rejected = save(client, did, 1, TEXT.replace("第三段。", "B。"), _as(client, "editor2"))
