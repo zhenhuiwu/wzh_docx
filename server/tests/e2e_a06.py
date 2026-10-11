@@ -1,7 +1,7 @@
 """A06 模板完整编辑与版本快照浏览器验收（16 §3.8，1920×1080）。
 
 环境变量：E2E_API、E2E_WEB、DATABASE_URL、FILE_DATA_DIR **必须设置**（脚本直接在被测库里建账号）；
-E2E_SHOTS（截图目录）、E2E_OUT（失败截图）。
+E2E_SHOTS（截图目录）、E2E_OUT（失败截图）、E2E_VIEWPORT（默认 1920x1080，1366 验收用 1366x768）。
 
 运行（先起服务，例如 8061/5231）：
     E2E_API=http://127.0.0.1:8061/api/v1 E2E_WEB=http://127.0.0.1:5231 E2E_SHOTS=/tmp/wzh_a06_run/shots \\
@@ -37,6 +37,8 @@ SHOTS = Path(os.environ.get("E2E_SHOTS", str(OUT / "shots")))
 PASSWORD = "E2e-a06-pass-1"
 ADMIN, ADMIN_PASSWORD = "admin", "admin123"
 RUN = uuid.uuid4().hex[:6]
+_W, _H = (int(n) for n in os.environ.get("E2E_VIEWPORT", "1920x1080").lower().split("x"))
+VIEWPORT = {"width": _W, "height": _H}
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 SRS = next((ROOT / "438C-2021全套模板").glob("*[[]SRS[]]*.docx"))
 results: list[tuple[str, bool, str]] = []
@@ -183,7 +185,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, accept_downloads=True)
+        ctx = browser.new_context(viewport=VIEWPORT, accept_downloads=True)
         page = ctx.new_page()
         open_pages.append(page)
         login(page, ADMIN, ADMIN_PASSWORD)
@@ -484,7 +486,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
 
         @step("T12 A6-5 项目创建者经地址打开编辑器为只读：没有发布和上传按钮")
         def t12():
-            reader = browser.new_context(viewport={"width": 1920, "height": 1080}).new_page()
+            reader = browser.new_context(viewport=VIEWPORT).new_page()
             open_pages.append(reader)
             login(reader, f"creator{RUN}")
             reader.goto(editor_url)
@@ -501,7 +503,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         def t13():
             auditor = Api(f"auditor{RUN}")
             assert auditor.raw("GET", f"/template-documents/{td}/versions").status_code == 403
-            viewer = browser.new_context(viewport={"width": 1920, "height": 1080}).new_page()
+            viewer = browser.new_context(viewport=VIEWPORT).new_page()
             open_pages.append(viewer)
             login(viewer, f"auditor{RUN}")
             expect(viewer.locator('aside[aria-label="主导航"] >> text=模板管理')).to_have_count(0)
