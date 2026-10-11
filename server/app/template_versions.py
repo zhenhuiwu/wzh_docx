@@ -773,8 +773,6 @@ def rebase(request: Request, document_id: str, body: RebaseBody) -> dict:
             return {"data": details, "requestId": request.state.request_id}
         if unresolved:
             raise AppError(409, "TEMPLATE_REBASE_CONFLICT", f"还有 {len(unresolved)} 处需要选择。", details=details)
-        if draft["parent_version_id"] == current["id"] and not merged["conflicts"]:
-            pass
         blocks = _validated({"blocks": merged["blocks"]}, current, analysis)
         structure = _merged_structure(blocks, current, draft["revision"] + 1)
         format_ = {"styles": merged["styles"]}
@@ -813,8 +811,6 @@ def upload(request: Request, document_id: str, body: UploadBody) -> dict:
             raise AppError(422, "WORD_PARSE_FAILED", "无法读取 Word 文档，请确认文件有效后重新上传。") from None
         structure, alignment = tw.align_upload(parsed, current["structure"])
         structure.update({"reviewed": True, "revision": body.expectedDraftRevision + 1, "baseFileId": str(file_id)})
-        structure.pop("baseFileId", None)
-        structure["baseFileId"] = str(file_id)
         format_ = {"styles": analysis["styles"]}
         with write_transaction(conn):
             latest = _draft(conn, td_id)
