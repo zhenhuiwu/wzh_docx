@@ -100,7 +100,7 @@ let loadSinkComposing = false;
  * F-M4（列表项等没能冻结的冲突）：冲突返回后正文重绘，光标所在的那一项换成了对方版本、光标离开正文。
  * 这时焦点落到隐形输入框，接着打的字（含直接上屏/组字）并入这条冲突“我的版本”的快照，并给出常驻提示（处理该冲突或点“知道了”才消失）。
  */
-let unfrozenConflict: { conflictId: string; itemIndex: number; mine: string; at: number } | null = null;
+let unfrozenConflict: { conflictId: string; itemIndex: number; mine: string; at: number; item?: ConflictItem } | null = null;
 let caretSink: HTMLTextAreaElement | null = null;
 let caretSinkTarget: { conflictId: string; itemIndex: number; mine: string; synced?: boolean } | null = null;
 let caretSinkComposing = false;
@@ -110,6 +110,8 @@ let caretSinkSeq = 0;
 const sinkNote = ref<{ conflictId: string; text: string } | null>(null);
 /** 审查员 M2：隐形框里还没存进冲突副本的续写（先进本机草稿，再发；失败退避重试、联网重发、离开时守住） */
 const sinkUnsaved = ref<{ conflictId: string; itemIndex: number; markdown: string } | null>(null);
+/** 必改 B：冲突已在别处处理、还没接回正文的续写（写进草稿 conflictsEdits 保底，算未保存） */
+const leftovers = ref<Array<{ conflictId: string; itemIndex: number; markdown: string }>>([]);
 /** 隐形框换到另一条冲突时，上一条还没存上的续写（同样记草稿、继续重试） */
 const sinkBacklog = ref<Array<{ conflictId: string; itemIndex: number; markdown: string }>>([]);
 let caretSinkText = "";
@@ -261,7 +263,7 @@ function showRefusedConflicts() {
 // 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
 const autoConflict = ref<{ count: number; name: string; frozen?: boolean } | null>(null);
 // 界面验收 M6 / 审查 S3：他人更新
-const othersUpdated = ref<{ names: string[]; objects: number; here?: boolean } | null>(null);
+const othersUpdated = ref<{ names: string[]; objects: number; here?: boolean; self?: boolean } | null>(null);
 const updatedHeadings = ref<Set<string>>(new Set());
 let updateTimer: number | undefined;
 let checkingUpdates = false;
@@ -343,8 +345,8 @@ const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
-const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length);
-const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0);
+const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
+const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: (offline.value || (!online.value && frozenUnsaved.value > 0)) && hasUnsaved.value,
@@ -622,6 +624,8 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
         await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `draft-${draft.savedAt}-${n}-${draft.tabId}`.slice(0, 80), draft.tabId, draft.savedAt || undefined);
       } catch (error) {
         if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED"].includes(error.code))) all = false;
+        // 必改 B：草稿里的冲突续写对应的冲突已处理——不静默丢弃，内容放进常驻提示
+        else if (error.code === "CONFLICT_ALREADY_RESOLVED") sinkNote.value = { conflictId: "", text: `上次在冲突段里写的内容没能存进冲突副本（这条冲突已在别处处理）：“${edit.markdown.length > 120 ? `…${edit.markdown.slice(-120)}` : edit.markdown}”。请复制后粘贴到需要的位置。` };
       }
     }
     if (!all || document.value !== record) continue;
@@ -879,6 +883,7 @@ function conflictName(item: ConflictItem) {
 }
 /** 冲突块：红色竖线 + 浅红底（class 只加在编辑区 DOM 上，转 Markdown 前去掉）；标签画在纸面浮层里，不进入正文。 */
 function applyConflictMarks() {
+  if (caretSink) placeCaretSink(); // 必改 A：重绘后输入框跟着那一项
   const root = editor.value;
   if (!root) { conflictMarks.value = []; return; }
   root.querySelectorAll(".blk-conflict").forEach(node => node.classList.remove("blk-conflict"));
@@ -975,7 +980,10 @@ async function checkOthersUpdated() {
     const quiet = !isDirty.value && !saving.value && !aiLocked.value && !addingHeading.value && !blocked.value && !readonly.value && !typingRecently() && !frozenOpen.value.length;
     // T-M2：焦点在编辑区、光标所在段（或前后段）被别人改了：不自动刷新（不挪光标、不失焦），改为提示条
     if (quiet && caretTouched(since.objects)) {
-      othersUpdated.value = { names, objects, here: true };
+      // 必改 B：更新人就是本人（另一个标签页）时不写“其他成员”
+      const me = readSession()?.userId;
+      const ids = [...since.changedBy.map(person => person.id), ...since.objects.map(item => item.updatedBy?.id)].filter(Boolean);
+      othersUpdated.value = { names, objects, here: true, self: Boolean(me && ids.length && ids.every(id => id === me)) };
       return;
     }
     if (quiet || (readonly.value && !isDirty.value)) {
@@ -1356,25 +1364,82 @@ function leaveEditorCaret(root: HTMLElement) {
     if (unfrozenConflict && Date.now() - unfrozenConflict.at < 30000) openCaretSink(root, unfrozenConflict, caretRect);
   }
 }
-function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string }, caretRect: DOMRect | null = null) {
+/** 设计师必改 A：被换成对方版本的那一项（按对方版本的文字找 li/单元格/段落；找不到用冲突定位） */
+function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined): HTMLElement | null {
+  if (!item) return null;
+  const norm = (text: string) => text.replace(/[*_`~\\]/g, "").replace(/\s+/g, " ").trim();
+  const lines = (item.theirs?.markdown || "").split("\n").map(line => norm(line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\|/, "").replace(/\|$/, ""))).filter(Boolean);
+  const candidates = [...root.querySelectorAll("li, p, td, th, h1, h2, h3, h4, h5, h6")] as HTMLElement[];
+  for (const line of lines) {
+    const own = (el: HTMLElement) => norm([...el.childNodes].filter(node => !(node instanceof HTMLElement && /^(UL|OL)$/.test(node.tagName))).map(node => node.textContent || "").join(""));
+    const hit = candidates.find(el => own(el) === line) || candidates.find(el => line.length >= 6 && own(el).startsWith(line.slice(0, 12)));
+    if (hit) return hit;
+  }
+  return findConflictBlock(item).block ?? null;
+}
+let caretSinkAnchor: HTMLElement | null = null;
+let caretSinkItem: ConflictItem | undefined;
+let caretSinkFallback: { top: number; left: number } | null = null;
+/** 输入框放在该项正下方（左侧与文字对齐），挂在纸面里随正文滚动；下方放不下时放到上方 */
+function placeCaretSink() {
+  const sink = caretSink, root = editor.value;
+  const paper = root?.parentElement;
+  if (!sink || !root || !paper) return;
+  if (!caretSinkAnchor || !caretSinkAnchor.isConnected || !root.contains(caretSinkAnchor)) caretSinkAnchor = caretSinkAnchorOf(root, caretSinkItem);
+  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const base = paper.getBoundingClientRect();
+  let top: number, left: number;
+  if (caretSinkAnchor) {
+    const rect = caretSinkAnchor.getBoundingClientRect();
+    const range = window.document.createRange();
+    range.selectNodeContents(caretSinkAnchor);
+    const textRect = range.getBoundingClientRect();
+    left = ((textRect.width ? textRect.left : rect.left) - base.left) / zoom;
+    const below = (rect.bottom - base.top) / zoom + 4;
+    const above = (rect.top - base.top) / zoom - sink.offsetHeight - 4;
+    top = below + sink.offsetHeight <= paper.offsetHeight - 4 || above < 0 ? below : above;
+  } else if (caretSinkFallback) {
+    ({ top, left } = caretSinkFallback);
+  } else {
+    top = root.offsetTop;
+    left = root.offsetLeft;
+  }
+  sink.style.top = `${Math.max(0, top)}px`;
+  sink.style.left = `${Math.max(0, Math.min(left, paper.clientWidth - sink.offsetWidth))}px`;
+}
+/** 按内容增高，最多 4 行，超出后滚动 */
+function growCaretSink() {
+  const sink = caretSink;
+  if (!sink) return;
+  sink.style.height = "auto";
+  const line = 20, pad = 10;
+  const max = line * 4 + pad;
+  sink.style.height = `${Math.min(max, Math.max(line + pad, sink.scrollHeight + 2))}px`;
+  sink.style.overflowY = sink.scrollHeight + 2 > max ? "auto" : "hidden";
+}
+function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string; item?: ConflictItem }, caretRect: DOMRect | null = null) {
   dropCaretSink();
-  // 审查员 M2：输入框可见（回显 + 焦点框），放在原来光标所在处下方，输入法候选框也跟着出现在这里
-  const box = root.getBoundingClientRect();
-  const anchor = caretRect && (caretRect.width || caretRect.height || caretRect.left) ? caretRect : box;
-  const left = Math.min(Math.max(8, anchor.left), Math.max(8, window.innerWidth - 300));
-  const top = Math.min(Math.max(8, anchor.bottom + 4), Math.max(8, window.innerHeight - 48));
+  const paper = root.parentElement || root;
   const sink = window.document.createElement("textarea");
   sink.setAttribute("aria-label", "冲突后接着输入的内容，会并入冲突副本“我的版本”");
   sink.setAttribute("data-testid", "caret-sink");
-  sink.placeholder = "接着输入的内容会存进冲突副本“我的版本”";
+  sink.className = "caret-sink";
+  sink.placeholder = "接着写的内容存进“我的版本”";
   sink.rows = 1;
+  // 设计师 S2：用设计 token；实线边框 --warning-600 对白底对比度 > 3:1，焦点光圈 --focus-ring
   Object.assign(sink.style, {
-    position: "fixed", left: `${left}px`, top: `${top}px`, width: "280px", height: "1.9em", opacity: "1", border: "1px dashed #c9a227", borderRadius: "4px",
-    background: "#fffbe6", boxShadow: "0 0 0 2px rgba(201,162,39,.35)", padding: "2px 6px", margin: "0", font: "inherit", fontSize: "14px", lineHeight: "1.4",
-    resize: "none", overflow: "hidden", zIndex: "40", outline: "none",
+    position: "absolute", width: "min(420px, 70%)", opacity: "1", border: "1px solid var(--warning-600)", borderRadius: "var(--radius-control)",
+    background: "var(--warning-50)", color: "var(--text-primary)", boxShadow: "0 0 0 3px var(--focus-ring)", padding: "4px 8px", margin: "0",
+    fontFamily: "inherit", fontSize: "var(--text-sm)", lineHeight: "var(--leading-sm)", resize: "none", overflowY: "hidden", zIndex: "6", outline: "none", boxSizing: "border-box",
   });
+  caretSinkItem = target.item;
+  caretSinkAnchor = null;
+  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const base = paper.getBoundingClientRect();
+  caretSinkFallback = caretRect && (caretRect.width || caretRect.height || caretRect.left) ? { top: (caretRect.bottom - base.top) / zoom + 4, left: (caretRect.left - base.left) / zoom } : null;
   const changed = () => { if (caretSink === sink) { caretSinkText = caretSinkPrefix + sink.value; markSinkPending(); } };
   sink.addEventListener("input", () => {
+    growCaretSink();
     window.clearTimeout(caretSinkTimer);
     if (caretSinkComposing) return; // 组字中不记、不发（拼音不进草稿也不进快照）
     changed();
@@ -1384,7 +1449,7 @@ function openCaretSink(root: HTMLElement, target: { conflictId: string; itemInde
   sink.addEventListener("compositionend", () => { caretSinkComposing = false; caretSinkIme = false; changed(); window.clearTimeout(caretSinkTimer); caretSinkTimer = window.setTimeout(() => void flushCaretSink(), 300); });
   // 失焦不丢：文字已在 caretSinkText 与本机草稿里，框可以撤，发送失败会继续重试
   sink.addEventListener("blur", () => { caretSinkComposing = false; changed(); void flushCaretSink().finally(() => { if (caretSink === sink) dropCaretSink(); }); });
-  window.document.body.appendChild(sink);
+  paper.appendChild(sink);
   const same = caretSinkTarget && caretSinkTarget.conflictId === target.conflictId && caretSinkTarget.itemIndex === target.itemIndex;
   if (same) {
     caretSinkPrefix = caretSinkText; // 同一条冲突再次打开：接着记，不重发已存上的部分
@@ -1398,6 +1463,14 @@ function openCaretSink(root: HTMLElement, target: { conflictId: string; itemInde
     caretSinkTarget = { conflictId: target.conflictId, itemIndex: target.itemIndex, mine: target.mine };
   }
   caretSink = sink;
+  growCaretSink();
+  placeCaretSink();
+  // 编辑区重排（重绘、他人更新、图片载入）后跟着那一项重新定位
+  caretSinkObserver?.disconnect();
+  let queued = 0;
+  caretSinkObserver = new MutationObserver(() => { if (!queued) queued = window.requestAnimationFrame(() => { queued = 0; placeCaretSink(); }); });
+  caretSinkObserver.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "style"] });
+  window.setTimeout(placeCaretSink, 300);
   sink.focus({ preventScroll: true });
 }
 function unsentSinkText(): string {
@@ -1410,7 +1483,10 @@ function markSinkPending() {
   sinkUnsaved.value = target && typed ? { conflictId: target.conflictId, itemIndex: target.itemIndex, markdown: target.mine + typed } : null;
   persistLocalDraft();
 }
+let caretSinkObserver: MutationObserver | null = null;
 function dropCaretSink() {
+  caretSinkObserver?.disconnect();
+  caretSinkObserver = null;
   window.clearTimeout(caretSinkTimer);
   caretSink?.remove();
   caretSink = null;
@@ -1427,6 +1503,8 @@ async function flushSinkBacklog() {
       await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `sinkb-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
     } catch (error) {
       if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "SNAPSHOT_LIMIT"].includes(error.code))) continue;
+      // 必改 B：存不进去了，不能静默丢——放进常驻提示
+      sinkNote.value = { conflictId: "", text: `之前在另一项冲突里接着写的“${edit.markdown.slice(-60)}”没能存进冲突副本（${error.code === "CONFLICT_ALREADY_RESOLVED" ? "这条冲突已处理" : "副本存不进去"}），请复制后粘贴到需要的位置。` };
     }
     sinkBacklog.value = sinkBacklog.value.filter(item => item !== edit);
   }
@@ -1470,8 +1548,20 @@ async function flushCaretSink(): Promise<void> {
       markSinkPending();
       void conflictPanel.value?.load();
     } catch (error) {
-      if (error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "SNAPSHOT_LIMIT"].includes(error.code)) {
-        // 这条冲突已处理/无权/副本已满：存不进去了，文字留在提示里让用户复制
+      if (error instanceof ApiError && error.code === "CONFLICT_ALREADY_RESOLVED") {
+        // 设计师必改 B（隐形框路径）：另一个标签页已处理——没存上的字接回这一项末尾（普通修改），接回后才清掉隐形框的待存
+        dropCaretSink();
+        caretSinkTarget = null;
+        const fallback = { ...(caretSinkItem || {}), theirs: { markdown: target.mine } } as ConflictItem;
+        const item = caretSinkItem;
+        await reattachLeftover(typed, target.conflictId, root => caretSinkAnchorOf(root, item) || caretSinkAnchorOf(root, fallback));
+        sinkUnsaved.value = null;
+        caretSinkText = caretSinkSent = caretSinkPrefix = "";
+        persistLocalDraft();
+        return;
+      }
+      if (error instanceof ApiError && ["FORBIDDEN", "NOT_FOUND", "SNAPSHOT_LIMIT"].includes(error.code)) {
+        // 无权/副本已满：存不进去了，文字留在提示里让用户复制
         sinkUnsaved.value = null;
         persistLocalDraft();
         sinkNote.value = { conflictId: target.conflictId, text: error.code === "SNAPSHOT_LIMIT"
@@ -2115,6 +2205,7 @@ function currentDraft(): DraftV2 | null {
     conflictsEdits: [
       ...frozenOpen.value.filter(entry => entry.mine !== entry.saved).map(entry => ({ conflictId: entry.conflictId, itemIndex: entry.itemIndex, markdown: entry.mine })),
       ...sinkBacklog.value.map(edit => ({ ...edit })),
+      ...leftovers.value.map(edit => ({ ...edit })),
       ...(sinkUnsaved.value ? [{ ...sinkUnsaved.value }] : []),
     ],
     pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
@@ -2127,7 +2218,7 @@ function persistLocalDraft(): boolean {
   if (!record || !browserTab) return false;
   window.clearTimeout(draftTimer);
   draftTimer = undefined;
-  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length) {
+  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length && !leftovers.value.length) {
     // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
     // 终验回归 H1：恢复条正列着本标签的旧草稿时不删（由“恢复/舍弃”处理）
     if (!localDrafts.value.some(draft => draft.tabId === browserTab)) removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
@@ -2591,10 +2682,8 @@ async function flushSnapshots(): Promise<void> {
         snapshotKeys.delete(entry.key);
       } catch (error) {
         if (error instanceof ApiError && error.code === "CONFLICT_ALREADY_RESOLVED") {
-          // 在别的标签页处理掉了：撤掉冻结，按服务器正文刷新
-          entry.resolved = true;
-          entry.saved = entry.mine;
-          void refreshConflicts();
+          // 设计师必改 B：在另一个标签页处理掉了。多写的字不能当成已保存：先保底，再撤冻结、按服务器正文刷新、接回段末
+          resolvedElsewhere.push(entry);
           continue;
         }
         if (error instanceof ApiError && error.code === "SNAPSHOT_LIMIT") {
@@ -2608,9 +2697,79 @@ async function flushSnapshots(): Promise<void> {
       }
     }
     persistLocalDraft();
+    if (resolvedElsewhere.length) void settleResolvedElsewhere(resolvedElsewhere.splice(0));
     if (failed) scheduleSnapshot(Math.min(30000, backoffMs(Math.max(1, failures.value + 1))));
   })();
   try { await snapshotFlight; } finally { snapshotFlight = undefined; }
+}
+const resolvedElsewhere: Frozen[] = [];
+/** 两版之间多出来的文字（去掉公共前后缀后中间那段） */
+function extraText(saved: string, mine: string): string {
+  let head = 0;
+  while (head < saved.length && head < mine.length && saved[head] === mine[head]) head += 1;
+  let tail = 0;
+  while (tail < saved.length - head && tail < mine.length - head && saved[saved.length - 1 - tail] === mine[mine.length - 1 - tail]) tail += 1;
+  return mine.slice(head, mine.length - tail).replace(/^\s+|\s+$/g, "");
+}
+const plainOf = (markdown: string) => markdown.replace(/^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+/gm, "").replace(/[*_`~\\|]/g, "").replace(/\s+/g, " ").trim();
+/** 设计师必改 B：冲突已在另一个标签页处理。①草稿保底（冻结区内容仍在 conflictsEdits）②撤冻结 ③按服务器正文刷新 ④多写的字接回该段末尾并提示，走正常保存 */
+async function settleResolvedElsewhere(entries: Frozen[]) {
+  for (const entry of entries) {
+    if (entry.resolved) continue;
+    const extra = extraText(entry.saved, entry.mine);
+    const keep = extra ? { conflictId: entry.conflictId, itemIndex: entry.itemIndex, markdown: entry.mine } : null;
+    if (keep) leftovers.value = [...leftovers.value, keep];
+    entry.resolved = true;
+    persistLocalDraft();
+    const ids = new Set(entry.objectIds);
+    const texts = [entry.saved, entry.mine, entry.theirs].map(md => plainOf(md.split(/\n{2,}/).filter(Boolean).pop() || "")).filter(Boolean);
+    await reattachLeftover(extra, entry.conflictId, root => {
+      const tops = topLevel(root);
+      const byId = tops.filter(block => ids.has(block.getAttribute("data-object-id") || ""));
+      if (byId.length) return byId[byId.length - 1];
+      const norm = (el: HTMLElement) => (el.textContent || "").replace(/\s+/g, " ").trim();
+      for (const text of texts) {
+        const hit = tops.find(block => norm(block) === text) || tops.find(block => text.length >= 6 && norm(block).startsWith(text.slice(0, 12)));
+        if (hit) return hit;
+      }
+      return tops[Math.min(entry.index, tops.length - 1)] ?? null;
+    });
+    if (keep) { leftovers.value = leftovers.value.filter(item => item !== keep); persistLocalDraft(); }
+  }
+  void refreshConflicts();
+}
+/** 把多写的字接回某段末尾（普通修改，按最新修订保存）；接不回就放进常驻提示 */
+async function reattachLeftover(text: string, conflictId: string, find: (root: HTMLElement) => HTMLElement | null): Promise<boolean> {
+  const record = document.value;
+  if (!record) return false;
+  const quoted = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  if (text) sinkNote.value = { conflictId: "", text: `这条冲突已在你另一个标签页处理。你之后在这里写的“${text}”没能存进冲突副本，正在接回正文…` };
+  try {
+    window.clearTimeout(autoSaveTimer);
+    if (isDirty.value) await save("auto");
+    if (savePromise) await savePromise.catch(() => undefined);
+    await refreshFromServer({ reason: "正在载入另一个标签页的处理结果…" }, true);
+  } catch { /* 刷新失败：下面按当前编辑区接回 */ }
+  if (document.value !== record) return false;
+  if (!text) { if (sinkNote.value?.conflictId === conflictId) sinkNote.value = null; noteAction("这条冲突已在你另一个标签页处理，编辑区已按处理结果更新。", 6000); return true; }
+  const root = editor.value;
+  const block = root && editable.value ? find(root) : null;
+  if (root && block) {
+    root.focus({ preventScroll: true });
+    const range = window.document.createRange();
+    range.selectNodeContents(block);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (window.document.execCommand("insertText", false, text)) {
+      persistLocalDraft();
+      sinkNote.value = { conflictId: "", text: `这条冲突已在你另一个标签页处理。你之后在这里写的“${quoted}”已接到这一段末尾，请检查。` };
+      return true;
+    }
+  }
+  sinkNote.value = { conflictId: "", text: `这条冲突已在你另一个标签页处理。你之后在这里写的“${text}”没能接回正文，请复制后粘贴到需要的位置。` };
+  return false;
 }
 /** 重绘前取下冻结区节点（连同光标），重绘后放回服务器上这一段的位置（按对象 ID，找不到时放回原位置）。 */
 function detachFrozen(root: HTMLElement) {
@@ -2694,7 +2853,7 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const frozenKeys = fromEditor ? freezeConflicts(conflicts) : [];
       const allFrozen = conflicts.length > 0 && frozenKeys.length === conflicts.length;
       const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
-      unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now() } : null;
+      unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now(), item: loose } : null;
       // 设计师必改 2：不能冻结的条目（列表项等）会换成对方的版本——从这一刻起就常驻说明，不等用户再打字
       if (loose) sinkNote.value = { conflictId: loose.conflictId, text: `这一项与 ${conflictName(loose)} 的修改冲突，正文里换成 ${conflictName(loose)} 的版本；你在这一项里写的内容（含之后接着写的）存为冲突副本“我的版本”，可在冲突面板里处理。` };
       void refreshConflicts().then(() => conflictPanel.value?.load());
@@ -3213,6 +3372,7 @@ onBeforeRouteUpdate(leaveDocument);
 onMounted(() => {
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener("online", onlineAgain);
+  window.addEventListener("resize", placeCaretSink);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   window.document.addEventListener("visibilitychange", onVisibilityChange);
@@ -3233,6 +3393,7 @@ onUnmounted(() => {
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener("online", onlineAgain);
+  window.removeEventListener("resize", placeCaretSink);
   window.clearTimeout(caretSinkRetryTimer);
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("pageshow", onPageShow);
@@ -3341,7 +3502,7 @@ onUnmounted(() => {
         <div class="wb-float-stack" aria-live="polite">
           <div v-if="othersUpdated" class="wb-notice info floating" role="status" data-testid="others-updated">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
-            <span v-if="othersUpdated.here" data-testid="others-here">{{ othersUpdated.names[0] || '其他成员' }} 更新了你正在看的这一段。</span>
+            <span v-if="othersUpdated.here" data-testid="others-here">{{ othersUpdated.self ? '你在另一个标签页更新了这一段。' : `${othersUpdated.names[0] || '其他成员'} 更新了你正在看的这一段。` }}</span>
             <span v-else>{{ othersUpdatedText(othersUpdated.names, othersUpdated.objects, false, frozenOpen.length > 0) }}</span>
             <span class="acts">
               <button type="button" class="ghost sm" :disabled="saving || Boolean(blocked) || offline" :title="blocked || offline ? '需要先保存你的修改' : undefined" @click="refreshOthersNow">{{ saving ? "保存后刷新…" : "立即刷新" }}</button>

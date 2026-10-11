@@ -879,9 +879,56 @@ def s_reload_close_reopen(ctx: Run, page):
     return rows
 
 
+def list_conflict_with_sink(ctx: Run, page, name: str, filler: int = 0) -> str:
+    """列表项冲突：李工改列表项一、张工也改，409 后这一项换成对方版本、焦点进冲突输入框。"""
+    selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+    doc_id = selfconf.make_doc(ctx.data, f"{name}-{time.strftime('%H%M%S')}", filler)
+    ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + LIST)
+    ctx.open(page, doc_id)
+    page.locator(".paper-content li", has_text="列表项一").first.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    ctx.zhang_edit(doc_id, "列表项一", "列表项一（对方改）")
+    page.keyboard.press("Control+s")
+    page.keyboard.type("，续零】", delay=150)
+    expect(page.get_by_test_id("caret-sink")).to_be_visible(timeout=20000)
+    expect(page.locator(".paper-content li", has_text="列表项一（对方改）")).to_be_visible(timeout=20000)
+    page.wait_for_timeout(800)
+    return doc_id
+
+
+@scenario("A 冲突输入框贴着该项 随正文滚动 按内容增高")
+def s_sink_position(ctx: Run, page):
+    """设计师必改 A：输入框在被替换的那一项正下方（不挡住它），随正文滚动，长句自动增高（≤4 行），占位文字不截断。"""
+    list_conflict_with_sink(ctx, page, "方案C输入框位置", 40)
+    sink = page.get_by_test_id("caret-sink")
+    item = page.locator(".paper-content li", has_text="列表项一（对方改）").first
+    s0, i0 = sink.bounding_box(), item.bounding_box()
+    gap = s0["y"] - (i0["y"] + i0["height"])
+    assert -1 <= gap <= 24, f"输入框不在该项正下方：项 {i0} 框 {s0}"
+    assert abs(s0["x"] - i0["x"]) <= 60, f"输入框没和该项左对齐：项 {i0} 框 {s0}"
+    fits = sink.evaluate("el => el.scrollHeight <= el.clientHeight + 2")
+    assert fits, "占位文字被截断"
+    page.locator(".desk").evaluate("el => el.scrollBy(0, 240)")
+    page.wait_for_timeout(300)
+    s1, i1 = sink.bounding_box(), item.bounding_box()
+    assert abs((s1["y"] - s0["y"]) - (i1["y"] - i0["y"])) <= 2 and abs(i1["y"] - i0["y"]) > 100, f"输入框没跟随滚动：{s0}->{s1} 项 {i0}->{i1}"
+    page.locator(".desk").evaluate("el => el.scrollBy(0, -240)")
+    h1 = sink.bounding_box()["height"]
+    sink.focus()
+    page.keyboard.type("这是一句很长的续写内容，用来检查输入框会不会按内容自动增高，而不是只显示最后一行。" * 2, delay=5)
+    page.wait_for_timeout(300)
+    h2 = sink.bounding_box()["height"]
+    assert h2 > h1 + 15, f"长句时输入框没有增高：{h1}->{h2}"
+    assert h2 <= 4 * 20 + 16, f"输入框超过 4 行：{h2}"
+    border = sink.evaluate("el => getComputedStyle(el).borderTopStyle + ' ' + getComputedStyle(el).borderTopColor")
+    assert border.startswith("solid") and "150, 90, 0" in border, f"边框不是 token 实线：{border}"
+    return {"gap": round(gap, 1), "h": [round(h1), round(h2)]}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen]
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen, s_sink_position]
 
 
 def main() -> int:
