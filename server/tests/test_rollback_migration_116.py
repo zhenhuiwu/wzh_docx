@@ -50,6 +50,9 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
                                   values (%s, %s, %s, %s, 'add', 'owner', 1)""", (uuid4(), project, owner, owner))
             connection.commit()
         assert _recorded(path) == 1
+        # 回滚顺序 117 → 116（A06 的 117 在 116 之后）
+        from app.rollback_migration_117 import rollback as rollback_117
+        assert rollback_117(path, apply=True) == 0
         assert rollback(path, apply=False) == 0  # 只检查
         assert _recorded(path) == 1 and _schema(path) != expected
         assert rollback(path, apply=True) == 0
@@ -66,7 +69,7 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
             assert connection.execute("select role from project_members where project_id = ?", (str(project),)).fetchone()[0] == "owner"
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["116_project_members_v2.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql"]
         assert _recorded(path) == 1
         with sqlite3.connect(path) as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
@@ -91,7 +94,7 @@ def test_migration_116_on_a_115_database_keeps_old_rows(tmp_path, monkeypatch):
             connection.execute("insert into projects(id, name, owner_id) values (%s, %s, %s)", (project, "旧项目", owner))
             connection.execute("insert into project_members(project_id, user_id, role) values (%s, %s, 'owner')", (project, owner))
             connection.commit()
-        assert migrate() == ["116_project_members_v2.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql"]
         assert migrate() == []
         with sqlite3.connect(tmp_path / "app.db") as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
