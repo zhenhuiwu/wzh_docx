@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addButtonText, assignmentParts, batchResultText, candidateNote, changeOutcomeText, classifyMemberError, contactNames,
   blockedProjectLabel, disableBlockedArchivedHint, disableBlockedMoreText, disableBlockedText, isLockedOwner, memberErrorText, membersConflictText, membersNote, ownersText,
-  pickError, readonlyBlockedText, readonlyText, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
+  noActiveOwnerText, pickError, readonlyBlockedText, retryableIds, readonlyText, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
 } from "./memberModel";
 
 const owner = (name: string, status = "active", isPrimary = false) => ({ id: name, name, status, isPrimary });
@@ -28,7 +28,7 @@ describe("区块说明", () => {
     expect(membersNote({ canManage: false, projectRole: "auditor", isAdmin: false })).toBe("你以审计身份只读查看该项目。");
     expect(membersNote({ canManage: false, projectRole: "editor", isAdmin: false, owners: [owner("张工"), owner("李工")] }))
       .toBe("如需调整权限，请联系负责人 张工、李工。");
-    expect(membersNote({ canManage: false, projectRole: "viewer", isAdmin: false, owners: [] })).toBe("如需调整权限，请联系项目负责人。");
+    expect(membersNote({ canManage: false, projectRole: "viewer", isAdmin: false, owners: [] })).toBe("如需调整权限，请联系系统管理员。");
   });
 });
 
@@ -145,5 +145,31 @@ describe("工作台只读与停用被拒", () => {
     expect(blockedProjectLabel({ id: "3", name: "丙项目" })).toBe("丙项目");
     expect(disableBlockedArchivedHint([{ id: "1", name: "甲", archived: true }, { id: "2", name: "乙" }])).toContain("需先恢复");
     expect(disableBlockedArchivedHint([{ id: "2", name: "乙", archived: false }])).toBe("");
+  });
+});
+
+describe("A05 验收修复（21 / 20）", () => {
+  it("归档项目的说明行按只读写，不再说“可以添加成员”（21 S-3、20 L-3）", () => {
+    expect(membersNote({ canManage: false, projectRole: "owner", isAdmin: false, archived: true, owners: [owner("张工")] })).toBe("如需调整权限，请联系负责人 张工。");
+    expect(membersNote({ canManage: false, projectRole: null, isAdmin: true, archived: true })).toBe("你以系统管理员身份查看该项目（你不是项目成员）。");
+    expect(membersNote({ canManage: true, projectRole: "owner", isAdmin: false, archived: true, owners: [owner("张工")] })).not.toContain("可以添加成员");
+  });
+  it("没有启用负责人时的提示（19 S-1）", () => {
+    expect(noActiveOwnerText(true)).toContain("请把一位启用的成员设为负责人");
+    expect(noActiveOwnerText(false)).toContain("联系系统管理员");
+    expect(ownersText([owner("停用", "disabled", true)], "—")).toBe("—");
+  });
+  it("部分失败后只留可重试的人（21 S-7）", () => {
+    const failed = [
+      { userId: "a", code: "USER_DISABLED", message: "" },
+      { userId: "b", code: "NOT_FOUND", message: "" },
+      { userId: "c", code: "ALREADY_MEMBER", message: "" },
+      { userId: "d", code: "SOMETHING_TRANSIENT", message: "" },
+    ];
+    expect([...retryableIds(failed)]).toEqual(["d"]);
+    expect(retryableIds(failed.slice(0, 3)).size).toBe(0);
+  });
+  it("“不能停用”里的归档项目提示指向“打开并恢复”（21 M-1）", () => {
+    expect(disableBlockedArchivedHint([{ id: "1", name: "甲", archived: true }])).toContain("打开并恢复");
   });
 });

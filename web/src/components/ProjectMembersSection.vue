@@ -3,7 +3,7 @@
  * A05 项目概述 ›“成员与权限”（16 §2.2–§2.8）。自己负责加载、空、错三态，失败不影响上下两个区块。
  * 前端只做展示判断，后端独立校验（membersRevision、最后负责人、归档、停用账号）。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import {
@@ -13,22 +13,25 @@ import {
 import { flash } from "../flash";
 import { formatDateTime, initialOf } from "../format";
 import {
-  ARCHIVED_MEMBERS_TEXT, DISABLED_ROW_TEXT, LAST_OWNER_TEXT, MAX_PICK, MEMBERS_INFO, ROLE_OPTIONS, ROLE_TONE,
+  ARCHIVED_MEMBERS_CONTACT_TEXT, ARCHIVED_MEMBERS_TEXT, DISABLED_ROW_TEXT, LAST_OWNER_TEXT, MAX_PICK, MEMBERS_INFO, ROLE_OPTIONS, ROLE_TONE,
   addButtonText, batchResultText, candidateNote, changeOutcomeText, classifyMemberError, contactNames, isLockedOwner,
-  memberErrorText, membersConflictText, membersNote, pickError, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
+  activeOwners, memberErrorText, membersConflictText, membersNote, noActiveOwnerText, pickError, retryableIds, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
   type AssignableRole,
 } from "../memberModel";
 import { hasPermission, readSession } from "../session";
 import StatePanel from "./StatePanel.vue";
 
-const props = defineProps<{ projectId: string; projectName: string }>();
+/** canRestore：当前账号能恢复归档项目（项目 permissions.canArchive），归档提示里给［恢复项目］（21 M-1）。 */
+const props = defineProps<{ projectId: string; projectName: string; canRestore?: boolean }>();
 const emit = defineEmits<{
   /** 负责人变化（加、降、移、主负责人改指）后刷新页头和概述信息格，不再请求 getProject。 */
-  (event: "owners", value: { owners: ProjectOwnerSummary[]; ownerId: string; membersRevision: number }): void;
+  (event: "owners", value: { owners: ProjectOwnerSummary[]; ownerId: string | null; membersRevision: number }): void;
   /** 涉及自己的权限变化：父组件重新读取项目 permissions。 */
   (event: "permissions-changed"): void;
   /** 后端说项目不存在或已无权访问：整页转 404 态。 */
   (event: "gone"): void;
+  /** 点了归档提示里的［恢复项目］：由页头统一弹恢复确认。 */
+  (event: "restore"): void;
 }>();
 
 const route = useRoute();
@@ -52,17 +55,28 @@ const activeOwnerCount = computed(() => snapshot.value?.activeOwnerCount ?? 0);
 // 系统管理员（users.manage 只给系统管理员）；归档时 canManageMembers=false，说明行仍按身份写
 const isAdmin = computed(() => hasPermission(readSession(), "users.manage"));
 const note = computed(() => membersNote({
-  canManage: canManage.value || (archived.value && (snapshot.value?.projectRole === "owner" || isAdmin.value)),
+  canManage: canManage.value,
   projectRole: snapshot.value?.projectRole,
   isAdmin: isAdmin.value,
   owners: snapshot.value?.owners,
+  archived: archived.value,
 }));
+// 读取时没有启用的负责人（19 S-1）：成员区给出 warning，管理员据此补负责人
+const noActiveOwner = computed(() => Boolean(snapshot.value) && !activeOwners(snapshot.value?.owners).length);
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase();
   if (!q) return members.value;
   return members.value.filter(member => member.name.toLowerCase().includes(q) || member.account.toLowerCase().includes(q));
 });
 const busy = computed(() => Object.values(rowState.value).some(item => item.state === "saving"));
+let infoTimer = 0;
+
+/** 行内结果提示。主负责人改指这类旁人的变化 4 秒后自动收起（16 §2.6/§2.8，21 S-5）；自身降级等提示常驻。 */
+function showInfo(text: string, transient = false) {
+  window.clearTimeout(infoTimer);
+  info.value = text;
+  if (transient && text) infoTimer = window.setTimeout(() => { if (info.value === text) info.value = ""; }, 4000);
+}
 
 function errorOf(error: unknown): { status: number; code: string; message: string; details?: Record<string, any> } {
   if (error instanceof ApiError) return { status: error.status, code: error.code, message: error.message, details: error.details };
@@ -175,9 +189,9 @@ async function changeRole(member: ProjectMember, role: AssignableRole, select: H
     apply(result);
     setRow(member.userId, "saved", "已保存");
     const outcome = changeOutcomeText("role", member.name, role, result);
-    if (outcome) info.value = outcome;
+    if (outcome) showInfo(outcome, !result.assignmentsCleared?.sections && !result.assignmentsCleared?.blocks);
     if (member.isMe) {
-      info.value = `你的项目权限已调整为${roleLabel(role)}。`;
+      showInfo(`你的项目权限已调整为${roleLabel(role)}。`);
       emit("permissions-changed");
     }
   } catch (error) {
@@ -228,7 +242,7 @@ async function confirmRemove() {
     if (result && "items" in result && result.items) apply(result);
     else await load(true);
     const outcome = result ? changeOutcomeText("remove", member.name, null, result) : "";
-    if (outcome) info.value = outcome;
+    if (outcome) showInfo(outcome, !result?.assignmentsCleared?.sections && !result?.assignmentsCleared?.blocks);
     if (member.isMe) emit("permissions-changed");
   } catch (error) {
     if (!alive) return;
@@ -345,12 +359,13 @@ async function submitAdd() {
     adding.value = false;
     if (!result.failed.length) {
       closeAdd();
-      info.value = `已添加 ${result.added.length} 人。`;
+      showInfo(`已添加 ${result.added.length} 人。`, true);
       return;
     }
-    // 部分失败：弹窗不关，已成功的人从已选里去掉，按钮变成“重试 M 人”（16 §2.3.1）
-    const added = new Set(result.added);
-    picked.value = picked.value.filter(item => !added.has(item.id));
+    // 部分失败：弹窗不关；已成功的和重试也不会成功的（账号停用、不存在、已是成员）从已选里去掉，
+    // 只剩可重试的才把按钮变成“重试 M 人”（16 §2.3.1，21 S-7）
+    const retry = retryableIds(result.failed);
+    picked.value = picked.value.filter(item => retry.has(item.id));
     addResult.value = batchResultText(result.added.length, result.failed, names);
     retryMode.value = picked.value.length > 0;
     void searchCandidates();
@@ -396,9 +411,27 @@ watch(() => props.projectId, async () => {
   scrollToSelf();
 }, { immediate: true });
 
+// 被移出、降级、归档时停在概述页也要跟上（20 I-6）：45 秒轮询一次，切回窗口时立即刷新；404 整页转“不存在或无权访问”
+const POLL_MS = 45000;
+let pollTimer = 0;
+function quietRefresh() {
+  if (document.visibilityState !== "visible" || busy.value || adding.value || removeBusy.value || selfPending.value) return;
+  void load(true);
+}
+function onVisible() { if (document.visibilityState === "visible") quietRefresh(); }
+onMounted(() => {
+  pollTimer = window.setInterval(quietRefresh, POLL_MS);
+  window.addEventListener("focus", quietRefresh);
+  document.addEventListener("visibilitychange", onVisible);
+});
+
 onBeforeUnmount(() => {
   alive = false;
   ++loadRequest;
+  window.clearInterval(pollTimer);
+  window.clearTimeout(infoTimer);
+  window.removeEventListener("focus", quietRefresh);
+  document.removeEventListener("visibilitychange", onVisible);
   window.clearTimeout(searchTimer);
   searchAbort?.abort();
   timers.forEach(timer => window.clearTimeout(timer));
@@ -418,6 +451,7 @@ defineExpose({ reload: () => load(true) });
       <div class="members-tools">
         <label v-if="members.length > 10" class="search-box members-search">
           <span class="sr-only">查找成员</span>
+          <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5" /></svg>
           <input v-model="query" class="control" type="search" placeholder="查找成员" data-testid="members-search" />
         </label>
         <button v-if="canManage" ref="addButton" type="button" class="ghost" data-testid="members-add" :disabled="busy" @click="openAdd">
@@ -432,8 +466,12 @@ defineExpose({ reload: () => load(true) });
         <button v-if="canManage" type="button" class="ghost" @click="openAdd">添加成员</button>
       </StatePanel>
       <template v-else>
-        <p v-if="archived" class="notice warning" data-testid="members-notice" role="status">{{ ARCHIVED_MEMBERS_TEXT }}</p>
+        <div v-if="archived" class="notice warning notice-row" data-testid="members-notice" role="status">
+          <span>{{ canRestore ? ARCHIVED_MEMBERS_TEXT : ARCHIVED_MEMBERS_CONTACT_TEXT }}</span>
+          <button v-if="canRestore" type="button" class="ghost sm" data-testid="members-restore" @click="emit('restore')">恢复项目</button>
+        </div>
         <p v-else-if="warning" class="notice warning" data-testid="members-notice" role="status">{{ warning }}</p>
+        <p v-if="noActiveOwner && !archived" class="notice warning" data-testid="members-no-owner" role="status">{{ noActiveOwnerText(canManage) }}</p>
         <p v-if="info" class="notice info" data-testid="members-info" role="status">{{ info }}</p>
         <div class="table-wrap members-table" :class="{ scroll: members.length > 20 }">
           <table>
@@ -498,9 +536,11 @@ defineExpose({ reload: () => load(true) });
             </tbody>
           </table>
         </div>
-        <p class="notice info members-info-line">{{ MEMBERS_INFO }}</p>
       </template>
     </div>
+    <p v-if="phase === 'ready' && members.length" class="notice info notice-row members-info-line" data-testid="members-info-line">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ MEMBERS_INFO }}</span>
+    </p>
 
     <dialog ref="addDialog" class="app-dialog member-add" data-testid="member-add-dialog" aria-labelledby="member-add-title" @cancel.prevent="closeAdd">
       <form v-if="addOpen" novalidate @submit.prevent="submitAdd">
@@ -508,7 +548,10 @@ defineExpose({ reload: () => load(true) });
         <div class="dialog-body add-body">
           <div class="field">
             <label for="member-candidate-search">查找账号</label>
-            <input id="member-candidate-search" ref="searchInput" v-model="candidateQuery" class="control" type="search" placeholder="输入姓名、账号或部门" autocomplete="off" data-testid="member-candidate-search" :disabled="adding" />
+            <span class="search-box candidate-search">
+              <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5" /></svg>
+              <input id="member-candidate-search" ref="searchInput" v-model="candidateQuery" class="control" type="search" placeholder="输入姓名、账号或部门" autocomplete="off" data-testid="member-candidate-search" :disabled="adding" />
+            </span>
           </div>
           <div class="candidates" role="group" aria-label="候选账号">
             <StatePanel v-if="candidatePhase === 'loading'" kind="loading" text="正在查找账号…" class="compact" />
@@ -518,7 +561,7 @@ defineExpose({ reload: () => load(true) });
             <ul v-else class="candidate-list">
               <li v-for="candidate in candidates" :key="candidate.id">
                 <label class="candidate" :class="{ member: candidate.isMember, on: isPicked(candidate) }" data-testid="member-candidate" :data-user-id="candidate.id">
-                  <input type="checkbox" :checked="isPicked(candidate) || candidate.isMember" :disabled="candidate.isMember || adding" @change="togglePick(candidate)" />
+                  <input type="checkbox" :checked="isPicked(candidate)" :disabled="candidate.isMember || adding" @change="togglePick(candidate)" />
                   <span class="avatar" aria-hidden="true">{{ initialOf(candidate.name) }}</span>
                   <span class="cand-name">{{ candidate.name }}</span>
                   <span class="cand-account">{{ candidate.account }}</span>
@@ -586,7 +629,7 @@ defineExpose({ reload: () => load(true) });
 .members-head { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
 .members-note { margin-left:var(--space-2); color:var(--text-tertiary); font-size:var(--text-sm); }
 .members-tools { display:flex; align-items:center; gap:var(--space-3); }
-.members-search .control { width:240px; }
+.members-search { width:240px; }
 .members-box { border:1px solid var(--border-default); border-radius:var(--radius-sheet); overflow:hidden; }
 .members-box .compact { min-height:calc(var(--space-7) * 4); }
 .members-table.scroll { max-height:calc(52px * 10 + 40px); overflow-y:auto; }
@@ -611,7 +654,11 @@ tr.off .who-name, tr.off .col-dept, tr.off .recent-time { color:var(--text-terti
 .recent-time { display:block; color:var(--text-primary); }
 .recent-who { display:block; color:var(--text-tertiary); font-size:var(--text-xs); }
 .empty-row { color:var(--text-tertiary); text-align:center; }
-.members-info-line { border-top:1px solid var(--border-subtle); border-bottom:0; }
+.notice-row { display:flex; align-items:center; gap:var(--space-3); }
+.notice-row > span { flex:1; min-width:0; }
+.members-info-line { margin-top:var(--space-3); border:1px solid var(--info-200); border-radius:var(--radius-control); }
+.members-info-line > .ico { flex:none; color:var(--info-600); }
+.candidate-search { width:100%; }
 .member-add { width:var(--dialog-w-form); }
 .add-body { display:grid; gap:var(--space-4); }
 .candidates { max-height:calc(44px * 8); overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-control); }

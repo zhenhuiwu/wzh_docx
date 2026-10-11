@@ -40,6 +40,13 @@ export const MEMBERS_INFO = "编写人员可以修改项目中的文档；只读
 export const LAST_OWNER_TEXT = "项目至少需要一位启用中的负责人。请先把其他成员设为负责人。";
 export const DISABLED_ROW_TEXT = "账号已停用，不能调整权限；可以移除。";
 export const ARCHIVED_MEMBERS_TEXT = "项目已归档，成员和权限不能调整。恢复项目后才能修改。";
+/** 归档项目里不能恢复的人看到的去处（21 M-1：恢复按钮只给有归档权限的人）。 */
+export const ARCHIVED_MEMBERS_CONTACT_TEXT = "项目已归档，成员和权限不能调整。如需恢复项目，请联系系统管理员。";
+/** 读取时没有启用的负责人（主负责人停用且没有其他启用负责人，19 S-1）。 */
+export const NO_ACTIVE_OWNER_TAG = "暂无启用的负责人";
+export function noActiveOwnerText(canManage: boolean): string {
+  return canManage ? "项目暂无启用的负责人。请把一位启用的成员设为负责人。" : "项目暂无启用的负责人。如需调整权限，请联系系统管理员。";
+}
 export const NETWORK_TEXT = "暂时不能连接服务，修改没有保存。";
 export const MAX_PICK = 20;
 
@@ -72,15 +79,17 @@ export interface NoteInput {
   projectRole: string | null | undefined;
   isAdmin: boolean;
   owners?: OwnerSummary[];
+  /** 归档项目谁都不能调整成员：按只读写说明行，不再写“可以添加成员”（21 S-3，20 L-3）。 */
+  archived?: boolean;
 }
 
 /** 区块说明行（16 §2.6）。 */
 export function membersNote(input: NoteInput): string {
   if (input.projectRole === "auditor") return "你以审计身份只读查看该项目。";
-  if (input.isAdmin && !input.projectRole) return "你以系统管理员身份管理该项目（你不是项目成员）。";
-  if (input.canManage) return "负责人可以添加成员、调整权限。";
+  if (input.isAdmin && !input.projectRole) return input.archived ? "你以系统管理员身份查看该项目（你不是项目成员）。" : "你以系统管理员身份管理该项目（你不是项目成员）。";
+  if (input.canManage && !input.archived) return "负责人可以添加成员、调整权限。";
   const names = contactNames(input.owners);
-  return names ? `如需调整权限，请联系负责人 ${names}。` : "如需调整权限，请联系项目负责人。";
+  return names ? `如需调整权限，请联系负责人 ${names}。` : "如需调整权限，请联系系统管理员。";
 }
 
 /** 唯一启用负责人：降级选项和移除按钮禁用（16 §2.8 第 3 条；停用的负责人永远可以降级或移除）。 */
@@ -202,6 +211,12 @@ export function batchResultText(added: number, failed: BatchFailure[], names: Re
   return `已添加 ${added} 人；${failed.length} 人没有添加：${reasons}。`;
 }
 
+/** 重试也不会成功的失败（账号停用、不存在、已是成员）：从已选里拿掉，不进入“重试”（21 S-7）。 */
+export const NON_RETRYABLE_ADD_CODES = new Set(["USER_DISABLED", "NOT_FOUND", "ALREADY_MEMBER"]);
+export function retryableIds(failed: BatchFailure[]): Set<string> {
+  return new Set(failed.filter(item => !NON_RETRYABLE_ADD_CODES.has(item.code)).map(item => item.userId));
+}
+
 function reasonOf(item: BatchFailure): string {
   if (item.code === "USER_DISABLED") return "账号已停用";
   if (item.code === "ALREADY_MEMBER") return "已在项目中";
@@ -240,13 +255,13 @@ export function readonlyBlockedText(reason: ReadonlyReason, projectRole: string 
 export interface DisableBlockedProject { id: string; name: string; archived?: boolean }
 
 // A05 Q-2（2026-10-11）：已归档项目里的唯一负责人照样挡停用；列表里在项目名后标“（已归档）”，
-// 并提示归档项目要先恢复才能调整成员（归档项目成员只读）。
+// 并提示归档项目要先恢复才能调整成员（归档项目成员只读）。21 M-1：恢复入口在项目页头［恢复项目］。
 export const ARCHIVED_MARK = "（已归档）";
 export function blockedProjectLabel(item: DisableBlockedProject): string {
   return item.archived ? `${item.name}${ARCHIVED_MARK}` : item.name;
 }
 export function disableBlockedArchivedHint(projects: DisableBlockedProject[]): string {
-  return projects.some((item) => item.archived) ? "标“（已归档）”的项目需先恢复，才能调整负责人。" : "";
+  return projects.some((item) => item.archived) ? "标“（已归档）”的项目需先恢复：点“打开并恢复”，恢复后在“成员与权限”中调整负责人，需要时再归档。" : "";
 }
 
 /** 用户管理：停用唯一负责人被拒（16 §2.13）。 */
