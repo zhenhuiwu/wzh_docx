@@ -561,10 +561,14 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
     # 测试 L2：前端按此隐藏写操作（与 update_project / 成员管理的判定一致）。
     # A05 R3：归档项目只读（canEdit/canManageMembers=false，readonlyReason='archived'），可查看和导出。
     manages = admin or role == "owner"
-    can_edit = has_permission(actor.roles, "projects.manage") and manages and not archived
+    # 归档/恢复（21 M-1）：与 archive/unarchive 接口同一判定——全局 projects.manage 且（系统管理员或本项目负责人），
+    # 与 0022d04 一致（2026-10-11 决定维持）。界面据此显示［恢复项目］。
+    can_archive = has_permission(actor.roles, "projects.manage") and manages
+    can_edit = can_archive and not archived
     project["permissions"] = {
         "projectRole": role,
         "canEdit": can_edit,
+        "canArchive": can_archive,
         "canManageMembers": manages and not archived,
         "readonlyReason": "archived" if archived else (None if manages else "role"),
     }

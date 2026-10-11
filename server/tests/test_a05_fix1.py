@@ -205,3 +205,28 @@ def test_project_without_active_owner_reports_none(ctx):
     # 补一位负责人后恢复显示
     assert ctx.batch(["bob"], "owner").status_code == 200
     assert _owner_views(ctx)["detail"] == (str(ctx.users["bob"]), "李工", ["李工"])
+
+
+# ---------- 21 M-1：恢复项目入口所需的 canArchive（与 archive/unarchive 接口同一判定） ----------
+
+def test_can_archive_matches_the_archive_endpoints(ctx):
+    with connect() as connection:
+        plain_owner = create_user(account="a05-plainowner", name="无全局负责人", password=PASSWORD, roles=[],
+                                  allow_no_roles=True, connection=connection)
+        connection.commit()
+    ctx.users["plainowner"] = plain_owner
+    assert ctx.batch(["bob"], "owner").status_code == 200  # 李工：project_creator（有 projects.manage）
+    assert ctx.batch(["plainowner"], "owner").status_code == 200  # 没有全局角色的负责人
+    assert ctx.batch(["carol"], "editor").status_code == 200
+    _archive(ctx)
+    expected = {"admin": True, "bob": True, "plainowner": False, "carol": False, "auditor": False}
+    for who, allowed in expected.items():
+        ctx.headers = _login(ctx.client, f"a05-{who}")
+        detail = ctx.get(f"/projects/{ctx.project}").json()["data"]
+        assert detail["permissions"]["canArchive"] is allowed, who
+        assert detail["permissions"]["canEdit"] is False and detail["archivedAt"]
+        response = ctx.req("POST", f"/projects/{ctx.project}/unarchive", {"expectedRevision": detail["revision"], "reason": "核对"})
+        assert (response.status_code == 200) is allowed, (who, response.text)
+        if allowed:  # 再归档回去，供下一位核对
+            again = ctx.req("POST", f"/projects/{ctx.project}/archive", {"expectedRevision": response.json()["data"]["revision"], "reason": "核对"})
+            assert again.status_code == 200, again.text
