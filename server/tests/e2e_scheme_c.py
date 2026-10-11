@@ -1270,7 +1270,55 @@ def s_two_tabs_same_paragraph(ctx: Run, page):
     return {}
 
 
-SCENARIOS += [s_capped_keep_mine, s_capped_reload_restore, s_two_tabs_same_paragraph]
+def fill_snapshot_count(conflict_id: str, item_index: int) -> int:
+    """设计师复验 2 D：按库内复制最新一份把份数补到上限（内容与本标签存过的那份相同）。"""
+    from app.db import connect
+    from app.document_commit import MAX_SNAPSHOTS_PER_ITEM as cap
+    with connect() as connection:
+        row = connection.execute("SELECT * FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s ORDER BY rowid DESC LIMIT 1",
+                                 (conflict_id, item_index)).fetchone()
+        have = connection.execute("SELECT COUNT(*) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s",
+                                  (conflict_id, item_index)).fetchone()["n"]
+        for _ in range(cap - int(have)):
+            connection.execute("INSERT INTO document_conflict_mine_snapshots(id, conflict_id, item_index, actor_id, markdown, client_save_key, tab_id, source) "
+                               "VALUES (%s,%s,%s,%s,%s,%s,%s,'editor')",
+                               (str(uuid.uuid4()), conflict_id, item_index, row["actor_id"], row["markdown"], f"fill-{uuid.uuid4()}", row["tab_id"]))
+        connection.commit()
+    return cap
+
+
+@scenario("D 本标签存过一份后副本满 不刷新 保留我的")
+def s_capped_count_no_reload(ctx: Run, page):
+    """设计师复验 2 D：本标签先存成功一份，再到 500 份上限，不刷新直接点「保留我的」——不能 409 后无反应。"""
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)[:300]))
+    page.on("console", lambda message: errors.append(f"{message.type}: {message.text[:300]}") if message.type in ("error", "warning") else None)
+    doc_id = ctx.doc(page, "方案C副本满份数")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    hit = ctx.wait_snapshot(doc_id, MARK)
+    fill_snapshot_count(hit["conflictId"], hit["itemIndex"])
+    base.type_after(page, MARK, "〔满后写〕")
+    page.wait_for_timeout(5000)
+    open_panel(page)
+    expect(card(page).get_by_test_id("conflict-mine-status")).to_contain_text("副本已满", timeout=15000)
+    card(page).get_by_role("button", name="保留我的").click()
+    confirm = card(page).get_by_test_id("others-confirm")
+    try:
+        expect(confirm).to_be_visible(timeout=5000)
+        confirm.get_by_role("button", name="只用这个标签页的版本").click()
+    except AssertionError:
+        pass
+    try:
+        expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=30000)
+    except AssertionError:
+        raise AssertionError(f"冻结区仍在；页面错误：{errors[-6:]}；卡片：{card(page).inner_text()[-300:]}".replace("\n", " ")) from None
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    assert MARK + "〔满后写〕" in md, md[:400]
+    return {}
+
+
+SCENARIOS += [s_capped_count_no_reload, s_capped_keep_mine, s_capped_reload_restore, s_two_tabs_same_paragraph]
 
 
 def main() -> int:

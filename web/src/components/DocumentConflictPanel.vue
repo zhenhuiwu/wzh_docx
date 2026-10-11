@@ -225,7 +225,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     const state = live(item);
     const pin = pinned.value[id(item)];
     const carries = ["keep_mine", "keep_both", "restore_as_new"].includes(choice.action);
-    if (tab.value === "mine" && choice.action !== "use_theirs") request.mineSnapshotId = pin ?? (state && !state.limited ? state.snapshotId : item.mineLatest?.snapshotId) ?? "";
+    if (tab.value === "mine" && choice.action !== "use_theirs") request.mineSnapshotId = pin ?? (state ? state.snapshotId ?? item.mineLatest?.snapshotId : item.mineLatest?.snapshotId) ?? "";
     // 测试工程师 N3（用户决定）：副本到上限时，编辑区 / 草稿里没存上的最新“我的版本”随请求带上（只用于这次处理，不计入上限）
     if (state?.limited && !state.saved && carries) request.mineMarkdown = state.markdown;
     // N4 / N8：已确认按这个标签页的版本处理（服务器上最新一份是别的标签页写的）——带上本标签的文字
@@ -261,6 +261,8 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
             return;
           }
           // 服务器上那份的内容本标签都有（本标签写得更多）：直接按本标签的版本再提交一次，不丢字也不多问
+          // 设计师复验 2 D：这里 return 在 try 里，重发放在 finally 里做（之前写在 finally 之后，永远执行不到 → 409 后无反应）
+          cardNotice.value = { ...cardNotice.value, [id(item)]: "正在按你编辑区里的最新内容重新提交…" };
           retry = true;
           return;
         }
@@ -318,8 +320,8 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
   } finally {
     busyKey.value = "";
     busyLabel.value = "";
+    if (retry) queueMicrotask(() => void apply(item, choice, markdown));
   }
-  if (retry) await apply(item, choice, markdown);
 }
 
 const diffOf = (base: string | null | undefined, changed: string | null | undefined) => diffWords(normalizeListMarkers(base || ""), normalizeListMarkers(changed || ""));
