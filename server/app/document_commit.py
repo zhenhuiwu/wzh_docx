@@ -224,41 +224,38 @@ def _other_tab_snapshots(connection, conflict_id, item_index: int, latest: dict 
     return [value for tab, value in last.items() if tab != latest_tab and value["markdown"] != latest_md]
 
 
-def _carry_mine(connection, conflict_id, actor, body) -> set[int]:
+def _snapshot_changed(conflict_id, index: int, payload: dict, latest: dict | None) -> AppError:
+    return AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
+        "conflictId": str(conflict_id), "itemIndex": index,
+        "mineLatest": _mine_latest(next((entry for entry in payload["conflicts"] if int(entry["itemIndex"]) == index), {}), latest)})
+
+
+def _carry_plan(connection, conflict_id, body) -> dict[int, dict]:
     """测试工程师 N3：处理请求带上的最新“我的版本”（mineMarkdown，副本到上限时编辑区 / 草稿里没存上的那份）。
-    先按客户端看到的快照 id 核对（不一致仍 409 MINE_SNAPSHOT_CHANGED），再在写事务里记成一份快照（不受上限约束），
-    之后这次处理就用它。条目已不是 open 时不记（由后面的“已处理”分支回应）。返回带了内容的条目下标。"""
-    carried: set[int] = set()
+    代码审查 M7：这里只读——核对客户端看到的快照 id（不一致 409 MINE_SNAPSHOT_CHANGED），不写快照；
+    快照在 resolve 自己的写事务里、确认最新一份仍是客户端看到的那份之后才写，resolve 失败就一起回滚（不能借失败的请求绕过上限），
+    别的标签页在此期间存了新快照时也 409，不把用户确认的内容静默换掉。返回 {条目下标: {markdown, key, seen}}。"""
     items = [item for item in body.items if item.mineMarkdown is not None
              and item.action in {"keep_mine", "keep_both", "restore_as_new"}]
     if not items:
-        return carried
+        return {}
     if connection.in_transaction:
         connection.commit()
-    with write_transaction(connection):
-        state = {int(row["item_index"]): row["status"] for row in connection.execute(
-            "SELECT item_index, status FROM document_conflict_items WHERE conflict_id=%s", (str(conflict_id),)).fetchall()}
-        latest = _latest_snapshots(connection, conflict_id)
-        payload = json.loads(connection.execute("SELECT payload_json FROM document_conflicts WHERE id=%s",
-                                                (str(conflict_id),)).fetchone()["payload_json"])
-        for item in items:
-            key = f"resolve:{body.clientSaveKey}:{item.itemIndex}"
-            replay = connection.execute("SELECT 1 FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND client_save_key=%s",
-                                        (str(conflict_id), key)).fetchone()
-            if replay is None:
-                if state.get(item.itemIndex) != "open":
-                    continue
-                now_id = (latest.get(item.itemIndex) or {}).get("id") or ""
-                if item.mineSnapshotId is not None and item.mineSnapshotId != now_id:
-                    raise AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
-                        "conflictId": str(conflict_id), "itemIndex": item.itemIndex,
-                        "mineLatest": _mine_latest(next((entry for entry in payload["conflicts"]
-                                                         if int(entry["itemIndex"]) == item.itemIndex), {}),
-                                                   latest.get(item.itemIndex))})
-                append_snapshot(connection, conflict_id=conflict_id, item_index=item.itemIndex, actor=actor,
-                                markdown=item.mineMarkdown, key=key, source="editor")
-            carried.add(item.itemIndex)
-    return carried
+    state = {int(row["item_index"]): row["status"] for row in connection.execute(
+        "SELECT item_index, status FROM document_conflict_items WHERE conflict_id=%s", (str(conflict_id),)).fetchall()}
+    latest = _latest_snapshots(connection, conflict_id)
+    payload = json.loads(connection.execute("SELECT payload_json FROM document_conflicts WHERE id=%s",
+                                            (str(conflict_id),)).fetchone()["payload_json"])
+    plan: dict[int, dict] = {}
+    for item in items:
+        if state.get(item.itemIndex) != "open":
+            continue  # 由后面的“已处理 / 重放”分支回应
+        now_id = (latest.get(item.itemIndex) or {}).get("id") or ""
+        if item.mineSnapshotId is not None and item.mineSnapshotId != now_id:
+            raise _snapshot_changed(conflict_id, item.itemIndex, payload, latest.get(item.itemIndex))
+        plan[item.itemIndex] = {"markdown": item.mineMarkdown, "key": f"resolve:{body.clientSaveKey}:{item.itemIndex}",
+                                "seen": now_id}
+    return plan
 
 
 def _mine_latest(item: dict, snapshot: dict | None) -> dict:
@@ -1064,7 +1061,7 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
             raise AppError(422, "VALIDATION_FAILED", "同一处冲突在一次请求中只能出现一次。")
         rhash = request_hash(body.model_dump(exclude={"clientSaveKey"}))
         ensure_committed(connection, did)
-        carried = _carry_mine(connection, conflict["id"], principal.user_id, body)
+        carried = _carry_plan(connection, conflict["id"], body)
         for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
             guard = document_lock(did) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
             with guard:
@@ -1095,14 +1092,15 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
                 payload = json.loads(conflict["payload_json"])
                 used = _latest_snapshots(connection, conflict["id"])
                 for request_item in body.items:
-                    seen = None if request_item.itemIndex in carried else request_item.mineSnapshotId
+                    carry = carried.get(request_item.itemIndex)
+                    seen = carry["seen"] if carry is not None else request_item.mineSnapshotId
                     now_id = (used.get(request_item.itemIndex) or {}).get("id") or ""
                     if seen is not None and seen != now_id:
-                        raise AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
-                            "conflictId": str(conflict["id"]), "itemIndex": request_item.itemIndex,
-                            "mineLatest": _mine_latest(next((entry for entry in payload["conflicts"]
-                                                             if int(entry["itemIndex"]) == request_item.itemIndex), {}),
-                                                       used.get(request_item.itemIndex))})
+                        raise _snapshot_changed(conflict["id"], request_item.itemIndex, payload, used.get(request_item.itemIndex))
+                # 带上的内容先按“将要写入的快照”参与处理；真正写入在下面的写事务里
+                real = dict(used)
+                for index, carry in carried.items():
+                    used = {**used, index: {"id": "", "markdown": carry["markdown"], "savedAt": None, "tabId": None}}
                 try:
                     markdown, results, writes = _apply_actions(connection, did, payload, body.items, used)
                 except _Reconflict as again:
@@ -1128,8 +1126,20 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
                             raise _Retry()
                         # 审查点 3：处理用的快照必须仍是最新一份（与追加快照在同一把写锁下比较；变了就按新快照重来）
                         fresh = _latest_snapshots(connection, conflict["id"])
-                        if any((fresh.get(index) or {}).get("id") != (used.get(index) or {}).get("id") for index in indexes):
+                        # 代码审查 M7：带了内容的条目不重来——最新快照不再是客户端看到的那份就 409（事务回滚，什么都不留）
+                        for index, carry in carried.items():
+                            if ((fresh.get(index) or {}).get("id") or "") != carry["seen"]:
+                                raise _snapshot_changed(conflict["id"], index, payload, fresh.get(index))
+                        if any((fresh.get(index) or {}).get("id") != (real.get(index) or {}).get("id")
+                               for index in indexes if index not in carried):
                             raise _Retry()
+                        for index, carry in carried.items():
+                            snap_row = append_snapshot(connection, conflict_id=conflict["id"], item_index=index,
+                                                       actor=principal.user_id, markdown=carry["markdown"], key=carry["key"],
+                                                       source="editor")
+                            for result in results:
+                                if result["itemIndex"] == index and "mineSnapshotId" in result:
+                                    result["mineSnapshotId"], result["mineSavedAt"] = snap_row["id"], snap_row["savedAt"]
                         change_id = None
                         if writes and markdown != snap["markdown_content"]:
                             ensure_document_objects(connection, did)

@@ -400,3 +400,68 @@ def test_resolve_at_snapshot_cap_uses_carried_mine_markdown(team, monkeypatch):
     assert again.status_code == 200, again.text
     resolved = client.get(f"/api/v1/documents/{did}/conflicts?status=resolved", headers=_as(client, "editor2")).json()["data"]["items"]
     assert resolved[0]["mineLatest"]["markdown"] == "B2。一二三（到上限）"
+
+
+def _snap_rows(cid):
+    with connect() as connection:
+        return [dict(row) for row in connection.execute(
+            "SELECT markdown, client_save_key FROM document_conflict_mine_snapshots WHERE conflict_id=%s ORDER BY rowid", (cid,)).fetchall()]
+
+
+def test_failed_resolve_with_carried_mine_leaves_no_snapshot(team):
+    """代码审查 M7：带 mineMarkdown 的 resolve 失败（同请求里另一条目快照 id 不对）时不能留下快照——否则可反复失败绕过上限。"""
+    client, did, _ = team
+    details = _conflict(client, did, 1, {"第一段。": "B1。", "引用段。": "B 引用。"}, {"第一段。": "A1。", "引用段。": "A 引用。"})
+    cid = details["conflictId"]
+    assert len(details["conflicts"]) == 2
+    rev = current(client, did)["revision"]
+    for n in range(5):
+        response = _resolve(client, did, cid, rev, [
+            {"itemIndex": 0, "action": "keep_mine", "mineMarkdown": f"B1。{n}" + "大" * 100_000},
+            {"itemIndex": 1, "action": "keep_mine", "mineSnapshotId": "bogus"}], f"carry-fail-{n:04d}")
+        assert response.status_code == 409 and response.json()["error"]["code"] == "MINE_SNAPSHOT_CHANGED", response.text
+    assert _snap_rows(cid) == []
+    assert all(item["status"] == "open" for item in _open_items(client, did))
+
+
+def test_reconflict_resolve_with_carried_mine_rolls_back_then_retry_keeps_it(team):
+    """代码审查 M7：OBJECT_CONFLICT（处理时对方又改了这一段）不留快照；按新状态带同样的内容重试成功后才留一份。"""
+    client, did, _ = team
+    cid = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})["conflictId"]
+    rev = current(client, did)["revision"]
+    assert save(client, did, rev, current(client, did)["markdownContent"].replace("A2。", "A2 又改。"), _as(client, "editor")).status_code == 200
+    body = {"itemIndex": 0, "action": "keep_mine", "mineMarkdown": "B2。X 确认的。", "mineSnapshotId": ""}
+    first = _resolve(client, did, cid, rev, [body], "carry-reconf-1")
+    assert first.status_code == 409 and first.json()["error"]["code"] == "OBJECT_CONFLICT", first.text
+    assert _snap_rows(cid) == []
+    retry = _resolve(client, did, cid, current(client, did)["revision"], [body], "carry-reconf-2")
+    assert retry.status_code == 200, retry.text
+    assert "B2。X 确认的。" in current(client, did)["markdownContent"]
+    assert [row["markdown"] for row in _snap_rows(cid)] == ["B2。X 确认的。"]
+
+
+def test_carried_mine_races_with_other_tab_snapshot_returns_409_not_silent_swap(team, monkeypatch):
+    """代码审查 M7：resolve 带 X（看到的快照 id = S）期间另一标签页存了 Y：不能用 Y 静默替换用户确认的 X，也不能写入 X——409。"""
+    import app.document_commit as commit
+
+    client, did, _ = team
+    cid = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})["conflictId"]
+    seen = _mine(client, did, cid, 0, "B2。S", "race-key-0001").json()["data"]["mineLatest"]["snapshotId"]
+    original = commit._apply_actions
+    fired = []
+
+    def racing(*args, **kwargs):
+        if not fired:
+            fired.append(1)
+            assert _mine(client, did, cid, 0, "B2。Y 另一标签。", "race-key-0002", tab="tab-Y").status_code == 200
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(commit, "_apply_actions", racing)
+    rev = current(client, did)["revision"]
+    response = _resolve(client, did, cid, rev, [{"itemIndex": 0, "action": "keep_mine", "mineMarkdown": "B2。X 确认的。",
+                                                  "mineSnapshotId": seen}], "race-resolve-1")
+    assert response.status_code == 409 and response.json()["error"]["code"] == "MINE_SNAPSHOT_CHANGED", response.text
+    assert response.json()["error"]["details"]["mineLatest"]["markdown"] == "B2。Y 另一标签。"
+    text = current(client, did)["markdownContent"]
+    assert "X 确认的" not in text and "Y 另一标签" not in text
+    assert [row["markdown"] for row in _snap_rows(cid)] == ["B2。S", "B2。Y 另一标签。"]
