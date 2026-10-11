@@ -28,6 +28,9 @@ describe("classifySaveError", () => {
     expect(classifySaveError({ status: 403, code: "FORBIDDEN" })).toBe("readonly");
     expect(classifySaveError({ status: 404, code: "NOT_FOUND" })).toBe("gone");
   });
+  it("A05 R3：项目已归档的 409 归为只读，不当作别人更新", () => {
+    expect(classifySaveError({ status: 409, code: "PROJECT_ARCHIVED" })).toBe("readonly");
+  });
 });
 
 describe("retry timing", () => {

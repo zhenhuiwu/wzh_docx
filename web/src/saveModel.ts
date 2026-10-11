@@ -37,6 +37,8 @@ export function classifySaveError(error: ErrorLike): FailureKind {
   if (status === 0 || status === 502 || status === 504 || (status === 503 && code !== "AI_UNAVAILABLE")) return "retry";
   if (status === 409 && code === "OBJECT_CONFLICT") return "conflict";
   if (status === 409 && (code === "BASE_REVISION_UNAVAILABLE" || code === "BASE_MISMATCH")) return "blocked";
+  // A05 R3（16 §2.10）：项目已归档 → 只读，不能当作“文档被别人更新”的 stale
+  if (status === 409 && code === "PROJECT_ARCHIVED") return "readonly";
   if (status === 409) return "stale";
   if (status === 422 && code === "IDEMPOTENCY_KEY_REUSED") return "rekey";
   if (status === 403 && code !== "PASSWORD_CHANGE_REQUIRED") return "readonly";

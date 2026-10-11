@@ -31,7 +31,7 @@ export interface DocumentPermissions {
   canExport: boolean;
   canResolveConflicts: boolean;
   canViewMemberConflicts: boolean;
-  readonlyReason: "role" | null;
+  readonlyReason: "role" | "archived" | "assignment" | null;
 }
 
 export interface Capability { available: boolean; reason: string | null }
@@ -142,6 +142,8 @@ export async function previewDocument(id: string): Promise<{ html: string; objec
 export interface ObjectsSince {
   documentRevision: number; objectModel: boolean; changedBy: Array<Person & { objects: number }>;
   objects: Array<{ id: string; deleted: boolean; markdown?: string; updatedBy?: Person | null; deletedBy?: Person | null }>;
+  /** A05（17 B-8）：轮询带当前权限，权限调整/归档在 45 秒内生效。 */
+  permissions?: DocumentPermissions;
 }
 export async function getObjectsSince(id: string, sinceRevision: number): Promise<ObjectsSince> {
   const body = await apiRequest<{ data: ObjectsSince }>(`/documents/${id}/objects?sinceRevision=${sinceRevision}`);
