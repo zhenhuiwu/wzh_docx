@@ -79,3 +79,29 @@ def test_archived_project_knowledge_is_read_only(ctx):
     _unarchive(ctx)
     again = ctx.req("POST", f"/knowledge-bases/{base['id']}/sources", {"name": "资料二", "fileId": str(second.id)})
     assert again.status_code == 201, again.text
+
+
+# ---------- 测试 I-3（2026-10-11 决定）：成员 PUT 只改已有成员的角色，不再 upsert ----------
+
+def test_put_does_not_re_add_a_removed_member(ctx):
+    assert ctx.batch(["bob"], "editor").status_code == 200
+    assert ctx.delete("bob").status_code == 200  # 别人刚把李工移出
+    revision, events = ctx.rev(), len(ctx.events())
+    # 盲目重试：带上最新的版本号再 PUT，旧实现会把李工重新加回（200 + add 审计）
+    retried = ctx.put("bob", "viewer", revision=revision)
+    assert _code(retried) == (404, "MEMBER_NOT_FOUND"), retried.text
+    assert retried.json()["error"]["details"]["userId"] == str(ctx.users["bob"])
+    assert ctx.rev() == revision and len(ctx.events()) == events
+    assert "李工" not in {item["name"] for item in ctx.members()["items"]}
+    # 从没加入过的账号、停用账号同样 404；加入只走批量接口
+    assert _code(ctx.put("carol", "owner")) == (404, "MEMBER_NOT_FOUND")
+    assert ctx.disable("dave").status_code == 200
+    ctx.as_("alice")
+    assert _code(ctx.put("dave", "viewer")) == (404, "MEMBER_NOT_FOUND")
+    # 权限、版本号检查仍在前：编写人员 403，过期版本 409
+    assert _code(ctx.put("carol", "owner", revision=revision - 1)) == (409, "REVISION_CONFLICT")
+    assert ctx.batch(["carol"], "viewer").status_code == 200
+    changed = ctx.put("carol", "editor")
+    assert changed.status_code == 200 and changed.json()["data"]["item"]["role"] == "editor"
+    ctx.as_("carol")
+    assert _code(ctx.put("bob", "viewer")) == (403, "FORBIDDEN")

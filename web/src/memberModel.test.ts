@@ -89,6 +89,8 @@ describe("错误", () => {
     expect(classifyMemberError({ status: 422, code: "USER_DISABLED" })).toBe("disabled");
     expect(classifyMemberError({ status: 403, code: "FORBIDDEN" })).toBe("forbidden");
     expect(classifyMemberError({ status: 404 })).toBe("gone");
+    expect(classifyMemberError({ status: 404, code: "NOT_FOUND" })).toBe("gone");
+    expect(classifyMemberError({ status: 404, code: "MEMBER_NOT_FOUND" })).toBe("member-gone");
     expect(classifyMemberError({ status: 0 })).toBe("network");
   });
   it("文案与 16 §2.6 一致", () => {
@@ -97,6 +99,7 @@ describe("错误", () => {
     expect(memberErrorText({ status: 422, code: "USER_DISABLED" }, "赵工")).toBe("赵工 的账号已停用，不能调整权限；可以移除。");
     expect(memberErrorText({ status: 403, details: { ownerName: "张工" } }, "x")).toBe("你在该项目中没有此操作权限，如需开通请联系负责人 张工。");
     expect(memberErrorText({ status: 0 }, "x")).toBe("暂时不能连接服务，修改没有保存。");
+    expect(memberErrorText({ status: 404, code: "MEMBER_NOT_FOUND" }, "李工")).toBe("李工 已不在项目中，已显示最新名单。如需加入请使用“添加成员”。");
     expect(memberErrorText({ status: 409, code: "PROJECT_ARCHIVED" }, "x")).toBe("项目已归档，成员和权限不能调整。恢复项目后才能修改。");
   });
   it("并发提示带最后调整人和时间", () => {

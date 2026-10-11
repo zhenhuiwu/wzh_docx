@@ -276,8 +276,8 @@ def test_disabling_sole_owner_of_archived_project_is_still_blocked(ctx):
 def test_disabled_accounts_cannot_be_added(ctx):
     assert ctx.disable("dave").status_code == 200
     ctx.as_("alice")
-    single = ctx.put("dave", "viewer")
-    assert single.status_code == 422 and single.json()["error"]["code"] == "USER_DISABLED"
+    single = ctx.put("dave", "viewer")  # PUT 不再加人（20 I-3）：非成员一律 404 MEMBER_NOT_FOUND
+    assert single.status_code == 404 and single.json()["error"]["code"] == "MEMBER_NOT_FOUND"
     batch = ctx.batch(["dave", "carol"])
     assert batch.status_code == 200
     assert [(item["code"]) for item in batch.json()["data"]["failed"]] == ["USER_DISABLED"]
@@ -597,8 +597,9 @@ def test_disable_sole_owner_and_add_second_owner_race_is_consistent(ctx):
         with TestClient(app) as client:
             headers = _login(client, "a05-admin")
             barrier.wait()
-            results["add"] = client.put(f"/api/v1/projects/{ctx.project}/members/{ctx.users['bob']}",
-                                        json={"role": "owner", "expectedMembersRevision": revision}, headers=headers).status_code
+            results["add"] = client.post(f"/api/v1/projects/{ctx.project}/members:batch",
+                                         json={"userIds": [str(ctx.users["bob"])], "role": "owner",
+                                               "expectedMembersRevision": revision}, headers=headers).status_code
 
     threads = [threading.Thread(target=disable_alice), threading.Thread(target=add_bob)]
     for thread in threads:
@@ -637,10 +638,12 @@ def test_random_member_operations_keep_invariants(ctx):
             response = ctx.req("POST", f"/users/{ctx.users[who]}/disable", {"expectedRevision": _user_revision(ctx.users[who]), "reason": "fuzz"})
         else:
             response = ctx.req("POST", f"/users/{ctx.users[who]}/enable", {"expectedRevision": _user_revision(ctx.users[who]), "reason": "fuzz"})
-        assert response.status_code in (200, 204, 409, 422), response.text
-        if response.status_code in (409, 422):
-            assert response.json()["error"]["code"] in ("LAST_OWNER", "USER_DISABLED"), response.text
+        assert response.status_code in (200, 204, 404, 409, 422), response.text
+        if response.status_code in (404, 409, 422):
+            assert response.json()["error"]["code"] in ("LAST_OWNER", "USER_DISABLED", "MEMBER_NOT_FOUND"), response.text
             assert ctx.rev() == before
+        if response.status_code == 404:  # PUT 只改已有成员（20 I-3）
+            assert op == "put" and f"a05-{who}" not in {item["account"] for item in ctx.members()["items"]}
         changed = op in ("put", "delete", "batch") and response.status_code == 200 and ctx.rev() != before
         if changed:
             assert ctx.rev() == before + 1

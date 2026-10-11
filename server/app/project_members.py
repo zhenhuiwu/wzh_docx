@@ -9,6 +9,7 @@
 - R5 成员独立版本号 projects.members_revision：成员接口只校验和递增它，不再动 projects.revision。
   PUT body / DELETE query 的 expectedMembersRevision 必填；DELETE 目标不是成员时 204，不加版本、不写审计。
 - R6 停用账号：设置任何角色（加入或提升/平级）→ 422 USER_DISABLED；已在项目中的停用账号可以被降级或移除。
+- PUT 只改已有成员的角色；目标不是成员 → 404 MEMBER_NOT_FOUND（不再 upsert，20 I-3）。加入只走 members:batch。
 - R7 reviewer：界面不再分配，PUT 不接受 role=reviewer（422）；已有数据照常返回，reviews.decide 不变（U-4 后半）。
 - 编写人员和只读成员不能自己退出项目（U-6）：成员写接口只放行系统管理员和本项目负责人。
 - 每次变更写 project_member_events 审计。
@@ -336,34 +337,30 @@ def set_member(project_id: str, user_id: str, request: Request, body: MemberPutB
         existing = connection.execute(
             "select role from project_members where project_id = %s and user_id = %s", (target, member_id)
         ).fetchone()
-        old_role = None if existing is None else str(existing["role"])
+        if existing is None:
+            # 测试 20 I-3（2026-10-11 决定）：PUT 只改已有成员的角色，不再“没有就加入”——
+            # 否则刚被别人移出的人，会被一次带新版本号的盲目重试悄悄加回来。加入只走 members:batch。
+            raise AppError(404, "MEMBER_NOT_FOUND", f"{user['name']} 已不在项目中，请刷新成员名单。添加成员请使用“添加成员”。",
+                           details={"userId": str(member_id)})
+        old_role = str(existing["role"])
         if old_role == role:
             # 没有变化：不加版本、不写审计
             return {"data": _result(connection, target, actor, owner_changed=None, cleared=member_assignments.empty(),
                                     extra={"item": _item(connection, target, member_id, actor)}),
                     "requestId": request_id}
-        if user["status"] != "active" and (old_role is None or ROLE_RANK[role] >= ROLE_RANK[old_role]):
-            message = (f"{user['name']} 的账号已停用，不能加入项目。" if old_role is None
-                       else f"{user['name']} 的账号已停用，不能调整权限；可以移除。")
-            raise AppError(422, "USER_DISABLED", message, [{"field": "userId", "message": "该账号已停用，不能加入项目。"}])
+        if user["status"] != "active" and ROLE_RANK[role] >= ROLE_RANK[old_role]:
+            raise AppError(422, "USER_DISABLED", f"{user['name']} 的账号已停用，不能调整权限；可以移除。",
+                           [{"field": "userId", "message": "该账号已停用，不能调整权限。"}])
         if (old_role == "owner" and user["status"] == "active" and role != "owner"
                 and _active_owner_count(connection, target, exclude=member_id) == 0):
             raise AppError(409, "LAST_OWNER", LAST_OWNER_MESSAGE, details={"activeOwnerCount": 1})
-        if existing is None:
-            connection.execute(
-                """insert into project_members (project_id, user_id, role, created_at, updated_at, updated_by)
-                   values (%s, %s, %s, now(), now(), %s)""",
-                (target, member_id, role, actor.user_id),
-            )
-        else:
-            connection.execute(
-                """update project_members set role = %s, revision = revision + 1, updated_at = now(), updated_by = %s
-                   where project_id = %s and user_id = %s""",
-                (role, actor.user_id, target, member_id),
-            )
+        connection.execute(
+            """update project_members set role = %s, revision = revision + 1, updated_at = now(), updated_by = %s
+               where project_id = %s and user_id = %s""",
+            (role, actor.user_id, target, member_id),
+        )
         revision = _bump(connection, target)
-        _record(connection, target, actor.user_id, member_id, "add" if existing is None else "change_role",
-                old_role, role, revision, request_id)
+        _record(connection, target, actor.user_id, member_id, "change_role", old_role, role, revision, request_id)
         cleared = (member_assignments.clear_assignments(connection, target, member_id, actor.user_id)
                    if member_assignments.loses_editing(old_role, role) else member_assignments.empty())
         owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id)

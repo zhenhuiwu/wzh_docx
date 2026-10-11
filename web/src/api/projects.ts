@@ -163,7 +163,7 @@ export async function listMembers(projectId: string, signal?: AbortSignal) {
   return body.data;
 }
 
-/** A05：成员接口用独立的 membersRevision（17 B-2），不再读写项目 revision。 */
+/** A05：成员接口用独立的 membersRevision（17 B-2），不再读写项目 revision。只改已有成员的角色：对方已不在项目中时 404 MEMBER_NOT_FOUND（加入请用 addMembers）。 */
 export async function setMember(projectId: string, userId: string, role: AssignableRole, expectedMembersRevision: number) {
   const body = await apiRequest<{ data: MemberChangeResult }>(
     `/projects/${projectId}/members/${userId}`,

@@ -57,9 +57,9 @@ def test_project_creator_viewer_cannot_patch(client: TestClient) -> None:
     )
     assert created.status_code == 201, created.text
     project = created.json()["data"]
-    added = client.put(
-        f"/api/v1/projects/{project['id']}/members/{viewer}",
-        json={"userId": viewer, "role": "viewer", "expectedMembersRevision": project["membersRevision"]},
+    added = client.post(
+        f"/api/v1/projects/{project['id']}/members:batch",
+        json={"userIds": [viewer], "role": "viewer", "expectedMembersRevision": project["membersRevision"]},
         headers={"X-CSRF-Token": csrf},
     )
     assert added.status_code == 200, added.text

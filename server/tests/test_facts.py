@@ -171,9 +171,9 @@ def test_hidden_knowledge_base_is_not_copied(client: TestClient) -> None:
     assert unbound.status_code == 404
     assert "保密库" not in unbound.text
     assert "密件" not in unbound.text
-    member = client.put(
-        f"/api/v1/projects/{project_id}/members/{other_id}",
-        json={"userId": other_id, "role": "owner", "expectedMembersRevision": project.json()["data"]["membersRevision"]},
+    member = client.post(
+        f"/api/v1/projects/{project_id}/members:batch",
+        json={"userIds": [other_id], "role": "owner", "expectedMembersRevision": project.json()["data"]["membersRevision"]},
         headers={"X-CSRF-Token": csrf},
     )
     assert member.status_code == 200, member.text
@@ -221,8 +221,8 @@ def test_non_member_writes_get_404_member_without_permission_gets_403(client: Te
     fact = created.json()["data"]
     member = str(create_user(account="facts-404-member", name="成员", password=PASSWORD, roles=[], allow_no_roles=True))
     members_revision = client.get(f"/api/v1/projects/{project_id}/members").json()["data"]["membersRevision"]
-    added = client.put(f"/api/v1/projects/{project_id}/members/{member}",
-                       json={"userId": member, "role": "editor", "expectedMembersRevision": members_revision}, headers={"X-CSRF-Token": csrf})
+    added = client.post(f"/api/v1/projects/{project_id}/members:batch",
+                        json={"userIds": [member], "role": "editor", "expectedMembersRevision": members_revision}, headers={"X-CSRF-Token": csrf})
     assert added.status_code == 200, added.text
     project_revision = client.get(f"/api/v1/projects/{project_id}").json()["data"]["revision"]
     create_user(account="facts-404-outsider", name="外人", password=PASSWORD, roles=[], allow_no_roles=True)

@@ -86,7 +86,12 @@ class Api:
         return self.call("GET", f"/projects/{project}/members")["membersRevision"]
 
     def set_role(self, project: str, user, role: str):
-        return self.call("PUT", f"/projects/{project}/members/{user}", json={"role": role, "expectedMembersRevision": self.members_revision(project)})
+        """已是成员 → PUT 改角色；不是成员 → members:batch 加入（PUT 只改已有成员，A05 20 I-3）。"""
+        snapshot = self.call("GET", f"/projects/{project}/members")
+        if any(item["userId"] == str(user) for item in snapshot["items"]):
+            return self.call("PUT", f"/projects/{project}/members/{user}", json={"role": role, "expectedMembersRevision": snapshot["membersRevision"]})
+        return self.call("POST", f"/projects/{project}/members:batch",
+                         json={"userIds": [str(user)], "role": role, "expectedMembersRevision": snapshot["membersRevision"]})
 
     def project(self, name: str, owner) -> dict:
         return self.call("POST", "/projects", json={"name": name, "ownerId": str(owner), "status": "active"},

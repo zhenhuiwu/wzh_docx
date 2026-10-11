@@ -98,8 +98,8 @@ def seed() -> dict:
                          headers={"Idempotency-Key": f"e2e-project-{RUN}"})
     for key, role in (("li", "editor"), ("wang", "viewer")):
         revision = admin.call("GET", f"/projects/{project['id']}")["membersRevision"]  # A05 R5：成员名单独立版本号
-        admin.call("PUT", f"/projects/{project['id']}/members/{users[key]}",
-                   json={"userId": str(users[key]), "role": role, "expectedMembersRevision": revision})
+        admin.call("POST", f"/projects/{project['id']}/members:batch",  # PUT 只改已有成员（A05 20 I-3），加入走批量接口
+                   json={"userIds": [str(users[key])], "role": role, "expectedMembersRevision": revision})
     zhang = Api(f"e2e-zhang-{RUN}")
     source = next((ROOT / "438C-2021全套模板").glob("*[[]SRS[]]*.docx"))
     upload = zhang.client.post("/files", files={"file": (source.name, source.read_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},

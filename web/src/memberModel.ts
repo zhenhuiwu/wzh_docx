@@ -147,7 +147,7 @@ export function membersConflictText(details: Record<string, any> | undefined, no
   return actor && at ? `成员名单刚被 ${actor} 于 ${at} 调整过，已显示最新名单，请确认后再修改。` : "成员名单刚被调整过，已显示最新名单，请确认后再修改。";
 }
 
-export type MemberErrorKind = "conflict" | "archived" | "last-owner" | "disabled" | "forbidden" | "gone" | "network" | "other";
+export type MemberErrorKind = "conflict" | "archived" | "last-owner" | "disabled" | "forbidden" | "member-gone" | "gone" | "network" | "other";
 
 /** 成员写操作的错误归类，决定界面怎么反应（16 §2.5 流程图）。 */
 export function classifyMemberError(error: ErrorLike): MemberErrorKind {
@@ -158,6 +158,8 @@ export function classifyMemberError(error: ErrorLike): MemberErrorKind {
   if (status === 409 && error.code === "LAST_OWNER") return "last-owner";
   if (status === 422 && error.code === "USER_DISABLED") return "disabled";
   if (status === 403) return "forbidden";
+  // PUT 只改已有成员（20 I-3）：对方已被别人移出时是 404 MEMBER_NOT_FOUND，只刷新名单，不当成整个项目 404
+  if (status === 404 && error.code === "MEMBER_NOT_FOUND") return "member-gone";
   if (status === 404) return "gone";
   return "other";
 }
@@ -175,9 +177,15 @@ export function memberErrorText(error: ErrorLike, name: string, adding = false):
       const owner = error.details?.ownerName;
       return owner ? `你在该项目中没有此操作权限，如需开通请联系负责人 ${owner}。` : "你在该项目中没有此操作权限，如需开通请联系项目负责人。";
     }
+    case "member-gone": return memberGoneText(name);
     case "gone": return "项目不存在或你无权访问。";
     default: return error.message || "操作没有完成，请稍后再试。";
   }
+}
+
+/** 改权限时对方已不在项目中（被别人移出）：刷新名单后的 warning。 */
+export function memberGoneText(name: string): string {
+  return `${name || "该成员"} 已不在项目中，已显示最新名单。如需加入请使用“添加成员”。`;
 }
 
 /** 添加弹窗里候选人的旁注。 */

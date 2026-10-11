@@ -121,6 +121,12 @@ async function handleWriteError(error: unknown, member: { userId: string; name: 
     emit("permissions-changed");
     return text;
   }
+  if (kind === "member-gone") {
+    clearRow(member.userId);
+    await load(true);
+    warning.value = text;
+    return text;
+  }
   if (kind === "gone") { emit("gone"); return text; }
   if (kind === "disabled" || kind === "forbidden") void load(true);
   if (kind === "forbidden") emit("permissions-changed");
