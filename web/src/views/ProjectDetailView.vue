@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError, isMissingResource } from "../api/client";
 import { getProject, updateProject, type ProjectOwnerSummary, type ProjectRecord } from "../api/projects";
 import ProjectMembersSection from "../components/ProjectMembersSection.vue";
-import { activeOwners, ownersText } from "../memberModel";
+import { NO_ACTIVE_OWNER_TAG, activeOwners, ownersText } from "../memberModel";
 import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
@@ -27,6 +27,8 @@ const saving = ref(false);
 const formError = ref("");
 const form = ref({ name: "", description: "", organization: "", department: "", group: "", clientContact: "", status: "not_started" as ProjectRecord["status"], periodStart: "", periodEnd: "" });
 const savedForm = ref("");
+const frame = ref<InstanceType<typeof ProjectFrame> | null>(null);
+const membersSection = ref<InstanceType<typeof ProjectMembersSection> | null>(null);
 const dirty = computed(() => editing.value && JSON.stringify(form.value) !== savedForm.value);
 let projectRequest = 0;
 let documentRequest = 0;
@@ -123,13 +125,24 @@ async function saveInfo() {
 }
 
 /** A05：成员操作的响应带 owners[]，直接刷新页头和信息格，不再请求 getProject（16 §2.8 第 7 条）。 */
-function onOwners(value: { owners: ProjectOwnerSummary[]; ownerId: string; membersRevision: number }) {
+function onOwners(value: { owners: ProjectOwnerSummary[]; ownerId: string | null; membersRevision: number }) {
   if (!project.value) return;
   project.value.owners = value.owners;
   project.value.ownerId = value.ownerId;
   project.value.membersRevision = value.membersRevision;
-  const primary = value.owners.find(owner => owner.isPrimary);
-  if (primary) project.value.ownerName = primary.name;
+  // 主负责人按读取时的启用负责人算（19 S-1）；没有启用负责人时不再显示停用账号的姓名
+  project.value.ownerName = value.owners.find(owner => owner.isPrimary)?.name ?? "";
+}
+
+/** 页头归档 / 恢复成功（21 M-1）：换成最新项目，成员区和最近文档跟着刷新。 */
+function onArchiveChanged(fresh: ProjectRecord) {
+  if (!project.value || fresh.id !== project.value.id) return;
+  editing.value = false;
+  formError.value = "";
+  project.value = fresh;
+  fillForm(fresh);
+  void membersSection.value?.reload();
+  void loadDocuments();
 }
 
 /** 涉及自己的权限变化（自身降级、归档、403）：安静地重新读取项目 permissions。 */
@@ -140,6 +153,7 @@ async function refreshPermissions() {
     if (target !== projectId.value || !project.value) return;
     project.value.permissions = result.permissions;
     project.value.archivedAt = result.archivedAt;
+    project.value.status = result.status;
     project.value.revision = result.revision;
     if (!editing.value) fillForm(result);
   } catch (error) {
@@ -155,6 +169,14 @@ function onGone() {
   errorText.value = "";
 }
 
+const archived = computed(() => Boolean(project.value?.archivedAt));
+const noActiveOwner = computed(() => Boolean(project.value?.owners) && !activeOwners(project.value?.owners).length);
+// 归档或没有新建权限时，最近文档空态不给“去新建文档”（21 S-2）
+const canCreateDocument = computed(() => {
+  const permissions = project.value?.permissions;
+  if (archived.value || !permissions) return false;
+  return permissions.projectRole === "owner" || permissions.projectRole === "editor" || (!permissions.projectRole && permissions.canManageMembers);
+});
 const ownerLine = computed(() => project.value ? ownersText(project.value.owners, project.value.ownerName || "—") : "—");
 const ownerInitial = computed(() => initialOf(project.value ? activeOwners(project.value.owners)[0]?.name ?? project.value.ownerName : ""));
 
@@ -215,7 +237,7 @@ onBeforeUnmount(() => {
       <StatePanel v-else kind="error" title="项目加载失败" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
     </div>
   </section>
-  <ProjectFrame v-else :project="project">
+  <ProjectFrame v-else ref="frame" :project="project" @archive-changed="onArchiveChanged">
     <div class="overview-body">
       <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
@@ -241,8 +263,8 @@ onBeforeUnmount(() => {
           <p v-if="project.description" class="description">{{ project.description }}</p>
           <p v-else class="description faint">还没有项目说明。</p>
           <dl class="detail-grid">
-            <div><dt>负责人</dt><dd><span class="person" data-testid="project-owners"><span class="avatar" aria-hidden="true">{{ ownerInitial }}</span>{{ ownerLine }}</span></dd></div>
-            <div><dt>状态</dt><dd>{{ statusLabel(project.status) }}</dd></div>
+            <div><dt>负责人</dt><dd><span class="person" data-testid="project-owners"><span class="avatar" aria-hidden="true">{{ ownerInitial }}</span>{{ ownerLine }}</span><span v-if="noActiveOwner" class="tag warning owner-warn" data-testid="project-no-owner">{{ NO_ACTIVE_OWNER_TAG }}</span></dd></div>
+            <div><dt>状态</dt><dd data-testid="project-status">{{ archived ? `已归档（原：${statusLabel(project.status)}）` : statusLabel(project.status) }}</dd></div>
             <div><dt>甲方单位</dt><dd>{{ displayText(project.organization) }}</dd></div>
             <div><dt>甲方联系人</dt><dd>{{ displayText(project.clientContact) }}</dd></div>
             <div><dt>所属部门</dt><dd>{{ displayText(project.department) }}</dd></div>
@@ -252,7 +274,7 @@ onBeforeUnmount(() => {
           </dl>
         </template>
       </section>
-      <ProjectMembersSection :project-id="project.id" :project-name="project.name" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" />
+      <ProjectMembersSection ref="membersSection" :project-id="project.id" :project-name="project.name" :can-restore="Boolean(project.permissions?.canArchive)" @restore="frame?.openRestore()" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" />
       <section class="overview-section documents-section" aria-labelledby="documents-title">
         <div class="section-head">
           <h2 id="documents-title" class="section-title">最近文档</h2>
@@ -261,7 +283,7 @@ onBeforeUnmount(() => {
         <div class="doc-box">
           <StatePanel v-if="documentPhase === 'loading'" kind="loading" text="正在读取文档…" class="compact" />
           <StatePanel v-else-if="documentPhase === 'error'" kind="error" title="文档加载失败" :text="documentError" class="compact"><button type="button" class="ghost" @click="loadDocuments">重试</button></StatePanel>
-          <StatePanel v-else-if="documents.length === 0" title="还没有文档" text="在“文档编写”中从模板创建或上传 Word 文档。" class="compact"><router-link class="primary" :to="{ name: 'project-documents', params: { id: projectId } }">去新建文档</router-link></StatePanel>
+          <StatePanel v-else-if="documents.length === 0" title="还没有文档" :text="archived ? '项目已归档，没有文档。' : canCreateDocument ? '在“文档编写”中从模板创建或上传 Word 文档。' : '项目里还没有文档。'" class="compact" data-testid="recent-docs-empty"><router-link v-if="canCreateDocument" class="primary" :to="{ name: 'project-documents', params: { id: projectId } }">去新建文档</router-link></StatePanel>
           <div v-else class="table-wrap document-list">
             <table>
               <thead><tr><th>文档名称</th><th>来源</th><th>编写人</th><th>状态</th><th>最近修改</th><th class="th-right">操作</th></tr></thead>
@@ -292,6 +314,7 @@ onBeforeUnmount(() => {
 .detail-grid div { min-width:0; }
 .detail-grid dt { margin-bottom:var(--space-1); color:var(--text-tertiary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .detail-grid dd { margin:0; color:var(--text-primary); font-size:var(--text-md); overflow-wrap:anywhere; }
+.owner-warn { margin-left:var(--space-2); }
 .documents-section { padding-top:var(--space-6); border-top:1px solid var(--border-subtle); }
 .doc-box { border:1px solid var(--border-default); border-radius:var(--radius-sheet); overflow:hidden; }
 .doc-box .compact { min-height:calc(var(--space-7) * 4); }

@@ -392,7 +392,7 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <ProjectFrame>
+  <ProjectFrame @archive-changed="load()">
   <section class="card">
     <div class="head"><h1>资料</h1></div>
     <p class="notice">公共信息确认后生效。自动提取暂不可用。已上传的文件会标为待解析。</p>

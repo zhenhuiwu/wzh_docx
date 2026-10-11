@@ -263,7 +263,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ProjectFrame>
+  <ProjectFrame @archive-changed="load()">
     <section class="document-page">
       <div class="document-head">
         <div>

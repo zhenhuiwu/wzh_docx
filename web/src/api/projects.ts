@@ -11,8 +11,9 @@ export interface ProjectRecord {
   department: string;
   group: string;
   clientContact: string;
-  ownerId: string;
-  ownerName: string;
+  /** 读取时的有效主负责人（19 S-1）；项目没有启用的负责人时为 null。 */
+  ownerId: string | null;
+  ownerName: string | null;
   periodStart: string | null;
   periodEnd: string | null;
   status: "not_started" | "active" | "paused" | "completed";
@@ -28,7 +29,7 @@ export interface ProjectRecord {
   /** A05：本人在项目中的角色；只在列表返回，以管理员/审计员身份可见但不是成员时为 null。 */
   myRole?: ProjectMember["role"] | null;
   /** 只在项目详情返回（测试 L2）；列表项没有。 */
-  permissions?: { projectRole: string | null; canEdit: boolean; canManageMembers: boolean; readonlyReason?: ReadonlyReason };
+  permissions?: { projectRole: string | null; canEdit: boolean; canManageMembers: boolean; readonlyReason?: ReadonlyReason; /** 能归档 / 恢复（21 M-1，与接口同一判定）。 */ canArchive?: boolean };
 }
 
 export interface ProjectMember {
@@ -130,7 +131,7 @@ export interface MembersSnapshot {
   membersRevision: number;
   activeOwnerCount: number;
   owners: ProjectOwnerSummary[];
-  ownerId: string;
+  ownerId: string | null;
   canManageMembers: boolean;
   readonlyReason: ReadonlyReason;
   projectRole: string | null;

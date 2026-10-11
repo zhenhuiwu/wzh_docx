@@ -370,7 +370,11 @@ onMounted(async () => {
               <tbody>
                 <tr v-for="item in blocked.projects" :key="item.id" data-testid="user-disable-project" :data-project-id="item.id">
                   <td><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener">{{ item.name }}</a><span v-if="item.archived" class="archived-mark" data-testid="user-disable-project-archived">{{ ARCHIVED_MARK }}</span></td>
-                  <td class="cell-right"><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener" :aria-label="`打开项目概述：${blockedProjectLabel(item)}`">打开项目概述</a></td>
+                  <td class="cell-right">
+                    <!-- 归档项目要先恢复才能调整负责人（21 M-1）：链接带 ?restore=1，打开后直接弹出恢复确认 -->
+                    <a v-if="item.archived" class="link" :href="`/projects/${item.id}?restore=1#members`" target="_blank" rel="noopener" data-testid="user-disable-project-restore" :aria-label="`打开并恢复项目：${blockedProjectLabel(item)}`">打开并恢复</a>
+                    <a v-else class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener" :aria-label="`打开项目概述：${blockedProjectLabel(item)}`">打开项目概述</a>
+                  </td>
                 </tr>
               </tbody>
             </table>

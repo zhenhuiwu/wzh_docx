@@ -8,7 +8,11 @@ import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
 import { hasPermission, readSession } from "../session";
 import { useFieldErrors } from "../fieldErrors";
-import { ROLE_TONE, activeOwners, ownersText, roleLabel } from "../memberModel";
+import { NO_ACTIVE_OWNER_TAG, ROLE_TONE, activeOwners, ownersText, roleLabel } from "../memberModel";
+
+/** 状态筛选里的“已归档”（21 M-1）：列表默认不含归档项目，选它时只列归档项目（接口 archived=true）。 */
+const ARCHIVED_FILTER = "archived";
+const STATUS_VALUES = new Set(["not_started", "active", "paused", "completed", ARCHIVED_FILTER]);
 
 // 只有能建项目的角色显示“新建项目”（审计员等只读角色不显示，09 审查 S3）。
 const canCreate = computed(() => hasPermission(readSession(), "projects.create"));
@@ -22,7 +26,13 @@ const router = useRouter();
 const page = ref(1);
 const pageSize = ref(10);
 const targetPage = ref(1);
-const draft = ref({ name: "", status: "", mine: false });
+// 筛选条件写进地址（?name= &status= &mine=1），刷新和返回时保留（21 S-9）
+function queryFromRoute() {
+  const status = typeof route.query.status === "string" && STATUS_VALUES.has(route.query.status) ? route.query.status : "";
+  const name = typeof route.query.name === "string" ? route.query.name : "";
+  return { name, status, mine: route.query.mine === "1" };
+}
+const draft = ref(queryFromRoute());
 // A05（16 §2.9）：“只看我负责的”只在当前账号至少负责一个项目时显示
 const ownsAny = ref(false);
 const applied = ref({ ...draft.value });
@@ -52,7 +62,12 @@ async function load() {
   errorText.value = "";
   noAccess.value = false;
   try {
-    const result = await listProjects({ page: page.value, pageSize: pageSize.value, name: applied.value.name, status: applied.value.status, myRole: applied.value.mine ? "owner" : undefined });
+    const archivedOnly = applied.value.status === ARCHIVED_FILTER;
+    const result = await listProjects({
+      page: page.value, pageSize: pageSize.value, name: applied.value.name,
+      status: archivedOnly ? undefined : applied.value.status, archived: archivedOnly,
+      myRole: applied.value.mine ? "owner" : undefined,
+    });
     projects.value = result.items;
     total.value = result.total;
     page.value = result.page;
@@ -69,7 +84,18 @@ function search() {
   if (phase.value === "loading") return;
   applied.value = { ...draft.value };
   page.value = 1;
+  syncRoute();
   void load();
+}
+
+function syncRoute() {
+  const query: Record<string, string> = {};
+  if (applied.value.name) query.name = applied.value.name;
+  if (applied.value.status) query.status = applied.value.status;
+  if (applied.value.mine) query.mine = "1";
+  const current = route.query;
+  if ((current.name ?? "") === (query.name ?? "") && (current.status ?? "") === (query.status ?? "") && (current.mine ?? "") === (query.mine ?? "")) return;
+  void router.replace({ query });
 }
 
 function changePage(nextPage: number) {
@@ -185,7 +211,7 @@ onMounted(async () => {
     <div class="card project-surface">
       <form class="project-query" role="search" @submit.prevent="search">
         <label class="search-box"><span class="sr">项目名称</span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zM14 14l-3.5-3.5" /></svg><input v-model="draft.name" class="control" type="search" placeholder="搜索项目名称" :disabled="phase === 'loading'" /></label>
-        <label class="inline-field">状态<select v-model="draft.status" class="control" :disabled="phase === 'loading'"><option value="">全部状态</option><option v-for="item in projectStatuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+        <label class="inline-field">状态<select v-model="draft.status" class="control" :disabled="phase === 'loading'"><option value="">全部状态</option><option v-for="item in projectStatuses" :key="item.value" :value="item.value">{{ item.label }}</option><option :value="ARCHIVED_FILTER">已归档</option></select></label>
         <label v-if="ownsAny || draft.mine" class="inline-field mine-only"><input v-model="draft.mine" type="checkbox" data-testid="projects-mine" :disabled="phase === 'loading'" @change="search" />只看我负责的</label>
         <div class="query-actions"><button type="submit" class="primary" :disabled="phase === 'loading'">查询</button><button type="button" class="ghost" :disabled="phase === 'loading'" @click="resetQuery">重置</button></div>
       </form>
@@ -200,10 +226,10 @@ onMounted(async () => {
           <tbody>
             <tr v-for="project in projects" :key="project.id">
               <td><div class="cell-main"><router-link class="project-name" :to="{ name: 'project', params: { id: project.id } }">{{ project.name }}</router-link><span v-if="project.description" class="cell-sub clamp" :title="project.description">{{ project.description }}</span></div></td>
-              <td><span class="person"><span class="avatar" aria-hidden="true">{{ initialOf(activeOwners(project.owners)[0]?.name ?? project.ownerName) }}</span>{{ ownersText(project.owners, project.ownerName) }}</span></td>
+              <td><span class="person"><span class="avatar" aria-hidden="true">{{ initialOf(activeOwners(project.owners)[0]?.name ?? project.ownerName) }}</span>{{ ownersText(project.owners, project.ownerName || "—") }}</span><span v-if="project.owners && !activeOwners(project.owners).length" class="tag warning owner-warn" data-testid="project-no-owner" :data-project-id="project.id">{{ NO_ACTIVE_OWNER_TAG }}</span></td>
               <td><span v-if="project.myRole" class="tag" :class="ROLE_TONE[project.myRole]" data-testid="project-my-role" :data-project-id="project.id">{{ roleLabel(project.myRole) }}</span><span v-else class="muted" data-testid="project-my-role" :data-project-id="project.id">—</span></td>
               <td class="muted">{{ project.department || "—" }}</td>
-              <td><span class="tag" :class="statusTone[project.status]">{{ statusLabel(project.status) }}</span></td>
+              <td><span v-if="project.archivedAt" class="tag" data-testid="project-archived" :title="`归档前状态：${statusLabel(project.status)}`">已归档</span><span v-else class="tag" :class="statusTone[project.status]">{{ statusLabel(project.status) }}</span></td>
               <td class="time num">{{ formatDateTime(project.updatedAt) }}</td>
               <td class="cell-right"><router-link class="link" :to="{ name: 'project', params: { id: project.id } }" :aria-label="`打开项目：${project.name}`">打开</router-link></td>
             </tr>
@@ -256,6 +282,7 @@ onMounted(async () => {
 .col-owner { width:calc(var(--space-7) * 4); }
 .col-role { width:calc(var(--space-7) * 3); }
 .mine-only input { margin:0; }
+.owner-warn { margin-left:var(--space-2); }
 .col-dept { width:calc(var(--space-7) * 3); }
 .col-status { width:calc(var(--space-7) * 2.5); }
 .col-time { width:calc(var(--space-7) * 3); }

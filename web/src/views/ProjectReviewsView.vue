@@ -157,7 +157,7 @@ watch(
 </script>
 
 <template>
-  <ProjectFrame>
+  <ProjectFrame @archive-changed="load()">
   <section class="card">
     <div class="head">
       <h1>审核</h1>
