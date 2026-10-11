@@ -77,6 +77,8 @@ _COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 _IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+# Word 单倍行距约等于字号的 1.3 倍（宋体、等线等中文字体的字形高度加行距）；多倍行距按它换算成 CSS 行高
+WORD_SINGLE_LINE = 1.3
 
 
 def _sanitize(root) -> None:
@@ -288,8 +290,10 @@ def _paragraph_css(paragraph: Paragraph, table=None) -> dict[str, str]:
         css["text-indent"] = f"{-value:g}em"
     spacing = properties.get("spacing", {})
     if "line" in spacing:
+        # Word 的“多倍行距”是相对字体自身的单倍行高（中文字体约 1.3 倍字号），不是相对字号；
+        # 直接写成 CSS 的 1.15 会让标题字形压到下一段（21 记录的“概述”重叠）。按 1.3 倍换算。
         css["line-height"] = (_measure(spacing["line"]) if spacing.get("lineRule") in {"exact", "atLeast"}
-                              else f"{_number(spacing['line'], 240) or 1:g}")
+                              else f"{round((_number(spacing['line'], 240) or 1) * WORD_SINGLE_LINE, 3):g}")
         if spacing.get("lineRule") == "atLeast" and css["line-height"]:
             css["line-height"] = f"max({css['line-height']}, 1em)"
     for name, target in (("before", "margin-top"), ("after", "margin-bottom")):

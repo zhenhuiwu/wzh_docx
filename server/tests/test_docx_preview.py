@@ -139,7 +139,7 @@ def test_preview_resolves_paragraph_and_character_style_inheritance(tmp_path):
     assert "页眉" not in root.text_content() and "页脚" not in root.text_content()
     assert _css(root[0]).items() >= {
         "text-align": "center", "margin-left": "14pt", "text-indent": "7pt",
-        "margin-top": "0pt", "margin-bottom": "6pt", "line-height": "1.5",
+        "margin-top": "0pt", "margin-bottom": "6pt", "line-height": "1.95",  # 1.5 倍行距 × 单倍 1.3
     }.items()
     css = _css(_span(root, "继承字体"))
     assert (css["font-family"], css["font-size"], css["color"], css["font-style"]) == ('"Arial"', "13pt", "#123456", "italic")
