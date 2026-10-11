@@ -5,6 +5,7 @@ import { ApiError, isMissingResource } from "../api/client";
 import { getProject, type ProjectRecord } from "../api/projects";
 import { rememberProject } from "../crumbs";
 import { statusLabel } from "../projects";
+import { ownersText } from "../memberModel";
 import StatePanel from "./StatePanel.vue";
 
 const statusTone: Record<ProjectRecord["status"], string> = { not_started: "", active: "success", paused: "warning", completed: "info" };
@@ -62,7 +63,7 @@ onBeforeUnmount(() => ++loadRequest);
         <h1>{{ project?.name || "项目" }}</h1>
         <p v-if="project" class="page-desc frame-meta">
           <span class="tag" :class="statusTone[project.status]">{{ statusLabel(project.status) }}</span>
-          <span>负责人：{{ project.ownerName || "—" }}</span>
+          <span data-testid="frame-owners">负责人：{{ ownersText(project.owners, project.ownerName || "—") }}</span>
           <span v-if="project.department">所属部门：{{ project.department }}</span>
         </p>
       </div>

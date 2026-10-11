@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError, isMissingResource } from "../api/client";
-import { getProject, updateProject, type ProjectRecord } from "../api/projects";
+import { getProject, updateProject, type ProjectOwnerSummary, type ProjectRecord } from "../api/projects";
+import ProjectMembersSection from "../components/ProjectMembersSection.vue";
+import { activeOwners, ownersText } from "../memberModel";
 import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
@@ -120,6 +122,42 @@ async function saveInfo() {
   }
 }
 
+/** A05：成员操作的响应带 owners[]，直接刷新页头和信息格，不再请求 getProject（16 §2.8 第 7 条）。 */
+function onOwners(value: { owners: ProjectOwnerSummary[]; ownerId: string; membersRevision: number }) {
+  if (!project.value) return;
+  project.value.owners = value.owners;
+  project.value.ownerId = value.ownerId;
+  project.value.membersRevision = value.membersRevision;
+  const primary = value.owners.find(owner => owner.isPrimary);
+  if (primary) project.value.ownerName = primary.name;
+}
+
+/** 涉及自己的权限变化（自身降级、归档、403）：安静地重新读取项目 permissions。 */
+async function refreshPermissions() {
+  const target = projectId.value;
+  try {
+    const result = await getProject(target);
+    if (target !== projectId.value || !project.value) return;
+    project.value.permissions = result.permissions;
+    project.value.archivedAt = result.archivedAt;
+    project.value.revision = result.revision;
+    if (!editing.value) fillForm(result);
+  } catch (error) {
+    if (target === projectId.value && isMissingResource(error)) onGone();
+  }
+}
+
+function onGone() {
+  editing.value = false;
+  project.value = null;
+  phase.value = "error";
+  notFound.value = true;
+  errorText.value = "";
+}
+
+const ownerLine = computed(() => project.value ? ownersText(project.value.owners, project.value.ownerName || "—") : "—");
+const ownerInitial = computed(() => initialOf(project.value ? activeOwners(project.value.owners)[0]?.name ?? project.value.ownerName : ""));
+
 function canLeave() {
   if (saving.value) {
     formError.value = "正在保存项目，请稍候。";
@@ -203,7 +241,7 @@ onBeforeUnmount(() => {
           <p v-if="project.description" class="description">{{ project.description }}</p>
           <p v-else class="description faint">还没有项目说明。</p>
           <dl class="detail-grid">
-            <div><dt>负责人</dt><dd><span class="person"><span class="avatar" aria-hidden="true">{{ initialOf(project.ownerName) }}</span>{{ project.ownerName }}</span></dd></div>
+            <div><dt>负责人</dt><dd><span class="person" data-testid="project-owners"><span class="avatar" aria-hidden="true">{{ ownerInitial }}</span>{{ ownerLine }}</span></dd></div>
             <div><dt>状态</dt><dd>{{ statusLabel(project.status) }}</dd></div>
             <div><dt>甲方单位</dt><dd>{{ displayText(project.organization) }}</dd></div>
             <div><dt>甲方联系人</dt><dd>{{ displayText(project.clientContact) }}</dd></div>
@@ -214,6 +252,7 @@ onBeforeUnmount(() => {
           </dl>
         </template>
       </section>
+      <ProjectMembersSection :project-id="project.id" :project-name="project.name" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" />
       <section class="overview-section documents-section" aria-labelledby="documents-title">
         <div class="section-head">
           <h2 id="documents-title" class="section-title">最近文档</h2>
