@@ -10,7 +10,7 @@ from uuid import uuid4
 from app.db import connect
 from app.files import store_bytes
 from app.identity import create_user
-from tests.test_project_members_a05 import PASSWORD, _archive, _code, _login, ctx  # noqa: F401
+from tests.test_project_members_a05 import PASSWORD, _archive, _code, _login, _user_revision, ctx  # noqa: F401
 
 
 def _unarchive(ctx):
@@ -105,3 +105,103 @@ def test_put_does_not_re_add_a_removed_member(ctx):
     assert changed.status_code == 200 and changed.json()["data"]["item"]["role"] == "editor"
     ctx.as_("carol")
     assert _code(ctx.put("bob", "viewer")) == (403, "FORBIDDEN")
+
+
+# ---------- 审查 S-1~S-4：读时计算有效主负责人；停用不改库，也不由无关成员操作“懒改指” ----------
+
+def _stored_owner(ctx):
+    with connect() as connection:
+        return str(connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0])
+
+
+def _reassign_events(ctx):
+    with connect() as connection:
+        return connection.execute(
+            "select actor_id, target_user_id from project_member_events where project_id = %s and action = 'owner_reassigned' order by rowid",
+            (ctx.project,)).fetchall()
+
+
+def _owner_views(ctx):
+    """各个读接口给出的（主负责人 id, 姓名, owners 姓名）。"""
+    detail = ctx.get(f"/projects/{ctx.project}").json()["data"]
+    listed = next(item for item in ctx.get("/projects?pageSize=50").json()["data"]["items"] if item["id"] == ctx.project)
+    members = ctx.members()
+    bench = next((item for item in ctx.get("/workbench").json()["data"]["recentProjects"] if item["id"] == ctx.project), None)
+    return {
+        "detail": (detail["ownerId"], detail["ownerName"], [o["name"] for o in detail["owners"]]),
+        "list": (listed["ownerId"], listed["ownerName"], [o["name"] for o in listed["owners"]]),
+        "members": (members["ownerId"], None, [o["name"] for o in members["owners"]]),
+        "workbench": None if bench is None else (bench["ownerId"], bench["ownerName"], None),
+        "primary_flags": [o["isPrimary"] for o in detail["owners"]],
+        "statuses": {o["status"] for o in detail["owners"] + listed["owners"] + members["owners"]},
+    }
+
+
+def test_effective_owner_is_computed_at_read_time(ctx):
+    from app.document_agent import _project_overview
+
+    assert ctx.batch(["bob"], "owner").status_code == 200
+    assert ctx.batch(["carol"], "editor").status_code == 200
+    alice, bob = str(ctx.users["alice"]), str(ctx.users["bob"])
+    assert ctx.disable("alice").status_code == 200  # admin；李工仍是启用负责人
+    views = _owner_views(ctx)
+    assert views["detail"] == (bob, "李工", ["李工"]) and views["list"] == (bob, "李工", ["李工"])
+    assert views["members"] == (bob, None, ["李工"]) and views["workbench"] == (bob, "李工", None)
+    assert views["primary_flags"] == [True] and views["statuses"] == {"active"}  # owners[] 只含启用账号
+    assert ctx.get(f"/projects?ownerId={bob}").json()["data"]["total"] == 1
+    assert ctx.get(f"/projects?ownerId={alice}").json()["data"]["total"] == 0
+    overview = _project_overview(ctx.project)
+    assert "负责人：李工" in overview and "张工" not in overview
+    # 读不改库
+    assert _stored_owner(ctx) == alice and _reassign_events(ctx) == []
+
+    # 无关的成员操作（改丁/王的角色、加人）不触发改指、不提示、不记在操作者名下
+    changed = ctx.put("carol", "viewer")
+    assert changed.status_code == 200 and changed.json()["data"]["ownerChanged"] is None
+    added = ctx.batch(["dave"], "viewer")
+    assert added.status_code == 200 and added.json()["data"]["ownerChanged"] is None
+    assert _stored_owner(ctx) == alice and _reassign_events(ctx) == []
+
+    # 重新启用：自动恢复为主负责人
+    assert ctx.req("POST", f"/users/{alice}/enable", {"expectedRevision": _user_revision(alice), "reason": "恢复"}).status_code == 200
+    views = _owner_views(ctx)
+    assert views["detail"] == (alice, "张工", ["张工", "李工"]) and views["primary_flags"] == [True, False]
+    assert ctx.get(f"/projects?ownerId={alice}").json()["data"]["total"] == 1
+
+
+def test_demoting_the_disabled_primary_aligns_storage_without_a_notice(ctx):
+    """操作对象就是（已停用的）主负责人：存储值对齐到有效主负责人，审计记在操作者名下；界面上主负责人本来就显示李工，不再提示。"""
+    assert ctx.batch(["bob"], "owner").status_code == 200
+    assert ctx.disable("alice").status_code == 200
+    demoted = ctx.put("alice", "viewer")  # 停用账号可以被降级
+    assert demoted.status_code == 200, demoted.text
+    assert demoted.json()["data"]["ownerChanged"] is None and demoted.json()["data"]["ownerId"] == str(ctx.users["bob"])
+    assert _stored_owner(ctx) == str(ctx.users["bob"])
+    assert [(str(row["actor_id"]), str(row["target_user_id"])) for row in _reassign_events(ctx)] == [(str(ctx.users["admin"]), str(ctx.users["bob"]))]
+    # 降级启用中的主负责人：照常提示
+    ctx.as_("bob")
+    assert ctx.batch(["carol"], "owner").status_code == 200
+    moved = ctx.put("bob", "editor")
+    assert moved.json()["data"]["ownerChanged"]["to"]["name"] == "王工"
+
+
+def test_project_without_active_owner_reports_none(ctx):
+    """历史数据：唯一负责人已停用（A05 之前可能出现）。ownerId/ownerName 为 null、owners 为空，界面据此显示警告。"""
+    with connect() as connection:
+        connection.execute("update users set status = 'disabled' where id = %s", (ctx.users["alice"],))
+        connection.commit()
+    from app.document_agent import _project_overview
+
+    ctx.as_("admin")
+    views = _owner_views(ctx)
+    assert views["detail"] == (None, None, []) and views["list"] == (None, None, []) and views["members"] == (None, None, [])
+    assert views["workbench"] == (None, None, None)
+    assert ctx.members()["activeOwnerCount"] == 0
+    assert "负责人" not in _project_overview(ctx.project)
+    # 改项目资料不会把主负责人“顺手”改掉，也不会因为 ownerId 为空出错
+    patched = ctx.req("PATCH", f"/projects/{ctx.project}", {"expectedRevision": ctx.project_rev(), "description": "改简介"})
+    assert patched.status_code == 200, patched.text
+    assert _stored_owner(ctx) == str(ctx.users["alice"])
+    # 补一位负责人后恢复显示
+    assert ctx.batch(["bob"], "owner").status_code == 200
+    assert _owner_views(ctx)["detail"] == (str(ctx.users["bob"]), "李工", ["李工"])

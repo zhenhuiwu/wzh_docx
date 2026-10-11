@@ -497,7 +497,9 @@ def list_tasks(request: Request, page: int = Query(1, ge=1), pageSize: int = Que
     actor = require_permission(request, "tests.read")
     where, params = ["1=1"], []
     if "system_admin" not in actor.roles:
-        where.append("p.owner_id=%s")
+        from app.document_access import effective_owner_sql
+
+        where.append(f"{effective_owner_sql('p')}=%s")  # 审查 S-2：按有效主负责人（停用的主负责人不再算）
         params.append(actor.user_id)
     if projectId:
         where.append("t.project_id=%s")

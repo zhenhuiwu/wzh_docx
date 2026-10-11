@@ -24,6 +24,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langchain_openai import ChatOpenAI
 
 from app.db import connect
+from app.document_access import active_owner_names
 from app.config import ai_reasoning_kwargs
 from app.docx_parser import parse_docx
 from app.document_rules import SKILL_ROOT, DraftFormatError, section_rules
@@ -35,12 +36,15 @@ def _project_overview(project_id: UUID) -> str:
     with connect() as connection:
         row = connection.execute(
             """SELECT p.name, p.description, p.organization, p.department,
-                      p.group_name, p.client_contact, p.status, u.name AS owner_name
-               FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.id = %s""",
+                      p.group_name, p.client_contact, p.status
+               FROM projects p WHERE p.id = %s""",
             (project_id,),
         ).fetchone()
+        # 审查 S-3：“负责人”只列启用中的负责人（有效主负责人在前），不再 join projects.owner_id（可能是停用账号）
+        owners = active_owner_names(connection, project_id) if row is not None else []
     if row is None:
         return "项目概述不可用。"
+    row = {**dict(row), "owner_name": "、".join(owners)}
     fields = (("项目名称", "name"), ("负责人", "owner_name"), ("甲方单位", "organization"),
               ("甲方联系人", "client_contact"), ("所属部门", "department"),
               ("所属组", "group_name"), ("状态", "status"), ("项目说明", "description"))

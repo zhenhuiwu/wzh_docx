@@ -117,8 +117,31 @@ def _owner_name(connection, project_id: UUID) -> str | None:
     return owner_names_text(active_owner_names(connection, project_id))
 
 
+def effective_owner_sql(project: str = "p") -> str:
+    """读时计算的“有效主负责人”（19 审查 S-1~S-4，2026-10-11）：projects.owner_id 仍是启用中的负责人时用它，
+    否则取启用负责人中加入最早的一位（与 R4 改指的顺序一致）；没有启用负责人时为 NULL。
+    只读不写：停用主负责人不改库，账号重新启用后自动恢复为主负责人。页头、概述、列表、?ownerId= 筛选、工作台、
+    AI 提示词、owners[] 都用它，避免把停用账号当成负责人。"""
+    return f"""(case when exists (
+                   select 1 from project_members eo_m join users eo_u on eo_u.id = eo_m.user_id
+                   where eo_m.project_id = {project}.id and eo_m.user_id = {project}.owner_id
+                     and eo_m.role = 'owner' and eo_u.status = 'active')
+                 then {project}.owner_id
+                 else (select eo_m2.user_id from project_members eo_m2 join users eo_u2 on eo_u2.id = eo_m2.user_id
+                       where eo_m2.project_id = {project}.id and eo_m2.role = 'owner' and eo_u2.status = 'active'
+                       order by case when eo_m2.created_at is null then 1 else 0 end, eo_m2.created_at, eo_u2.name, eo_u2.account
+                       limit 1)
+            end)"""
+
+
+def effective_owner_id(connection, project_id: UUID) -> UUID | None:
+    row = connection.execute(f"select {effective_owner_sql('p')} as owner_id from projects p where p.id = %s", (project_id,)).fetchone()
+    return None if row is None or row["owner_id"] is None else row["owner_id"]
+
+
 def active_owner_names(connection, project_id: UUID) -> list[str]:
-    """启用中的负责人姓名：主负责人（projects.owner_id）在前，其余按加入时间（无时间的排后）、姓名、账号。"""
+    """启用中的负责人姓名：有效主负责人在前（owner_id 是启用负责人时就是它；否则按加入时间最早的启用负责人，
+    与 effective_owner_sql 一致），其余按加入时间（无时间的排后）、姓名、账号。"""
     rows = connection.execute(
         """select u.name from project_members m
            join users u on u.id = m.user_id

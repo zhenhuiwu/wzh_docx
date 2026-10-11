@@ -619,7 +619,8 @@ def test_disable_sole_owner_and_add_second_owner_race_is_consistent(ctx):
 
 
 def test_random_member_operations_keep_invariants(ctx):
-    """17 §2.7 fuzz：添加、改角色、移除、停用、启用随机 1000 步；每步后启用负责人 ≥1（或本来就没有且这一步没让它减少）。"""
+    """17 §2.7 fuzz：添加、改角色、移除、停用、启用随机 1000 步；每步后启用负责人 ≥1（或本来就没有且这一步没让它减少），
+    且读接口的有效主负责人是启用中的负责人（S-8：按 Q-3 + 读时计算的口径）。"""
     rng = random.Random(116)
     ctx.as_("admin")
     names = ["alice", "bob", "carol", "dave"]
@@ -650,13 +651,18 @@ def test_random_member_operations_keep_invariants(ctx):
             successes += 1
         owners_after = _active_owner_count(ctx.project)
         assert owners_after >= 1 or owners_after >= owners_before
-        if changed:
+        # 有效主负责人（19 审查 S-2/S-4，读时计算，每一步之后都查，不只在成员变更之后）：
+        # 有启用负责人时，详情 ownerId 就是 owners[0]、是启用中的负责人；owners[] 只含启用账号；没有启用负责人时为 null
+        detail = ctx.get(f"/projects/{ctx.project}").json()["data"]
+        assert {owner["status"] for owner in detail["owners"]} <= {"active"}
+        if owners_after:
+            assert detail["owners"][0]["id"] == detail["ownerId"] and detail["owners"][0]["isPrimary"]
             with connect() as connection:
-                owner_id = connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0]
                 role = connection.execute(
                     """select m.role, u.status from project_members m join users u on u.id = m.user_id
-                       where m.project_id = %s and m.user_id = %s""", (ctx.project, owner_id)).fetchone()
-            # R4：有变化的成员操作之后，主负责人是启用中的负责人（停用账号本身不改指，下一次成员变更时顺延，见 18 偏差 B-4）
+                       where m.project_id = %s and m.user_id = %s""", (ctx.project, detail["ownerId"])).fetchone()
             assert role is not None and role[0] == "owner" and role[1] == "active"
+        else:
+            assert detail["ownerId"] is None and detail["owners"] == []
     assert ctx.rev() == 1 + successes
     assert {event["members_revision"] for event in ctx.events()} == set(range(1, ctx.rev() + 1))

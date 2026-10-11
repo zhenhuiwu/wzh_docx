@@ -4,8 +4,10 @@
 - R1 最后负责人：只统计 users.status='active' 的 owner；只拦会把启用负责人数降到 0 的动作（降级/移除一个启用 owner）。
   降级或移除已停用的 owner 永远允许（历史数据里“唯一 owner 已停用”的项目不会卡死）。→ 409 LAST_OWNER
 - R3 归档：归档项目的成员写操作一律 409 PROJECT_ARCHIVED；读照常，canManageMembers=false、readonlyReason='archived'。
-- R4 主负责人（projects.owner_id）：被降级/移除、或已不是启用 owner 时，改指到剩余启用 owner 中加入最早的一位，
-  写 owner_reassigned 审计；提升别人为负责人不再自动改主负责人。
+- R4 主负责人（projects.owner_id）：只有这次操作的对象**就是**主负责人（被降级或移除）时，才改指到剩余启用 owner 中
+  加入最早的一位，写 owner_reassigned 审计（actor = 做这次操作的人，确实是他的操作）；提升别人为负责人不改主负责人。
+  主负责人账号被停用时不改库、也不由之后任何无关的成员操作“懒改指”（19 审查 S-4，2026-10-11）：
+  读接口一律用读时计算的有效主负责人（document_access.effective_owner_sql），停用账号重新启用后自动恢复。
 - R5 成员独立版本号 projects.members_revision：成员接口只校验和递增它，不再动 projects.revision。
   PUT body / DELETE query 的 expectedMembersRevision 必填；DELETE 目标不是成员时 204，不加版本、不写审计。
 - R6 停用账号：设置任何角色（加入或提升/平级）→ 422 USER_DISABLED；已在项目中的停用账号可以被降级或移除。
@@ -25,7 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import member_assignments
 from app.db import connect, write_transaction
-from app.document_access import (PROJECT_ARCHIVED_MESSAGE, active_owner_names, member_role, owner_names_text)
+from app.document_access import (PROJECT_ARCHIVED_MESSAGE, active_owner_names, effective_owner_id, effective_owner_sql,
+                                 member_role, owner_names_text)
 from app.errors import AppError
 from app.identity import require_csrf, require_session
 from app.models import format_timestamp
@@ -106,7 +109,8 @@ def _visible_project(connection, project_id: UUID, actor) -> dict:
     if row is None or (role is None and not _reads_all(actor)):
         raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
     # member_role 对非成员审计员返回 "auditor"；管理员非成员为 None
-    return {"id": row["id"], "name": row["name"], "ownerId": row["owner_id"], "archived": row["archived_at"] is not None,
+    return {"id": row["id"], "name": row["name"], "ownerId": effective_owner_id(connection, project_id),
+            "archived": row["archived_at"] is not None,
             "membersRevision": int(row["members_revision"]), "role": role}
 
 
@@ -167,17 +171,18 @@ def _active_owner_count(connection, project_id: UUID, exclude: UUID | None = Non
 
 
 def owners_of(connection, project_ids: list[UUID]) -> dict[str, list[dict[str, object]]]:
-    """{projectId: owners[{id,name,status,isPrimary}]}：owners[0] 固定是主负责人（projects.owner_id 仍是 owner 时），
-    其余按加入时间（无时间排后）、姓名、账号。含停用的负责人（status='disabled'），页头由前端只显示启用的。"""
+    """{projectId: owners[{id,name,status,isPrimary}]}：**只含启用中的负责人**（19 审查 §5 条件 1：API 使用者直接取
+    owners[0] 也不会拿到停用账号）。owners[0] 是有效主负责人（isPrimary=true），其余按加入时间（无时间排后）、姓名、账号。
+    没有启用负责人时为空列表（界面显示“暂无启用的负责人”）。A07 的 projectOwners 也必须用本函数。"""
     if not project_ids:
         return {}
     marks = ",".join(["%s"] * len(project_ids))
     rows = connection.execute(
-        f"""select m.project_id, u.id, u.name, u.status, (m.user_id = p.owner_id) as is_primary
+        f"""select m.project_id, u.id, u.name, u.status, (m.user_id = {effective_owner_sql("p")}) as is_primary
             from project_members m
             join users u on u.id = m.user_id
             join projects p on p.id = m.project_id
-            where m.role = 'owner' and m.project_id in ({marks})
+            where m.role = 'owner' and u.status = 'active' and m.project_id in ({marks})
             order by m.project_id, is_primary desc,
                      case when m.created_at is null then 1 else 0 end, m.created_at, u.name, u.account""",
         list(project_ids),
@@ -235,7 +240,7 @@ def _snapshot(connection, project_id: UUID, actor, filters: list[str] | None = N
         "membersRevision": project["membersRevision"],
         "activeOwnerCount": _active_owner_count(connection, project_id),
         "owners": owners_of(connection, [project_id])[str(project_id)],
-        "ownerId": str(project["ownerId"]),
+        "ownerId": None if project["ownerId"] is None else str(project["ownerId"]),
         "canManageMembers": can_manage,
         "readonlyReason": None if can_manage else ("archived" if project["archived"] else "role"),
         "projectRole": project["role"],
@@ -265,9 +270,14 @@ def _person(connection, user_id) -> dict[str, str] | None:
 
 
 def reassign_primary(connection, project_id: UUID, actor_id: UUID | None, revision: int,
-                     request_id: str | None) -> dict[str, object] | None:
-    """R4：owner_id 已不是启用 owner 时改指到剩余启用 owner 中加入最早的一位；没有启用 owner 时保持不变。"""
+                     request_id: str | None, subject: UUID) -> dict[str, object] | None:
+    """R4：只在这次操作的对象 subject 就是存储的主负责人、且他已不是启用 owner（被降级/移除）时改指到剩余启用 owner
+    中加入最早的一位；没有启用 owner 时保持不变。与主负责人无关的成员操作一律不改（19 审查 S-4）。
+    返回给界面的 ownerChanged 只在“看得见的主负责人”真的变了时给出：原主负责人已停用时，读时计算的有效主负责人
+    本来就是新的那位，这里只把存储值对齐（照样写审计），不再提示“主负责人改为 …”。"""
     current = connection.execute("select owner_id from projects where id = %s", (project_id,)).fetchone()["owner_id"]
+    if str(current) != str(subject):
+        return None
     rows = connection.execute(
         """select m.user_id from project_members m join users u on u.id = m.user_id
            where m.project_id = %s and m.role = 'owner' and u.status = 'active'
@@ -278,8 +288,11 @@ def reassign_primary(connection, project_id: UUID, actor_id: UUID | None, revisi
     if not active or current in active:
         return None
     target = active[0]
+    was_active = connection.execute("select status from users where id = %s", (current,)).fetchone()
     connection.execute("update projects set owner_id = %s where id = %s", (target, project_id))
     _record(connection, project_id, actor_id, target, "owner_reassigned", None, "owner", revision, request_id)
+    if was_active is None or was_active["status"] != "active":
+        return None
     return {"from": _person(connection, current), "to": _person(connection, target)}
 
 
@@ -363,7 +376,7 @@ def set_member(project_id: str, user_id: str, request: Request, body: MemberPutB
         _record(connection, target, actor.user_id, member_id, "change_role", old_role, role, revision, request_id)
         cleared = (member_assignments.clear_assignments(connection, target, member_id, actor.user_id)
                    if member_assignments.loses_editing(old_role, role) else member_assignments.empty())
-        owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id)
+        owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id, member_id)
         data = _result(connection, target, actor, owner_changed=owner_changed, cleared=cleared,
                        extra={"item": _item(connection, target, member_id, actor)})
     return {"data": data, "requestId": request_id}
@@ -403,12 +416,12 @@ def remove_member(project_id: str, user_id: str, request: Request, expectedMembe
         connection.execute("delete from project_members where project_id = %s and user_id = %s", (target, member_id))
         revision = _bump(connection, target)
         _record(connection, target, actor.user_id, member_id, "remove", old_role, None, revision, request_id)
-        owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id)
+        owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id, member_id)
         removed_self = member_id == actor.user_id
         if removed_self and not _is_admin(actor) and "auditor" not in actor.roles:
             # 自己退出后已看不到项目：只返回版本号与负责人，不再返回名单
             data = {"membersRevision": revision, "owners": owners_of(connection, [target])[str(target)],
-                    "ownerId": str(connection.execute("select owner_id from projects where id = %s", (target,)).fetchone()["owner_id"]),
+                    "ownerId": None if (owner := effective_owner_id(connection, target)) is None else str(owner),
                     "activeOwnerCount": _active_owner_count(connection, target), "ownerChanged": owner_changed,
                     "assignmentsCleared": cleared, "removedSelf": True}
         else:
@@ -462,12 +475,11 @@ def add_members(project_id: str, request: Request, body: MemberBatchBody) -> dic
                 (target, member_id, role, actor.user_id),
             )
             added.append(str(member_id))
-        owner_changed = None
+        owner_changed = None  # 加人从不改主负责人（审查 S-4：不再借加人“懒改指”）
         if added:
             revision = _bump(connection, target)
             for member_id in added:
                 _record(connection, target, actor.user_id, UUID(member_id), "add", None, role, revision, request_id)
-            owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id)
         data = _result(connection, target, actor, owner_changed=owner_changed, cleared=member_assignments.empty(),
                        extra={"added": added, "failed": failed})
     return {"data": data, "requestId": request_id}

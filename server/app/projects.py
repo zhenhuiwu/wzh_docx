@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
+from app.document_access import effective_owner_sql
 from app.errors import AppError
 from app.identity import require_csrf, require_permission, require_session
 from app.models import format_timestamp
@@ -19,6 +20,7 @@ from app.permissions import has_permission
 router = APIRouter()
 
 _STATUSES = {"not_started", "active", "paused", "completed"}
+_EFFECTIVE_OWNER = effective_owner_sql("p")
 _MY_ROLES = {"owner", "editor", "viewer"}
 _SORTS = {
     "updatedAt_desc": "p.updated_at desc, p.name asc",
@@ -179,7 +181,8 @@ def _public(row: dict) -> dict[str, object]:
         "department": row["department"],
         "group": row["group_name"],
         "clientContact": row["client_contact"],
-        "ownerId": str(row["owner_id"]),
+        # 审查 S-1/S-2：读时计算的有效主负责人（只含启用账号）；没有启用负责人时两者都是 null，界面显示警告
+        "ownerId": None if row["owner_id"] is None else str(row["owner_id"]),
         "ownerName": row["owner_name"],
         "periodStart": None if row["period_start"] is None else row["period_start"].isoformat(),
         "periodEnd": None if row["period_end"] is None else row["period_end"].isoformat(),
@@ -214,11 +217,11 @@ def _load(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict[str,
     row = connection.execute(
         f"""
         select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
-               p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
+               {_EFFECTIVE_OWNER} as owner_id, owner.name as owner_name, p.period_start, p.period_end,
                p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
                p.software_version
         from projects p
-        join users owner on owner.id = p.owner_id
+        left join users owner on owner.id = {_EFFECTIVE_OWNER}
         where p.id = %s and {visibility}
         """,
         params,
@@ -359,7 +362,7 @@ def list_projects(
         filters.append("p.department ilike %s escape '\\'")
         params.append(_like(department.strip()))
     if ownerId:
-        filters.append("p.owner_id = %s")
+        filters.append(f"{_EFFECTIVE_OWNER} = %s")  # 审查 S-2：按有效主负责人筛选（停用的主负责人查不到）
         params.append(_parse_uuid(ownerId, "ownerId"))
     if status:
         filters.append("p.status = %s")
@@ -376,11 +379,11 @@ def list_projects(
         rows = connection.execute(
             f"""
             select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
-                   p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
+                   {_EFFECTIVE_OWNER} as owner_id, owner.name as owner_name, p.period_start, p.period_end,
                    p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
                    p.software_version, my.role as my_role
             from projects p
-            join users owner on owner.id = p.owner_id
+            left join users owner on owner.id = {_EFFECTIVE_OWNER}
             left join project_members my on my.project_id = p.id and my.user_id = %s
             where {where}
             order by {_SORTS[sort]}
@@ -591,7 +594,9 @@ def update_project(project_id: str, request: Request, body: ProjectPatchBody) ->
             status = current["status"] if body.status is None else body.status
             if status not in _STATUSES:
                 raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
-            owner_id = UUID(str(current["ownerId"])) if body.ownerId is None else _parse_uuid(body.ownerId, "ownerId")
+            # 存储的 owner_id（不是读时计算的有效主负责人）：改资料不能顺手把主负责人“懒改指”掉（审查 S-4）
+            stored_owner = connection.execute("select owner_id from projects where id = %s", (target,)).fetchone()["owner_id"]
+            owner_id = stored_owner if body.ownerId is None else _parse_uuid(body.ownerId, "ownerId")
             if body.periodStart is None and "periodStart" not in body.model_fields_set:
                 start = None if current["periodStart"] is None else date.fromisoformat(str(current["periodStart"]))
             else:
@@ -601,8 +606,8 @@ def update_project(project_id: str, request: Request, body: ProjectPatchBody) ->
             else:
                 end = _date(body.periodEnd, "periodEnd")
             _period(start, end)
-            if body.ownerId is not None and owner_id != UUID(str(current["ownerId"])):
-                _transfer_owner(connection, request, actor, target, UUID(str(current["ownerId"])), owner_id)
+            if body.ownerId is not None and str(owner_id) != str(stored_owner):
+                _transfer_owner(connection, request, actor, target, stored_owner, owner_id)
             connection.execute(
                 """
                 update projects
