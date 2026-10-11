@@ -79,8 +79,10 @@ const refreshReason = ref("");
 // 终验 F-L1：打开文档后约 0.25 秒在确认其他标签与本机草稿，期间正文不可编辑——显示载入状态，不再无声丢键
 /** 设计师建议 6：载入锁定期间已记下的字数（隐形输入框 + 缓冲的按键），在载入提示里告诉用户 */
 const loadHeld = ref(0);
+/** 设计师 S4：载入期间记下的字（上屏后的，不含拼音），提示里直接给出 */
+const loadHeldText = ref("");
 const refreshNotice = computed(() => refreshReason.value || (refreshingEditor.value ? "正在刷新编辑区…" : "")
-  || (checkingDrafts.value && phase.value === "ready" ? (loadHeld.value ? `正在检查本机草稿…已记下 ${loadHeld.value} 个字，载入后写在你点的位置。` : "正在检查本机草稿，马上就能编辑…") : ""));
+  || (checkingDrafts.value && phase.value === "ready" ? (loadHeld.value ? `正在检查本机草稿…已记下“${loadHeldText.value.length > 20 ? `…${loadHeldText.value.slice(-20)}` : loadHeldText.value}”（${loadHeld.value} 个字），载入后写在你点的位置。` : "正在检查本机草稿，马上就能编辑…") : ""));
 /** 最近一次在编辑区输入的时间；锁定期间敲下的字先存起来，重绘完成后在原光标处写回。 */
 let lastInputAt = 0;
 let typedDuringLock = "";
@@ -1250,10 +1252,14 @@ function openLoadSink(event: MouseEvent) {
     const sink = window.document.createElement("textarea");
     sink.setAttribute("aria-label", "正文载入中，输入的内容先暂存，载入后写回");
     sink.setAttribute("data-testid", "load-sink");
-    Object.assign(sink.style, { position: "fixed", left: `${event.clientX}px`, top: `${event.clientY}px`, width: "2px", height: "1.2em", opacity: "0", border: "0", padding: "0", margin: "0", resize: "none", overflow: "hidden", zIndex: "1" });
-    sink.addEventListener("input", () => { loadHeld.value = [...sink.value].length; });
+    // 设计师 S4：框可见（与冲突续写框同一套 token），字数只算上屏后的（组字中的拼音不算）
+    sink.setAttribute("placeholder", "载入中，先记在这里");
+    sink.dataset.held = "0";
+    Object.assign(sink.style, { position: "fixed", left: `${Math.min(event.clientX, window.innerWidth - 260)}px`, top: `${event.clientY + 12}px`, width: "240px", height: "30px", boxSizing: "border-box", padding: "4px 8px", margin: "0", resize: "none", overflow: "hidden", zIndex: "20", background: "var(--warning-50)", border: "1px solid var(--warning-600)", borderRadius: "var(--radius-control)", color: "var(--text-primary)", fontFamily: "inherit", fontSize: "var(--text-sm)", lineHeight: "var(--leading-sm)", outline: "none", boxShadow: "0 0 0 3px var(--focus-ring)" });
+    const count = () => { loadHeldText.value = typedDuringLoad + sink.value; loadHeld.value = [...loadHeldText.value].length; sink.dataset.held = String(loadHeld.value); };
+    sink.addEventListener("input", (event) => { if (!loadSinkComposing && !(event as InputEvent).isComposing) count(); });
     sink.addEventListener("compositionstart", () => { loadSinkComposing = true; });
-    sink.addEventListener("compositionend", () => { loadSinkComposing = false; if (!checkingDrafts.value) void flushLoadTyping(); });
+    sink.addEventListener("compositionend", () => { loadSinkComposing = false; count(); if (!checkingDrafts.value) void flushLoadTyping(); });
     window.document.body.appendChild(sink);
     loadSink = sink;
   }
@@ -1261,6 +1267,7 @@ function openLoadSink(event: MouseEvent) {
 }
 function dropLoadSink() {
   loadHeld.value = 0;
+  loadHeldText.value = "";
   loadSink?.remove();
   loadSink = null;
   loadSinkComposing = false;
@@ -1323,7 +1330,7 @@ function bufferLockedTyping(event: KeyboardEvent) {
     // 测试工程师 F-L1：载入锁定期间点了正文又打字：先记下，解锁后写回
     if (event.isComposing || event.key === "Process") { imeDuringLoad = true; return; }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.key.length === 1) { typedDuringLoad += event.key; loadHeld.value += 1; event.preventDefault(); }
+    if (event.key.length === 1) { typedDuringLoad += event.key; loadHeld.value += 1; loadHeldText.value += event.key; event.preventDefault(); }
     return;
   }
   if (!refreshingEditor.value && caretLostAt && Date.now() - caretLostAt < 30000 && event.target === window.document.body) {
@@ -3515,7 +3522,7 @@ onUnmounted(() => {
         </div>
         <p v-if="actionNote && !actionNoteOthers" class="wb-notice info" role="status"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg><span>{{ actionNote }}</span></p>
         <!-- T-S2：他人类短提示与载入提示浮在编辑区上方，不推挤正文 -->
-        <div class="wb-float-stack" aria-live="polite">
+        <div class="wb-float-stack" :class="{ 'below-tool': mode === 'edit' }" aria-live="polite">
           <div v-if="othersUpdated" class="wb-notice info floating" role="status" data-testid="others-updated">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" /></svg>
             <span v-if="othersUpdated.here" data-testid="others-here">{{ othersUpdated.self ? '你在另一个标签页更新了这一段。' : `${othersUpdated.names[0] || '其他成员'} 更新了你正在看的这一段。` }}</span>
@@ -3527,7 +3534,7 @@ onUnmounted(() => {
             </span>
           </div>
           <p v-if="actionNote && actionNoteOthers" class="wb-float-note" role="status" data-testid="float-note">{{ actionNote }}</p>
-          <p v-if="sinkNote" class="wb-float-note sink" role="status" data-testid="sink-note">{{ sinkNote.text }} <button type="button" class="link" @click="sinkNote = null">知道了</button></p>
+          <p v-if="sinkNote" class="wb-float-note sink" role="status" data-testid="sink-note"><span class="txt">{{ sinkNote.text }}</span><button type="button" class="link" @click="sinkNote = null">知道了</button></p>
           <p v-if="floatingReason" class="wb-float-note" role="status" data-testid="float-reason"><span class="spin" aria-hidden="true"></span>{{ floatingReason }}</p>
         </div>
         <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
@@ -3804,7 +3811,10 @@ onUnmounted(() => {
 .wb-float-stack > * { position:relative; top:var(--space-2); max-width:min(760px, calc(100% - 2 * var(--space-4))); box-shadow:var(--shadow-md, 0 4px 16px rgba(0,0,0,.12)); }
 .wb-float-note { display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-1) var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-surface); color:var(--text-secondary); font-size:var(--text-sm); line-height:var(--leading-sm); }
 .wb-float-note.sink { border-color:var(--warning-300, #f5c26b); background:var(--warning-50, #fff8e6); color:var(--text-primary); }
-.wb-float-note.sink .link { border:0; background:none; color:var(--brand-600); cursor:pointer; padding:0; font:inherit; }
+.wb-float-note.sink .link { border:0; background:none; color:var(--brand-600); cursor:pointer; padding:0; font:inherit; white-space:nowrap; flex:none; }
+.wb-float-note.sink .txt { min-width:0; flex:1 1 auto; }
+/* 设计师 S3：编辑模式下浮层放在格式工具栏下方，不盖住工具栏 */
+.wb-float-stack.below-tool > * { top:calc(var(--etool-h) + var(--space-2)); }
 .wb-float-note .spin { width:12px; height:12px; flex:none; border-radius:var(--radius-pill); border:2px solid var(--brand-200); border-top-color:var(--brand-600); animation:wb-spin .8s linear infinite; }
 .wb-notice.floating { border:1px solid var(--info-200, var(--border-default)); border-radius:var(--radius-control); }
 .draft-refusal { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-1) 0 0 calc(var(--icon) + var(--space-3)); color:var(--danger-700); font-size:var(--text-sm); line-height:var(--leading-sm); }

@@ -1,3 +1,4 @@
+import { normalizeListMarkers } from "./conflictModel";
 /**
  * 保存状态与失败分类（纯逻辑，可在 vitest 中测试）。
  * 依据 01 §6.3/§6.4/§11.5 与 02 §3.2/§3.6/§3.9。
@@ -130,7 +131,8 @@ export function myChangesFileName(name: string, at: Date = new Date()): string {
 
 /** 按顶层块比较的“处”数（整篇模式，01 §4.9 第5条）：块按空行切分后做 LCS 差异计数。 */
 export function changedBlockCount(base: string, mine: string): number {
-  const split = (text: string) => text.replace(/\r\n/g, "\n").split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+  // 设计师 S5：与冲突卡片一致，列表符号后的空格多少（“-   ”与“- ”）不算修改
+  const split = (text: string) => normalizeListMarkers(text.replace(/\r\n/g, "\n")).split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
   const a = split(base), b = split(mine);
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start += 1;

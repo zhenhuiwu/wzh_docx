@@ -607,6 +607,11 @@ def load_lock_round(ctx: Run, page, mode: str, n: int) -> dict:
             cdp = page.context.new_cdp_session(page)
             cdp.send("Input.imeSetComposition", {"text": "zairu", "selectionStart": 5, "selectionEnd": 5})
             page.wait_for_timeout(120)
+            # 设计师 S4：组字中的拼音不计入“已记下 N 个字”；框可见
+            held = page.evaluate("() => { const s = document.querySelector('[data-testid=load-sink]'); return s ? [s.dataset.held, getComputedStyle(s).opacity, s.getBoundingClientRect().width] : null }")
+            if held is not None:
+                assert held[0] == "0", f"组字中的拼音被计数：{held}"
+                assert held[1] == "1" and held[2] > 100, f"载入期间的输入框不可见：{held}"
             cdp.send("Input.insertText", {"text": mark})
         else:
             page.keyboard.type(mark)
@@ -986,6 +991,16 @@ def s_sink_position(ctx: Run, page):
     assert h2 <= 4 * 20 + 16, f"输入框超过 4 行：{h2}"
     border = sink.evaluate("el => getComputedStyle(el).borderTopStyle + ' ' + getComputedStyle(el).borderTopColor")
     assert border.startswith("solid") and "150, 90, 0" in border, f"边框不是 token 实线：{border}"
+    # 设计师 S1/S3：说明在重绘后写“已换成”；浮层在格式工具栏下方；窄宽度下“知道了”不折行
+    note = page.get_by_test_id("sink-note")
+    expect(note).to_contain_text("已换成 张工 的版本", timeout=10000)
+    tool, nb = page.locator(".etool").bounding_box(), note.bounding_box()
+    assert nb["y"] >= tool["y"] + tool["height"] - 1, f"说明盖住了工具栏：工具栏 {tool} 说明 {nb}"
+    page.set_viewport_size({"width": 1024, "height": 720})
+    page.wait_for_timeout(300)
+    ok_btn = note.get_by_role("button", name="知道了")
+    lh = ok_btn.evaluate("el => parseFloat(getComputedStyle(el).lineHeight) || 20")
+    assert ok_btn.bounding_box()["height"] <= lh * 1.5, f"“知道了”折行：{ok_btn.bounding_box()}"
     return {"gap": round(gap, 1), "h": [round(h1), round(h2)]}
 
 

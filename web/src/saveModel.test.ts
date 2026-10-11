@@ -81,5 +81,8 @@ describe("changedBlockCount", () => {
     expect(changedBlockCount(base, "# A\n\nONE\n\ntwo\n\nthree")).toBe(1);
     expect(changedBlockCount(base, "# A\n\none\n\nnew\n\ntwo\n\nthree")).toBe(1);
     expect(changedBlockCount(base, "# A\n\nONE\n\ntwo\n\nTHREE")).toBe(2);
+    // 设计师 S5：列表符号后空格多少不算修改
+    expect(changedBlockCount("- 甲\n- 乙\n\n段", "-   甲\n-   乙\n\n段")).toBe(0);
+    expect(changedBlockCount("-   甲\n\n段", "- 甲\n\n段改")).toBe(1);
   });
 });
