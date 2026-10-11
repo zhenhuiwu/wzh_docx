@@ -41,7 +41,7 @@ const systemOpen = ref(readFlag(SYSTEM_KEY, true) || route.path.startsWith("/sys
 // 没有本地偏好时，窄于 1440 的窗口默认收起为图标栏（02 评审 §5.4，08 验收 S10）；用户手动切换后以偏好为准。
 const userCollapsed = ref(readFlag(COLLAPSE_KEY, typeof window !== "undefined" && window.innerWidth < 1440));
 // 文档编辑工作台自动收起为图标栏，为正文腾出空间（02 评审 3.1 / 5.4）。
-const isWorkbench = computed(() => route.name === "document");
+const isWorkbench = computed(() => route.name === "document" || route.name === "template-editor");
 const collapsed = computed(() => userCollapsed.value || isWorkbench.value);
 const loggingOut = ref(false);
 const logoutError = ref("");
@@ -117,7 +117,7 @@ watch(() => [route.name, route.params.id] as const, async ([, id]) => {
 // 详情页对象名：模板、知识库、测试任务由各自页面写入；文档名由 api/documents 的 getDocument 在工作台读取文档时写入。
 const objectKey = computed(() => {
   const name = String(route.name ?? "");
-  if (name === "template") return `template:${String(route.params.id)}`;
+  if (name === "template" || name === "template-editor") return `template:${String(route.params.id)}`;
   if (name === "knowledge-base") return `knowledge:${String(route.params.id)}`;
   if (name === "document") return `document:${String(route.params.documentId)}`;
   if (name === "test-cases" && typeof route.query.task === "string" && route.query.task) return `task:${route.query.task}`;
@@ -143,6 +143,7 @@ const crumbs = computed<Crumb[]>(() => {
   if (route.path.startsWith("/system")) {
     const list: Crumb[] = [{ label: "系统管理" }];
     if (name === "template") list.push({ label: "模板管理", to: { name: "templates" } }, { label: objectName("模板详情") });
+    else if (name === "template-editor") list.push({ label: "模板管理", to: { name: "templates" } }, { label: objectName("模板详情"), to: { name: "template", params: { id: String(route.params.id) } } }, { label: title });
     else list.push({ label: title });
     return list;
   }
@@ -236,7 +237,7 @@ async function logout() {
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM3.5 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14.5c1.6.8 2.6 2.8 2.9 5.5" /></svg>
                 <span class="nav-label">用户管理</span>
               </NavItem>
-              <NavItem v-if="show('templates')" :to="{ name: 'templates' }" :current="route.name === 'templates' || route.name === 'template'" label="模板管理">
+              <NavItem v-if="show('templates')" :to="{ name: 'templates' }" :current="route.name === 'templates' || route.name === 'template' || route.name === 'template-editor'" label="模板管理">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6zM14 3.5V8h4M9 12h6M9 15.5h6" /></svg>
                 <span class="nav-label">模板管理</span>
               </NavItem>

@@ -17,6 +17,7 @@ export const ROUTE_PERMISSIONS: Record<string, string | null> = {
   "test-cases": "tests.read",
   templates: "templates.read",
   template: "templates.read",
+  "template-editor": "templates.read",
   users: "users.read",
   // Skill 列表 GET 对所有会话开放（工作台写作助手要用），直接输地址进入为只读；导航只对 system.manage 显示。
   "writing-skills": null,

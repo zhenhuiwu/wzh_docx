@@ -10,6 +10,7 @@ import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
 import ProjectsView from "./views/ProjectsView.vue";
 import TemplateDetailView from "./views/TemplateDetailView.vue";
+import TemplateEditorView from "./views/TemplateEditorView.vue";
 import TemplatesView from "./views/TemplatesView.vue";
 import SignIn from "./views/SignIn.vue";
 import ChangePasswordView from "./views/ChangePasswordView.vue";
@@ -130,6 +131,12 @@ export const router = createRouter({
           name: "template",
           component: TemplateDetailView,
           meta: { title: "模板详情" },
+        },
+        {
+          path: "system/templates/:id/documents/:docId/edit",
+          name: "template-editor",
+          component: TemplateEditorView,
+          meta: { title: "编辑模板" },
         },
         {
           path: "system/users",
