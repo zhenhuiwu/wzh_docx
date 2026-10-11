@@ -104,7 +104,7 @@ function theirsTitle(item: ConflictItem): string {
   // K1-M1 定稿：正文这一段里既有对方的修改也有你刚补的字
   if (selfAdded.value[id(item)]) return `正文当前版本（含 ${whoOf(item)} 的修改和你刚补的内容）· 已在正文中`;
   // 审查建议 2：最近一次是本人改的但没取到补了哪些字——也不写成“张工 的版本”
-  if (item.theirs?.latestBySelf) return `正文当前版本（含 ${whoOf(item)} 的修改和你在另一处的修改）· 已在正文中`;
+  if (item.theirs?.latestBySelf && !selfTheirs(item)) return `正文当前版本（含 ${whoOf(item)} 的修改和你在另一处的修改）· 已在正文中`;
   if (selfTheirs(item)) return "你在另一处保存的版本 · 已在正文中（其他人看到的是这一版）";
   // 设计师 S7：对方是“你”时写“你的版本”
   return `${whoOf(item)}${whoOf(item) === "你" ? "" : " "}的版本 · 已在正文中（其他人看到的是这一版）`;
@@ -116,7 +116,7 @@ function cardTitle(item: ConflictItem): string {
 }
 function labelOf(item: ConflictItem, choice: ActionChoice): string {
   if (choice.action === "keep_mine" && selfAdded.value[id(item)]) return "仍然保留我的（覆盖刚补的内容）";
-  if (choice.action === "keep_mine" && item.theirs?.latestBySelf) return "仍然保留我的（覆盖正文里的这次修改）";
+  if (choice.action === "keep_mine" && item.theirs?.latestBySelf && !selfTheirs(item)) return "仍然保留我的（覆盖正文里的这次修改）";
   if (choice.action === "use_theirs" && selfTheirs(item)) return "使用正文里的版本";
   return choice.label;
 }
