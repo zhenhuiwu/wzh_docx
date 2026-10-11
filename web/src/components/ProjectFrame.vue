@@ -130,7 +130,7 @@ watch([project, () => route.query.restore], ([value, flag]) => {
   delete query.restore;
   void router.replace({ query, hash: route.hash });
   if (value.archivedAt && value.permissions?.canArchive) openArchive("restore");
-});
+}, { immediate: true });
 
 defineExpose({ openRestore: () => openArchive("restore") });
 </script>

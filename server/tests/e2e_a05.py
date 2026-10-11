@@ -112,6 +112,22 @@ PEOPLE = (("lisi", "李四", "软件一部"), ("wangce", "王测", "测试部"),
           ("solo", "郑唯一", "软件二部"), ("helper", "冯帮手", "软件一部"), ("other", "陈其他", "软件二部"))
 
 
+def make_document(admin: "Api", project_id: str) -> dict:
+    from docx import Document as WordDocument
+    word = WordDocument()
+    word.add_heading("概述", 1)
+    word.add_paragraph("本文档用于验证成员权限调整后的编写与只读。")
+    word.add_paragraph("第二段正文，编写人员会在这里补充内容。")
+    buffer = BytesIO()
+    word.save(buffer)
+    upload = admin.client.post("/files", files={"file": ("成员验收.docx", buffer.getvalue(), DOCX)},
+                               data={"purpose": "attachment", "projectId": project_id},
+                               headers={"X-CSRF-Token": admin.csrf, "Idempotency-Key": f"a05-upload-{uuid.uuid4().hex}"})
+    assert upload.status_code == 201, upload.text
+    return admin.call("POST", f"/projects/{project_id}/documents",
+                      json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})
+
+
 def seed() -> dict:
     sys.path.insert(0, str(ROOT / "server"))
     from app.db import connect
@@ -125,26 +141,16 @@ def seed() -> dict:
                                      allow_no_roles=True, connection=connection)
         connection.commit()
     admin = Api(ADMIN, ADMIN_PASSWORD)
+    # 管理员显示名以 /auth/me 为准，不写死“系统管理员”（20：现场库里管理员可能改过名）
+    admin_name = admin.call("GET", "/auth/me")["user"]["name"]
     project = admin.project(f"综合保障信息系统（二期）{RUN}", users["admin"])
     other = admin.project(f"未加入的项目{RUN}", users["admin"])
-    from docx import Document as WordDocument
-    word = WordDocument()
-    word.add_heading("概述", 1)
-    word.add_paragraph("本文档用于验证成员权限调整后的编写与只读。")
-    word.add_paragraph("第二段正文，编写人员会在这里补充内容。")
-    buffer = BytesIO()
-    word.save(buffer)
-    upload = admin.client.post("/files", files={"file": ("成员验收.docx", buffer.getvalue(), DOCX)},
-                               data={"purpose": "attachment", "projectId": project["id"]},
-                               headers={"X-CSRF-Token": admin.csrf, "Idempotency-Key": f"a05-upload-{RUN}"})
-    assert upload.status_code == 201, upload.text
-    document = admin.call("POST", f"/projects/{project['id']}/documents",
-                          json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})
+    document = make_document(admin, project["id"])
     # 背景成员：王测（编写）、周涛（只读）
     admin.set_role(project["id"], users["wangce"], "editor")
     admin.set_role(project["id"], users["zhoutao"], "viewer")
     assert admin.disable(users["zhao"]).status_code == 200
-    return {"users": users, "project": project, "other": other, "document": document, "admin": admin}
+    return {"users": users, "project": project, "other": other, "document": document, "admin": admin, "admin_name": admin_name}
 
 
 def login(page: Page, account: str, password: str = PASSWORD):
@@ -181,7 +187,7 @@ def require_targets() -> None:
 def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
     require_targets()
     data = seed()
-    users, admin = data["users"], data["admin"]
+    users, admin, admin_name = data["users"], data["admin"], data["admin_name"]
     pid, doc = data["project"]["id"], data["document"]["id"]
 
     with sync_playwright() as playwright:
@@ -199,7 +205,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page.get_by_role("navigation", name="项目内导航").get_by_role("link")).to_have_text(["项目概述", "文档编写"])
             expect(page.locator('aside[aria-label="主导航"] >> text=成员')).to_have_count(0)
             expect(page.get_by_test_id("members-count")).to_have_text("3")
-            expect(page.get_by_test_id("frame-owners")).to_contain_text("系统管理员")
+            expect(page.get_by_test_id("frame-owners")).to_contain_text(admin_name)
         v1()
 
         @step("V2 添加编写人员（默认编写人员，多选，弹窗截图）")
@@ -262,7 +268,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page2.get_by_test_id("members-add")).to_have_count(0)
             expect(page2.get_by_test_id("member-remove")).to_have_count(0)
             expect(page2.get_by_test_id("member-role-select")).to_have_count(0)
-            expect(page2.get_by_test_id("members-note")).to_have_text("如需调整权限，请联系负责人 系统管理员。")
+            expect(page2.get_by_test_id("members-note")).to_have_text(f"如需调整权限，请联系负责人 {admin_name}。")
             shot(page2, "A05-03-成员与权限-只读视图（编写人员）")
             page2.goto(f"{WEB}/projects/{data['other']['id']}")
             expect(page2.get_by_text("项目不存在或你无权访问。")).to_be_visible(timeout=30000)
@@ -391,19 +397,21 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             p3 = admin.project(f"主负责人改指{RUN}", users["admin"])
             admin.set_role(p3["id"], users["other"], "owner")
             open_overview(page, p3["id"])
-            expect(page.get_by_test_id("frame-owners")).to_have_text("负责人：系统管理员、陈其他")
+            expect(page.get_by_test_id("frame-owners")).to_have_text(f"负责人：{admin_name}、陈其他")
             row(page, users["admin"]).get_by_test_id("member-remove").click()
             page.get_by_test_id("member-remove-dialog").get_by_test_id("member-remove-confirm").click()
             # 系统管理员不是成员也能管理：留在页面；主负责人改为陈其他
             expect(page.get_by_test_id("members-info")).to_contain_text("主负责人改为 陈其他", timeout=10000)
             expect(page.get_by_test_id("frame-owners")).to_have_text("负责人：陈其他")
+            # 改指提示 4 秒后自动收起（21 S-5）
+            expect(page.get_by_test_id("members-info")).to_have_count(0, timeout=8000)
             login(page2, f"other{RUN}")
             expect(page2.locator(f'[data-testid=project-my-role][data-project-id="{p3["id"]}"]')).to_have_text("负责人")
             page2.goto(f"{WEB}/projects/{p3['id']}")
             expect(page2.get_by_test_id("frame-owners")).to_have_text("负责人：陈其他", timeout=30000)
         v14()
 
-        @step("V19–V22 用户管理：停用唯一启用负责人被拒，补负责人后重新检查并停用")
+        @step("V19–V22 用户管理：停用唯一启用负责人被拒；归档项目在界面上恢复、补负责人、再归档后停用成功（21 M-1）")
         def v19():
             p2 = admin.project(f"唯一负责人项目{RUN}", users["solo"])
             p3b = admin.project(f"另有负责人项目{RUN}", users["solo"])
@@ -426,7 +434,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             archived_row = blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p2a["id"]}"]')
             expect(archived_row).to_contain_text(f"已归档唯一负责人项目{RUN}（已归档）")
             expect(blocked.locator(f'[data-testid=user-disable-project][data-project-id="{p2["id"]}"]')).not_to_contain_text("（已归档）")
-            expect(blocked).to_contain_text("标“（已归档）”的项目需先恢复，才能调整负责人。")
+            expect(blocked).to_contain_text("标“（已归档）”的项目需先恢复")
+            expect(archived_row.get_by_test_id("user-disable-project-restore")).to_have_text("打开并恢复")
             expect(page.locator("dialog[open] h2")).to_have_text(f"不能停用 郑唯一（solo{RUN}）")
             shot(page, "A05-06-用户管理-不能停用唯一负责人")
             # V22：账号仍是启用
@@ -438,14 +447,43 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(popup.get_by_test_id("members-section")).to_be_in_viewport(timeout=30000)
             popup.close()
             admin.set_role(p2["id"], users["helper"], "owner")
-            # 归档项目要先恢复才能补负责人，补完再归档
-            assert admin.raw("PUT", f"/projects/{p2a['id']}/members/{users['helper']}",
-                             json={"role": "owner", "expectedMembersRevision": admin.members_revision(p2a["id"])}).json()["error"]["code"] == "PROJECT_ARCHIVED"
-            admin.call("POST", f"/projects/{p2a['id']}/unarchive",
-                       json={"expectedRevision": admin.call("GET", f"/projects/{p2a['id']}")["revision"], "reason": "补负责人"})
-            admin.set_role(p2a["id"], users["helper"], "owner")
-            admin.call("POST", f"/projects/{p2a['id']}/archive",
-                       json={"expectedRevision": admin.call("GET", f"/projects/{p2a['id']}")["revision"], "reason": "补完再归档"})
+            # 归档项目成员只读：接口 409 PROJECT_ARCHIVED
+            response = admin.raw("POST", f"/projects/{p2a['id']}/members:batch",
+                                 json={"userIds": [str(users["helper"])], "role": "owner", "expectedMembersRevision": admin.members_revision(p2a["id"])})
+            assert response.status_code == 409 and response.json()["error"]["code"] == "PROJECT_ARCHIVED", response.text
+            # 21 M-1：全程走界面——“打开并恢复”→ 恢复确认 → 添加负责人 → 页头［归档项目］→ 回到用户管理重新检查
+            with ctx_a.expect_page() as popup_info:
+                archived_row.get_by_test_id("user-disable-project-restore").click()
+            popup = popup_info.value
+            restore = popup.get_by_test_id("project-archive-dialog")
+            expect(restore).to_be_visible(timeout=30000)
+            expect(restore).to_contain_text(f"恢复 已归档唯一负责人项目{RUN}？")
+            restore.get_by_test_id("project-archive-confirm").click()
+            expect(restore.get_by_test_id("project-archive-error")).to_have_text("请填写恢复原因。")
+            restore.get_by_test_id("project-archive-reason").fill("补负责人")
+            shot(popup, "A05-08-恢复项目确认")
+            restore.get_by_test_id("project-archive-confirm").click()
+            expect(restore).to_be_hidden(timeout=10000)
+            expect(popup.get_by_test_id("frame-archived")).to_have_count(0)
+            expect(popup.get_by_test_id("members-add")).to_be_visible(timeout=10000)
+            popup.get_by_test_id("members-add").click()
+            add = popup.get_by_test_id("member-add-dialog")
+            add.get_by_test_id("member-candidate-search").fill(f"helper{RUN}")
+            add.locator(f'[data-testid=member-candidate][data-user-id="{users["helper"]}"]').click()
+            add.get_by_test_id("member-add-role-owner").check()
+            add.get_by_test_id("member-add-submit").click()
+            expect(add).to_be_hidden(timeout=10000)
+            expect(row(popup, users["helper"]).get_by_test_id("member-role-select")).to_have_value("owner")
+            popup.get_by_test_id("project-archive").click()
+            archive = popup.get_by_test_id("project-archive-dialog")
+            archive.get_by_test_id("project-archive-reason").fill("补完再归档")
+            archive.get_by_test_id("project-archive-confirm").click()
+            expect(archive).to_be_hidden(timeout=10000)
+            expect(popup.get_by_test_id("frame-archived")).to_be_visible()
+            expect(popup.get_by_test_id("project-restore")).to_be_visible()
+            expect(popup.get_by_test_id("members-restore")).to_be_visible()
+            shot(popup, "A05-09-补负责人后重新归档")
+            popup.close()
             page.get_by_test_id("user-disable-recheck").click()
             expect(page.locator("dialog[open]")).to_have_count(0, timeout=10000)
             expect(page.get_by_text("账号已停用。")).to_be_visible()
@@ -460,7 +498,12 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             revision = admin.call("GET", f"/projects/{pid}")["revision"]
             admin.call("POST", f"/projects/{pid}/archive", json={"expectedRevision": revision, "reason": "A05 归档验收"})
             open_overview(page, pid)
-            expect(page.get_by_test_id("members-notice")).to_have_text("项目已归档，成员和权限不能调整。恢复项目后才能修改。")
+            expect(page.get_by_test_id("members-notice")).to_contain_text("项目已归档，成员和权限不能调整。恢复项目后才能修改。")
+            # 21 S-1/S-3：页头“已归档”，概述“已归档（原：进行中）”；说明行不再说“可以添加成员”；管理员有［恢复项目］
+            expect(page.get_by_test_id("frame-archived")).to_have_text("已归档")
+            expect(page.get_by_test_id("project-status")).to_have_text("已归档（原：进行中）")
+            expect(page.get_by_test_id("members-note")).not_to_contain_text("可以添加成员")
+            expect(page.get_by_test_id("project-restore")).to_be_visible()
             expect(page.get_by_test_id("member-role-select")).to_have_count(0)
             expect(page.get_by_test_id("members-add")).to_have_count(0)
             expect(page.get_by_test_id("member-remove")).to_have_count(0)
@@ -472,7 +515,26 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page2.locator(".paper-content")).to_be_visible(timeout=60000)
             expect(page2.get_by_test_id("save-status")).to_contain_text("只读", timeout=30000)
             expect(page2.get_by_test_id("save-status")).to_have_attribute("title", "项目已归档，可以查看和导出，不能修改正文。")
+            expect(page2.get_by_test_id("archived-notice")).to_have_text("项目已归档，可以查看和导出，不能修改正文。")  # 20 L-4
             shot(page2, "A05-07-归档项目文档只读")
+            # 编写人员没有恢复权限：没有按钮，提示去找系统管理员
+            open_overview(page2, pid)
+            expect(page2.get_by_test_id("project-restore")).to_have_count(0)
+            expect(page2.get_by_test_id("members-notice")).to_have_text("项目已归档，成员和权限不能调整。如需恢复项目，请联系系统管理员。")
+            page2.goto(f"{WEB}/projects/{pid}/documents")
+            expect(page2.get_by_test_id("frame-archived-notice")).to_contain_text("项目已归档，文档只能查看和导出。")
+            # 项目列表：默认不含归档项目，状态选“已归档”能找到，筛选写进地址（21 M-1、S-9）
+            page.goto(f"{WEB}/projects?name={RUN}")
+            expect(page.get_by_role("link", name=f"打开项目：综合保障信息系统（二期）{RUN}")).to_have_count(0, timeout=30000)
+            page.locator(".project-query select").select_option("archived")
+            page.locator(".project-query button[type=submit]").click()
+            expect(page.get_by_role("link", name=f"打开项目：综合保障信息系统（二期）{RUN}")).to_be_visible(timeout=30000)
+            expect(page).to_have_url(re.compile(r"status=archived"))
+            expect(page.get_by_test_id("project-archived").first).to_have_text("已归档")
+            shot(page, "A05-10-项目列表-已归档筛选")
+            page.reload()
+            expect(page.locator(".project-query select")).to_have_value("archived")
+            expect(page.get_by_role("link", name=f"打开项目：综合保障信息系统（二期）{RUN}")).to_be_visible(timeout=30000)
         v11()
 
         @step("V23 Q-1 归档项目完全只读：事实、测试任务、知识库关联写入 409 PROJECT_ARCHIVED，读照常（资料页当前未开放路由，只验接口）")
@@ -488,6 +550,62 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             assert admin.raw("GET", f"/projects/{pid}/facts").status_code == 200
             assert admin.raw("GET", f"/projects/{pid}/knowledge-bindings").status_code == 200
         v23()
+
+        @step("V24 PUT 只改已有成员：对非成员 404 MEMBER_NOT_FOUND，不会把人加回来（20 I-3）")
+        def v24():
+            p4 = admin.project(f"PUT 不加人{RUN}", users["admin"])
+            response = admin.raw("PUT", f"/projects/{p4['id']}/members/{users['lisi']}",
+                                 json={"role": "editor", "expectedMembersRevision": admin.members_revision(p4["id"])})
+            assert response.status_code == 404 and response.json()["error"]["code"] == "MEMBER_NOT_FOUND", response.text
+            assert all(item["userId"] != str(users["lisi"]) for item in admin.call("GET", f"/projects/{p4['id']}/members")["items"])
+        v24()
+
+        @step("V25 没有启用的负责人：页头、概述、列表显示“暂无启用的负责人”，不显示停用账号的姓名（19 S-1）")
+        def v25():
+            p5 = admin.project(f"无启用负责人{RUN}", users["owner3"])
+            from app.db import connect
+            with connect() as connection:  # 存量数据：主负责人账号在 A05 之前就已停用
+                connection.execute("update users set status = 'disabled' where id = %s", (users["owner3"],))
+                connection.commit()
+            open_overview(page, p5["id"])
+            expect(page.get_by_test_id("frame-no-owner")).to_have_text("暂无启用的负责人")
+            expect(page.get_by_test_id("frame-owners")).to_have_text("负责人：—")
+            expect(page.get_by_test_id("project-no-owner")).to_be_visible()
+            expect(page.get_by_test_id("members-no-owner")).to_contain_text("请把一位启用的成员设为负责人")
+            shot(page, "A05-11-暂无启用的负责人")
+            page.goto(f"{WEB}/projects?name={RUN}")
+            expect(page.locator(f'[data-testid=project-no-owner][data-project-id="{p5["id"]}"]')).to_be_visible(timeout=30000)
+        v25()
+
+        @step("V26 被移出的人停在概述页和工作台：切回窗口即更新；工作台提示条有［返回项目列表］、空闲时不提下载（20 I-6、L-2，21 S-4）")
+        def v26():
+            p6 = admin.project(f"移出即更新{RUN}", users["admin"])
+            admin.set_role(p6["id"], users["lisi"], "editor")
+            login(page2, f"lisi{RUN}")
+            open_overview(page2, p6["id"])
+            snapshot = admin.call("GET", f"/projects/{p6['id']}/members")
+            admin.call("DELETE", f"/projects/{p6['id']}/members/{users['lisi']}?expectedMembersRevision={snapshot['membersRevision']}")
+            page2.evaluate("window.dispatchEvent(new Event('focus'))")
+            expect(page2.get_by_text("项目不存在或你无权访问。")).to_be_visible(timeout=15000)
+            # 工作台：空闲时（没有未保存内容）被移出，下一次轮询发现
+            doc6 = make_document(admin, p6["id"])
+            admin.set_role(p6["id"], users["lisi"], "editor")
+            page2.goto(f"{WEB}/projects/{p6['id']}/documents/{doc6['id']}")
+            expect(page2.locator(".paper-content")).to_have_attribute("contenteditable", "true", timeout=60000)
+            snapshot = admin.call("GET", f"/projects/{p6['id']}/members")
+            admin.call("DELETE", f"/projects/{p6['id']}/members/{users['lisi']}?expectedMembersRevision={snapshot['membersRevision']}")
+            page2.evaluate("document.dispatchEvent(new Event('visibilitychange'))")  # 可见状态下等同立即轮询
+            banner = page2.get_by_test_id("save-blocked")
+            expect(banner).to_be_visible(timeout=30000)
+            expect(banner).to_contain_text("项目不存在或你无权访问。")
+            expect(banner).not_to_contain_text("无法保存")
+            expect(banner).not_to_contain_text("可以下载")
+            expect(banner.get_by_role("button", name="下载我的修改")).to_have_count(0)
+            expect(banner.get_by_test_id("gone-back")).to_have_text("返回项目列表")
+            shot(page2, "A05-12-工作台-被移出（空闲）")
+            banner.get_by_test_id("gone-back").click()
+            page2.wait_for_url(re.compile(r"/projects$"), timeout=10000)
+        v26()
 
         browser.close()
     failed = [item for item in results if not item[1]]
