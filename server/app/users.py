@@ -466,6 +466,11 @@ def disable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, 
             _check_revision(row["revision"], body.expectedRevision)
             if row["status"] == "active":
                 _reject_last_admin(connection, target, [], disabling=True)
+                # A05 R2 / U-5：该账号是某些项目唯一的启用负责人时拒绝停用（409 LAST_OWNER，列出项目），
+                # 与成员事务同为 IMMEDIATE，“停用 A”与“降级 B”串行，后执行的一方看得到前者的结果。
+                from app.project_members import reject_disabling_sole_owner
+
+                reject_disabling_sole_owner(connection, target)
                 connection.execute(
                     """
                     update users
