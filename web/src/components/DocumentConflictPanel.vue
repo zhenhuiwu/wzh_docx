@@ -39,6 +39,14 @@ const manualOpen = ref<Record<string, string>>({});
 const confirmTheirs = ref<ConflictItem | null>(null);
 /** K1-M1：重新打开后你在正文里补的字（再次冲突时由 latestBySelf 识别），按卡片记 */
 const selfAdded = ref<Record<string, string>>({});
+/** 设计师复验 2 K：合并框里没有补写的字时已提醒过一次（再点「采用合并结果」才按框里的内容提交） */
+const selfAddWaived = ref<Record<string, boolean>>({});
+const quoteOf = (text: string) => `“${text.length > 30 ? `…${text.slice(-30)}` : text}”`;
+function insertSelfAdded(item: ConflictItem) {
+  const extra = selfAdded.value[id(item)];
+  if (!extra) return;
+  manualOpen.value = { ...manualOpen.value, [id(item)]: `${manualOpen.value[id(item)] || ""}${extra}` };
+}
 /** 审查建议 1（A3c）：其他标签页写的“我的版本”没包含在这一版里时，处理前确认（默认手动合并，两份都预填） */
 type OtherTab = { tabId: string; markdown: string; savedAt?: string | null };
 const othersConfirm = ref<Record<string, { choice: ActionChoice; others: OtherTab[] }>>({});
@@ -201,6 +209,13 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
   let retry = false;
   if (choice.action === "use_theirs" && confirmTheirs.value !== item) { confirmTheirs.value = item; return; }
   confirmTheirs.value = null;
+  // 设计师复验 2 K：合并框里没有你刚在正文里补的字——提交会覆盖它们，先提醒一次
+  const added = selfAdded.value[id(item)];
+  if (choice.action === "manual" && added && !(markdown ?? "").includes(added) && !selfAddWaived.value[id(item)]) {
+    selfAddWaived.value = { ...selfAddWaived.value, [id(item)]: true };
+    cardNotice.value = { ...cardNotice.value, [id(item)]: `合并框里没有你刚在正文里补的${quoteOf(added)}。再点「采用合并结果」会覆盖这些字；要保留，请点「插入我刚补的内容」。` };
+    return;
+  }
   const request: ResolveRequestItem = { itemIndex: item.itemIndex, action: choice.action };
   if (choice.action === "keep_mine" || choice.action === "manual" || choice.action === "keep_both") request.theirsRevision = item.theirs?.revision ?? null;
   if (choice.action === "manual") request.markdown = markdown ?? "";
@@ -297,9 +312,14 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
             const quoted = extra ? `（“${extra.length > 30 ? `…${extra.slice(-30)}` : extra}”）` : "";
             // 合并框里还是旧的正文版本时换成当前版本，补的字不丢
             const open = manualOpen.value[id(item)];
-            if (open !== undefined && oldTheirs && open.includes(oldTheirs)) manualOpen.value = { ...manualOpen.value, [id(item)]: open.replace(oldTheirs, freshTheirs) };
+            // 设计师复验 2 K：只有合并框里还原样含旧的正文版本时才替换；用户改过就不动，如实说明
+            const replaced = open !== undefined && Boolean(oldTheirs) && open.includes(oldTheirs);
+            if (replaced) manualOpen.value = { ...manualOpen.value, [id(item)]: open!.replace(oldTheirs, freshTheirs) };
+            if (extra) selfAddWaived.value = { ...selfAddWaived.value, [id(item)]: false };
             const text = choice.action === "keep_both"
               ? `你重新打开后在正文里又改了这一段${quoted}。卡片上方已换成正文当前版本（含你刚补的内容），再点「两段都保留」会把它和“我的版本”都留在正文里。`
+              : choice.action === "manual" && open !== undefined && !replaced
+                ? `你重新打开后在正文里又改了这一段${quoted}。合并框你已改过，没有自动替换；如需保留这些字，请补进合并框，或点「插入我刚补的内容」。`
               : choice.action === "manual"
                 ? `你重新打开后在正文里又改了这一段${quoted}。合并框里的正文版本已换成当前版本（含你刚补的内容），请检查后再点「采用合并结果」。`
                 : `你重新打开后在正文里又改了这一段${quoted}。再点「保留我的」，正文这一段会换成下面“我的版本”，你刚补的这些字会被覆盖；两边都要留下，请用「两段都保留」或「手动合并」。`;
@@ -425,6 +445,7 @@ async function downloadCopy(item: ConflictItem) {
             <span v-if="!manualOpen[id(item)]?.trim()" :id="`manual-hint-${id(item)}`" class="field-error" role="alert">内容不能为空；如不需要这段内容，请使用对方的版本。</span>
             <div class="row">
               <button type="button" class="ghost sm" @click="insertMine(item)">插入我的版本</button>
+              <button v-if="selfAdded[id(item)] && !(manualOpen[id(item)] || '').includes(selfAdded[id(item)])" type="button" class="ghost sm" data-testid="insert-self-added" @click="insertSelfAdded(item)">插入我刚补的内容</button>
               <button type="button" class="ghost sm" @click="delete manualOpen[id(item)]">取消</button>
               <button type="button" class="primary sm" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '采用合并结果' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
             </div>

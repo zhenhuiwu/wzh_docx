@@ -1318,7 +1318,32 @@ def s_capped_count_no_reload(ctx: Run, page):
     return {}
 
 
-SCENARIOS += [s_capped_count_no_reload, s_capped_keep_mine, s_capped_reload_restore, s_two_tabs_same_paragraph]
+@scenario("K 重开补字后 合并框改过 不自动替换 提交前提醒 插入补字")
+def s_reopen_self_edit_manual_edited(ctx: Run, page):
+    """设计师复验 2 K：用户改过合并框后再次冲突，不能说“已换成当前版本”、不能静默覆盖补写的字。"""
+    doc_id = reopen_self_edit_setup(ctx, page, "方案C重开补字合并框改过")
+    card(page).get_by_role("button", name="手动合并").click()
+    area = card(page).locator("textarea")
+    area.fill("第3段：我自己改写的合并结果〔改写〕")
+    card(page).get_by_role("button", name="采用合并结果").click()
+    notice = card(page).locator(".ccard-notice")
+    expect(notice).to_contain_text("合并框你已改过，没有自动替换", timeout=20000)
+    assert area.input_value() == "第3段：我自己改写的合并结果〔改写〕", area.input_value()
+    card(page).get_by_role("button", name="采用合并结果").click()
+    expect(notice).to_contain_text("合并框里没有你刚在正文里补的", timeout=10000)
+    assert ctx.items(doc_id), "提醒前就提交了"
+    card(page).get_by_test_id("insert-self-added").click()
+    assert "〔后补XY〕" in area.input_value()
+    card(page).get_by_role("button", name="采用合并结果").click()
+    deadline = time.time() + 20
+    while ctx.items(doc_id) and time.time() < deadline:
+        time.sleep(0.5)
+    md = ctx.server(doc_id)["markdownContent"]
+    assert not ctx.items(doc_id) and "〔改写〕" in md and "〔后补XY〕" in md, md[:400]
+    return {}
+
+
+SCENARIOS += [s_reopen_self_edit_manual_edited, s_capped_count_no_reload, s_capped_keep_mine, s_capped_reload_restore, s_two_tabs_same_paragraph]
 
 
 def main() -> int:
