@@ -21,6 +21,8 @@ const props = defineProps<{
   beforeResolve: () => Promise<boolean>;
   /** 方案 C：冻结区里正在写的“我的版本”。 */
   liveMine?: Record<string, LiveMine>;
+  /** 测试工程师 N9 / N11：本标签还有冲突内容没存到服务器（saving：正在存；limited：副本已满存不进） */
+  localPending?: "" | "saving" | "limited";
 }>();
 const emit = defineEmits<{ close: []; resolved: [result: ResolveResult]; count: [n: number]; locate: [item: ConflictItem]; adopt: [key: string, latest: MineLatest] }>();
 
@@ -190,7 +192,8 @@ async function missingOtherTabs(item: ConflictItem): Promise<OtherTab[]> {
   const ours = mineText(item);
   return others.filter(other => {
     if (other.tabId === tabNow) return false;
-    const extra = addedText(item.mine?.markdown || "", other.markdown);
+    // 测试工程师 N9：冲突最初那份 mine 可能就是另一个标签页（先 409 的那个）写的，按它比会漏掉那个标签的字——按冲突基准比
+    const extra = addedText(item.base?.markdown ?? item.mine?.markdown ?? "", other.markdown);
     return Boolean(extra) && !ours.includes(extra);
   });
 }
@@ -410,7 +413,9 @@ async function downloadCopy(item: ConflictItem) {
     </nav>
 
     <div class="pbody">
-      <p class="pnote" role="note"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg><span>冲突内容已单独保存在服务器，不会丢失。其他段落的修改已正常保存。</span></p>
+      <p v-if="localPending === 'limited'" class="pnote warn" role="note" data-testid="conflict-panel-note">这处冲突的副本已满，这个标签页里有内容没能存到服务器，暂时保留在本机；请先处理冲突（处理时会一并带上），处理前不要清除浏览器数据。</p>
+      <p v-else-if="localPending === 'saving'" class="pnote warn" role="note" data-testid="conflict-panel-note">这个标签页里的冲突内容正在存到服务器（已先保存在本机），存好前请不要关闭这个标签页。</p>
+      <p v-else class="pnote" role="note" data-testid="conflict-panel-note"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" /></svg><span>冲突内容已单独保存在服务器，不会丢失。其他段落的修改已正常保存。</span></p>
       <template v-if="phase === 'loading'"><div class="ccard skeleton" aria-hidden="true" /><div class="ccard skeleton" aria-hidden="true" /><p class="sr-only" role="status">正在加载冲突…</p></template>
       <div v-else-if="phase === 'error'" class="conflict-empty"><p role="alert">冲突列表加载失败：{{ loadError }}</p><button type="button" class="ghost sm" @click="load">重试</button></div>
       <p v-else-if="empty" class="conflict-empty" role="status">没有待处理的冲突</p>
@@ -517,6 +522,7 @@ async function downloadCopy(item: ConflictItem) {
 .tabs button:focus-visible { outline:var(--focus-outline); outline-offset:2px; }
 .pbody { flex:1; min-height:0; overflow:auto; display:grid; align-content:start; gap:var(--space-4); padding:var(--space-4); }
 .pnote { display:flex; gap:var(--space-2); margin:0; padding:10px var(--space-3); border-radius:var(--radius-control); background:var(--gray-50); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.pnote.warn { background:var(--warning-50, #fff7e6); color:var(--text-primary); }
 .pnote .ico { width:var(--icon-sm); height:var(--icon-sm); flex:none; margin-top:2px; color:var(--success-600); }
 .conflict-empty { margin:0; color:var(--text-tertiary); text-align:center; padding:var(--space-5) 0; }
 .ccard { border:1px solid var(--border-default); border-radius:var(--radius-sheet); overflow:hidden; background:var(--bg-surface); }

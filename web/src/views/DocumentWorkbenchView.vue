@@ -2964,6 +2964,16 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       if (draftRestoring && typeof details.conflictId === "string") restoreConflictIds.value = [...new Set([...restoreConflictIds.value, details.conflictId])];
       // 方案 C：编辑区里的冲突段冻结（不重绘、不动光标与组字），正文这一段用服务器版本代替后按原基准重新提交其余部分
       const frozenKeys = fromEditor ? freezeConflicts(conflicts) : [];
+      // 测试工程师 N9：本标签冲突前写的字要按本标签单独存一份快照（409 里的原始 mine 不带标签页，之后别的标签页重交会成为“最新一份”把它盖住）；
+      // 在服务器确认存下之前，冻结段算“未保存”，立刻写进本机草稿
+      for (const key of frozenKeys) {
+        const entry = frozen.value[key];
+        if (entry && !entry.resolved && entry.savedTab !== browserTab && entry.mine === entry.saved) entry.saved = "\u0000";
+      }
+      if (frozenKeys.length && frozenPending.value) {
+        persistLocalDraft();
+        scheduleSnapshot(0);
+      }
       const allFrozen = conflicts.length > 0 && frozenKeys.length === conflicts.length;
       const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
       unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now(), item: loose } : null;
@@ -3194,6 +3204,12 @@ const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry =>
 }]).concat(Object.entries(limitedMine.value).filter(([key]) => !frozen.value[key] || frozen.value[key].resolved).map(([key, edit]) => [key, {
   markdown: edit.markdown, saved: false, savedAt: null, failing: false, original: "", snapshotId: null, otherTab: false, limited: true, detached: true,
 }]))));
+/** 测试工程师 N9 / N11：这个标签页里还有没存到服务器的冲突内容（正在存 / 副本已满存不进）时，面板顶部不说“不会丢失” */
+const conflictLocalPending = computed<"" | "saving" | "limited">(() => {
+  const values = Object.values(liveMine.value) as { saved: boolean; limited?: boolean }[];
+  if (values.some(value => value.limited)) return "limited";
+  return values.some(value => !value.saved) ? "saving" : "";
+});
 /** 审查员 M1：冲突面板发现服务器上有更新的一份“我的版本”（另一个标签页 / 本标签正文保存时追加）→ 以它为准，不再带旧 snapshotId。冻结区有没存上的字时不接（那些字会先存成更新的一份）。 */
 function adoptLatest(key: string, latest: MineLatest) {
   const entry = frozen.value[key];
@@ -3834,7 +3850,7 @@ onUnmounted(() => {
         <!-- 第 7 步：冲突面板 -->
         <DocumentConflictPanel v-if="mode === 'edit' && conflictOpen" ref="conflictPanel" :key="`${document.id}:${conflictTab}`" :document-id="document.id" :document-name="document.name" :revision="document.revision"
           :can-view-members="conflictSummary?.allOpen != null" :can-resolve="!readonly" :before-resolve="beforeResolve"
-          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts" :live-mine="liveMine"
+          :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts" :live-mine="liveMine" :local-pending="conflictLocalPending"
           @close="conflictOpen = false" @resolved="acceptResolution" @adopt="adoptLatest" @count="onConflictCount" @locate="locateConflict" />
         <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">

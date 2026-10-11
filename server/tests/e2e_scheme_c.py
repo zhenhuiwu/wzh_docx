@@ -1476,5 +1476,62 @@ def s_format_whole_copy(ctx: Run, page):
 SCENARIOS += [s_format_whole_copy]
 
 
+def _snapshot_rows(doc_id: str) -> list[dict]:
+    from app.db import connect
+    with connect() as connection:
+        got = connection.execute(
+            "SELECT s.tab_id, s.source, s.markdown FROM document_conflict_mine_snapshots s JOIN document_conflicts k ON k.id=s.conflict_id "
+            "WHERE k.document_id=%s ORDER BY s.rowid", (doc_id,)).fetchall()
+    return [dict(row) for row in got]
+
+
+@scenario("N9 两标签同段 先409的标签不续写直接关掉 冲突前的字不丢")
+def s_two_tabs_first_409_closes(ctx: Run, page):
+    """测试工程师 N9：同一账号两个标签改第3段（甲【甲写】、乙【乙写】都未保存），张工改了第3段；乙先 Ctrl+S（409 冻结），甲再 Ctrl+S。
+    乙不再打字直接关掉：【乙写】要按乙的标签存成一份快照（存好前在本机草稿里），面板在存好前不说“不会丢失”；甲处理“保留我的”时走 A3c 确认。"""
+    doc_id = ctx.doc(page, "方案C两标签先409不续写")
+    tab_b = page.context.new_page()
+    base.open_pages.append(tab_b)
+    ctx.open(tab_b, doc_id)
+    base.type_after(page, "第3段", "【甲写】")
+    base.type_after(tab_b, "第3段", "【乙写】")
+    ctx.zhang_edit(doc_id, P3, P3_THEIRS)
+    tab_b.bring_to_front()
+    tab_b.keyboard.press("Control+s")
+    expect(tab_b.locator(".paper-content [data-frozen]").first).to_be_visible(timeout=20000)
+    in_draft = tab_b.evaluate("t => Object.values(localStorage).some(v => v.includes(t))", "【乙写】")
+    page.bring_to_front()
+    page.keyboard.press("Control+s")
+    deadline = time.time() + 20
+    while time.time() < deadline and not any("【乙写】" in (row["markdown"] or "") and row["tab_id"] for row in _snapshot_rows(doc_id)):
+        time.sleep(0.5)
+    rows = _snapshot_rows(doc_id)
+    assert any("【乙写】" in (row["markdown"] or "") and row["tab_id"] for row in rows), f"乙的字没按标签存成快照：{rows}"
+    tab_b.bring_to_front()
+    open_panel(tab_b)
+    expect(tab_b.get_by_test_id("conflict-panel-note")).to_contain_text("不会丢失", timeout=20000)
+    tab_b.close()
+    page.bring_to_front()
+    page.wait_for_timeout(1500)
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    confirm = card(page).get_by_test_id("others-confirm")
+    expect(confirm).to_be_visible(timeout=20000)
+    expect(confirm).to_contain_text("【乙写】")
+    confirm.get_by_role("button", name="手动合并（两份都放进去）").click()
+    value = card(page).locator("textarea").input_value()
+    assert "【甲写】" in value and "【乙写】" in value, value
+    card(page).get_by_role("button", name="采用合并结果").click()
+    deadline = time.time() + 20
+    while ctx.items(doc_id) and time.time() < deadline:
+        time.sleep(0.5)
+    md = ctx.server(doc_id)["markdownContent"]
+    assert "【甲写】" in md and "【乙写】" in md, md[:400]
+    return {"b_draft_before_snapshot": in_draft, "rows": len(rows)}
+
+
+SCENARIOS += [s_two_tabs_first_409_closes]
+
+
 if __name__ == "__main__":
     sys.exit(main())
