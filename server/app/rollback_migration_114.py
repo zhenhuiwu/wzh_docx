@@ -8,7 +8,8 @@
 
 回滚做两件事（同一事务）：删掉 document_objects.deleted_after_ref 列、删掉 schema_migrations 里的 114 记录。
 注意：
-- 已执行迁移 115（冲突快照表）的库，要退到 114 之前须先运行 rollback_migration_115，再运行本脚本（顺序 115 → 114）；
+- 回滚必须从最新的迁移倒着来（… → 116 → 115 → 114）。库里还有 114 之后的迁移（115、116 或更新的，
+  看 schema_migrations 记录和这些迁移建出的表/列）时本脚本拒绝执行（退出码 2），提示先回滚哪一个；
   只回滚 114 而保留 115 时，115 之后的程序仍会启动时重新执行 114。
 - 该列记录“删除时紧挨在前面的对象”，回滚后这些位置信息丢失；已删除段落“恢复为新段落”回退到章节路径 + 序号定位（与 114 之前一致）。
 - 备份文件与库同目录，名为 <库名>.before-rollback-114-<时间>.db；需要撤销回滚时停服务后用它覆盖原库即可。
@@ -54,6 +55,51 @@ def _state(connection: sqlite3.Connection) -> tuple[bool, bool]:
     return recorded, COLUMN in columns
 
 
+# 已知迁移留下的结构（schema_migrations 记录被手工删掉时仍能认出来）。新增可回滚迁移时在这里登记。
+LATER_ARTIFACTS: dict[int, tuple[tuple[str, ...], ...]] = {
+    115: (("table", "document_conflict_mine_snapshots"),),
+    116: (("table", "project_member_events"), ("column", "projects", "members_revision")),
+}
+
+
+def later_migrations(connection: sqlite3.Connection, number: int) -> list[str]:
+    """库里仍在的、编号大于 number 的迁移（倒序：最新的在前）。回滚 number 之前必须先把它们依次回滚。
+
+    两种来源取并集：schema_migrations 里编号更大的记录（通用，也覆盖本分支还不知道的更新迁移），
+    以及 LATER_ARTIFACTS 登记的表/列（记录被删但结构还在的情况）。"""
+    found: dict[int, str] = {}
+    if connection.execute("select 1 from sqlite_master where type = 'table' and name = 'schema_migrations'").fetchone():
+        for (version,) in connection.execute("select version from schema_migrations"):
+            prefix = str(version).split("_", 1)[0]
+            if prefix.isdigit() and int(prefix) > number:
+                found[int(prefix)] = str(version)
+    for later, artifacts in LATER_ARTIFACTS.items():
+        if later <= number or later in found:
+            continue
+        for artifact in artifacts:
+            if artifact[0] == "table":
+                present = connection.execute(
+                    "select 1 from sqlite_master where type = 'table' and name = ?", (artifact[1],)).fetchone() is not None
+            else:
+                present = artifact[2] in {row[1] for row in connection.execute(f"pragma table_info({artifact[1]})")}
+            if present:
+                found[later] = f"{later}（{artifact[-1]}）"
+                break
+    return [found[key] for key in sorted(found, reverse=True)]
+
+
+def refuse_if_later(connection: sqlite3.Connection, number: int) -> bool:
+    """有更新的迁移还在时打印原因并返回 True（调用方以退出码 2 结束，库不变）。"""
+    later = later_migrations(connection, number)
+    if not later:
+        return False
+    newest = later[0].split("_", 1)[0].split("（", 1)[0]
+    order = " → ".join([item.split("_", 1)[0].split("（", 1)[0] for item in later] + [str(number)])
+    print(f"不能回滚迁移 {number}：更新的迁移还在（{'、'.join(later)}）。"
+          f"请先运行 python -m app.rollback_migration_{newest}，按 {order} 的顺序依次回滚。", file=sys.stderr)
+    return True
+
+
 def _in_use(path: Path, connection: sqlite3.Connection) -> str:
     """返回占用原因；空串表示没发现服务在用这个库。"""
     if service_lock.service_running(path):
@@ -85,12 +131,8 @@ def rollback(path: Path, apply: bool) -> int:
         filled = connection.execute(
             f"select count(*) from document_objects where {COLUMN} is not null"
         ).fetchone()[0] if has_column else 0
-        # 测试工程师：115（冲突快照表）还在时不能直接回滚 114——旧程序不认识 115，必须先回滚 115
-        later = connection.execute(
-            "select 1 from sqlite_master where type = 'table' and name = 'document_conflict_mine_snapshots'").fetchone() is not None
-        if later:
-            print("迁移 115（document_conflict_mine_snapshots 表）还在。请先运行 python -m app.rollback_migration_115 回滚 115，再回滚 114。",
-                  file=sys.stderr)
+        # 测试工程师：115/116（或更新的迁移）还在时不能直接回滚 114——旧程序不认识它们，必须倒序回滚
+        if refuse_if_later(connection, 114):
             return 2
         print(f"数据库：{path}")
         print(f"迁移记录：{'有' if recorded else '无'}；{COLUMN} 列：{'有' if has_column else '无'}；其中有值的已删除对象 {filled} 个（回滚后丢失）。")

@@ -15,7 +15,8 @@
 - **成员变更审计会丢失**。回滚前脚本先把 project_member_events 整表导出为 CSV（与库同目录，
   <库名>.project_member_events-116-<时间>.csv），再整库备份；成员关系本身（project_members 的 project_id/user_id/role/revision）不受影响。
 - 回滚后成员“加入时间、最近调整人”丢失；116 之前的程序用项目 revision 校验成员修改，不受影响。
-- 回滚顺序：116 → 115 → 114（要退到 115 之前时先回滚 116，再依次运行 rollback_migration_115、rollback_migration_114）。
+- 回滚顺序：… → 117 → 116 → 115 → 114（要退到 115 之前时先回滚 116，再依次运行 rollback_migration_115、rollback_migration_114）。
+  库里还有更新的迁移（schema_migrations 里编号大于 116 的记录，如 A06 的 117）时本脚本拒绝执行（退出码 2）。
 - 备份文件与库同目录，名为 <库名>.before-rollback-116-<时间>.db；需要撤销回滚时停服务后用它覆盖原库即可。
 - **回滚后必须用 116 之前的旧版本程序启动服务**，否则启动时会自动重新执行 116（列和表重新建出来，审计为空、成员时间为 NULL）。
 - 服务在运行时脚本拒绝回滚（退出码 2）；能否检测到运行中的服务与 rollback_migration_114 相同（见该文件说明）。
@@ -30,7 +31,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.rollback_migration_114 import _database_path, _in_use
+from app.rollback_migration_114 import _database_path, _in_use, refuse_if_later
 
 VERSION = "116_project_members_v2"
 TABLE = "project_member_events"
@@ -85,6 +86,8 @@ def rollback(path: Path, apply: bool) -> int:
         if not (state["recorded"] or state["table"] or state["index"] or state["project_columns"] or state["member_columns"]):
             print("迁移 116 未执行过，不需要回滚。")
             return 0
+        if refuse_if_later(connection, 116):
+            return 2
         events = connection.execute(f"select count(*) from {TABLE}").fetchone()[0] if state["table"] else 0
         dated = connection.execute(
             "select count(*) from project_members where created_at is not null or updated_at is not null"

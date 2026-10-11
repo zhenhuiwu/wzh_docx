@@ -100,3 +100,24 @@ def test_migration_116_on_a_115_database_keeps_old_rows(tmp_path, monkeypatch):
             assert connection.execute(f"select count(*) from {TABLE}").fetchone()[0] == 0
     finally:
         config.get_settings.cache_clear()
+
+
+def test_rollback_116_refuses_while_a_newer_migration_is_recorded(tmp_path, monkeypatch, capsys):
+    """顺序回滚同一套路：schema_migrations 里有更新的迁移（如 A06 的 117）时拒绝回滚 116，库不变。"""
+    from app import config
+    from app.db import migrate
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        with sqlite3.connect(path) as connection:
+            connection.execute("insert into schema_migrations(version) values ('117_future_probe')")
+        assert rollback(path, apply=True) == 2
+        err = capsys.readouterr().err
+        assert "117_future_probe" in err and "rollback_migration_117" in err and "117 → 116" in err
+        assert _recorded(path) == 1
+        assert not list(tmp_path.glob("app.db.before-rollback-116-*.db"))
+    finally:
+        config.get_settings.cache_clear()

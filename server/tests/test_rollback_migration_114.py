@@ -6,13 +6,15 @@ from app.rollback_migration_114 import COLUMN, VERSION, rollback
 
 
 def _migrate():
-    """迁移到最新后先回滚 115（114 回滚要求 115 已回滚）。"""
+    """迁移到最新后倒序回滚 116、115（114 回滚要求更新的迁移都已回滚）。"""
     from app.db import migrate
     from app.rollback_migration_115 import rollback as rollback_115
+    from app.rollback_migration_116 import rollback as rollback_116
 
     migrate()
     from app.rollback_migration_114 import _database_path
 
+    assert rollback_116(_database_path(), apply=True) == 0
     assert rollback_115(_database_path(), apply=True) == 0
 
 
@@ -180,8 +182,37 @@ def test_rollback_114_refuses_while_115_present(tmp_path, monkeypatch, capsys):
     config.get_settings.cache_clear()
     try:
         migrate()
+        from app.rollback_migration_116 import rollback as rollback_116
+
+        assert rollback_116(path, apply=True) == 0
         assert rollback(path, apply=True) == 2
         assert "rollback_migration_115" in capsys.readouterr().err
+        assert COLUMN in _columns(path) and _recorded(path) == 1
+        assert not list(tmp_path.glob("app.db.before-rollback-114-*.db"))
+    finally:
+        config.get_settings.cache_clear()
+
+
+def test_rollback_114_refuses_while_115_or_116_present(tmp_path, monkeypatch, capsys):
+    """测试 20 M-1：115 与 116 都在时拒绝并提示从 116 开始（116 → 115 → 114）；
+    115 的记录和表被手工去掉、只剩 116 时（mig116.sh C3 的中间态）也拒绝，提示先回滚 116。"""
+    from app import config
+    from app.db import migrate
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        assert rollback(path, apply=True) == 2
+        err = capsys.readouterr().err
+        assert "rollback_migration_116" in err and "116 → 115 → 114" in err
+        with sqlite3.connect(path) as connection:
+            connection.execute("drop table document_conflict_mine_snapshots")
+            connection.execute("delete from schema_migrations where version like '115%'")
+        assert rollback(path, apply=False) == 2
+        err = capsys.readouterr().err
+        assert "rollback_migration_116" in err and "116 → 114" in err
         assert COLUMN in _columns(path) and _recorded(path) == 1
         assert not list(tmp_path.glob("app.db.before-rollback-114-*.db"))
     finally:

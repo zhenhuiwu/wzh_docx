@@ -10,7 +10,8 @@
 注意：
 - 快照表里是“冲突后继续写的内容”。回滚后未处理冲突只剩冲突发生时的原始“我的版本”（payload_json 不受影响），
   续写部分只在备份库里。回滚前建议让相关成员先处理完未处理的冲突；检查模式会列出仍未处理、带续写快照的条目数。
-- 回滚顺序：115 → 114（要退到 114 之前时先回滚 115，再运行 rollback_migration_114）。
+- 回滚顺序：116 → 115 → 114。库里还有 116（或更新的迁移）时本脚本拒绝执行（退出码 2），提示先回滚 116；
+  要退到 114 之前时先回滚 115，再运行 rollback_migration_114。
 - 备份文件与库同目录，名为 <库名>.before-rollback-115-<时间>.db；需要撤销回滚时停服务后用它覆盖原库即可。
 - **回滚后必须用 115 之前的旧版本程序启动服务**，否则启动时会自动重新执行 115（表重新建出来但为空）。
 - 服务在运行时脚本拒绝回滚（退出码 2）；能否检测到运行中的服务与 rollback_migration_114 相同（见该文件说明）。
@@ -24,7 +25,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.rollback_migration_114 import _database_path, _in_use
+from app.rollback_migration_114 import _database_path, _in_use, refuse_if_later
 
 VERSION = "115_document_conflict_mine_snapshots"
 TABLE = "document_conflict_mine_snapshots"
@@ -52,6 +53,9 @@ def rollback(path: Path, apply: bool) -> int:
         if not recorded and not has_table:
             print("迁移 115 未执行过，不需要回滚。")
             return 0
+        # 测试 20 M-1：116（或更新的迁移）还在时拒绝，避免库停在“116 在、115 不在”的中间态
+        if refuse_if_later(connection, 115):
+            return 2
         total = open_items = 0
         if has_table:
             total = connection.execute(f"select count(*) from {TABLE}").fetchone()[0]
