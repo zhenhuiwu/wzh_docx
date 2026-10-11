@@ -205,6 +205,8 @@ function mergeWithOthers(item: ConflictItem) {
   const rest = pending.others.map(other => {
     let same = 0;
     while (same < ours.length && same < other.markdown.length && ours[same] === other.markdown[same]) same += 1;
+    // 不从括号 / 引号中间切开（“【乙写】”不能变成“乙写】”）
+    while (same > 0 && "（(【〔[《〈「『“‘{".includes(other.markdown[same - 1])) same -= 1;
     return other.markdown.slice(same).trim();
   }).filter(Boolean);
   manualOpen.value = { ...manualOpen.value, [id(item)]: [ours, ...rest].join("\n\n") };
