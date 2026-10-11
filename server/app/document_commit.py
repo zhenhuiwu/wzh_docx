@@ -302,11 +302,12 @@ def store_conflict(connection, *, document_id: UUID, actor: UUID, base_revision:
                            resolved_by=%s WHERE conflict_id=%s AND object_ref=%s AND status='open'""",
                         (actor, row["conflict_id"], ref))
                     _rollup(connection, row["conflict_id"])
-        if frozen:
-            _append_frozen(connection, actor, rhash, frozen)
+        limited = _append_frozen(connection, actor, rhash, frozen) if frozen else []
     error = conflict_error(connection, conflict_id)
     if frozen:
         error.details["frozenByConflict"] = sorted({cid for cid, _index, _mine in frozen})
+    if limited:
+        error.details["snapshotLimited"] = limited
     return error
 
 
@@ -470,7 +471,9 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                     if connection.in_transaction:
                         connection.commit()
                     with write_transaction(connection):
-                        _append_frozen(connection, actor, rhash, frozen)
+                        limited = _append_frozen(connection, actor, rhash, frozen)
+                    if limited:
+                        frozen_extra = {**frozen_extra, "snapshotLimited": limited}
                 return {"revision": revision, "merged": merged_flag, "changeId": None, "noop": True, **frozen_extra,
                         **whitespace_notes,
                         "changedBy": _changed_by(connection, document_id, base_revision, actor), "markdownContent": theirs}
@@ -505,8 +508,10 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                             "changedBy": _changed_by(connection, document_id, base_revision, actor)}
                     data.update(whitespace_notes)
                     if frozen:
-                        _append_frozen(connection, actor, rhash, frozen)
+                        limited = _append_frozen(connection, actor, rhash, frozen)
                         data.update(frozen_extra)
+                        if limited:
+                            data["snapshotLimited"] = limited
                     connection.execute("UPDATE document_changes SET result_json=%s WHERE id=%s",
                                        (json.dumps(data, ensure_ascii=False), change_id))
             except _Retry:
@@ -521,11 +526,34 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
     raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
 
 
-def _append_frozen(connection, actor, rhash: str, frozen: list[tuple[str, int, str]]) -> None:
-    """冻结段里提交上来的“我的”内容追加为快照（原冲突不变、不新建冲突）。"""
+def _snapshot_limit_hit(connection, conflict_id, item_index: int, nbytes: int) -> str | None:
+    """快照份数 / 总大小上限（/mine 与 resubmit 共用）：超了返回原因（"count" / "bytes"），否则 None。"""
+    if connection.execute(
+            "SELECT COUNT(*) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s",
+            (str(conflict_id), item_index)).fetchone()["n"] >= MAX_SNAPSHOTS_PER_ITEM:
+        return "count"
+    used = connection.execute(
+        "SELECT COALESCE(SUM(LENGTH(CAST(markdown AS BLOB))), 0) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s",
+        (str(conflict_id),)).fetchone()["n"]
+    return "bytes" if used + nbytes > MAX_SNAPSHOT_BYTES_PER_CONFLICT else None
+
+
+def _append_frozen(connection, actor, rhash: str, frozen: list[tuple[str, int, str]]) -> list[dict]:
+    """冻结段里提交上来的“我的”内容追加为快照（原冲突不变、不新建冲突）。
+    审查建议 4：同样受 500 份 / 20MB 上限约束（之前从旧修订反复重交可绕过）；超限的不追加（正文其余部分照常保存），
+    返回 [{conflictId, itemIndex}] 由调用方放进响应 snapshotLimited，前端提示先处理冲突。"""
+    limited: list[dict] = []
     for cid, index, markdown in frozen:
-        append_snapshot(connection, conflict_id=cid, item_index=index, actor=actor, markdown=markdown,
-                        key=f"resubmit:{rhash[:48]}:{index}", source="resubmit")
+        key = f"resubmit:{rhash[:48]}:{index}"
+        replay = connection.execute("SELECT 1 FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND client_save_key=%s",
+                                    (str(cid), key)).fetchone()
+        latest = _latest_snapshots(connection, cid).get(index)
+        if replay is None and not (latest is not None and latest["markdown"] == markdown) \
+                and _snapshot_limit_hit(connection, cid, index, len(markdown.encode("utf-8"))):
+            limited.append({"conflictId": str(cid), "itemIndex": index})
+            continue
+        append_snapshot(connection, conflict_id=cid, item_index=index, actor=actor, markdown=markdown, key=key, source="resubmit")
+    return limited
 
 
 def _whole_item(index: int, reason: str, mine_md: str, theirs_md: str, base_md: str) -> dict:
@@ -1073,18 +1101,17 @@ def save_mine_snapshot(request: Request, document_id: str, conflict_id: str, bod
             if stale:
                 snapshot = {**(_latest_snapshots(connection, conflict["id"]).get(body.itemIndex) or {}), "stale": True}
             else:
-                if replayed is None and connection.execute(
-                        "SELECT COUNT(*) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND item_index=%s",
-                        (str(conflict["id"]), body.itemIndex)).fetchone()["n"] >= MAX_SNAPSHOTS_PER_ITEM:
+                hit = _snapshot_limit_hit(connection, conflict["id"], body.itemIndex, len(body.markdown.encode("utf-8"))) \
+                    if replayed is None else None
+                if hit == "count":
                     raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已保存太多份，请先在冲突面板处理。",
                                    details={"itemIndex": body.itemIndex})
-                if replayed is None:
+                if hit == "bytes":
                     used = connection.execute(
                         "SELECT COALESCE(SUM(LENGTH(CAST(markdown AS BLOB))), 0) AS n FROM document_conflict_mine_snapshots WHERE conflict_id=%s",
                         (str(conflict["id"]),)).fetchone()["n"]
-                    if used + len(body.markdown.encode("utf-8")) > MAX_SNAPSHOT_BYTES_PER_CONFLICT:
-                        raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已超过总大小上限（20MB），请先在冲突面板处理。",
-                                       details={"itemIndex": body.itemIndex, "totalBytes": int(used)})
+                    raise AppError(422, "SNAPSHOT_LIMIT", "这处冲突的副本已超过总大小上限（20MB），请先在冲突面板处理。",
+                                   details={"itemIndex": body.itemIndex, "totalBytes": int(used)})
                 snapshot = append_snapshot(connection, conflict_id=conflict["id"], item_index=body.itemIndex,
                                            actor=principal.user_id, markdown=body.markdown, key=body.clientSaveKey,
                                            tab_id=body.tabId, seq=body.seq)

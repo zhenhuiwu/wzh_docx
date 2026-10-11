@@ -321,7 +321,7 @@ def commit_derived(connection, session, did: UUID, base: DocumentRow, updated: s
                         after_write=after_write, template_update=template_update)
 
 
-WHITESPACE_NOTES = ("whitespaceDropped", "whitespaceDeleted", "theirsWhitespaceOverridden", "frozenByConflict")
+WHITESPACE_NOTES = ("whitespaceDropped", "whitespaceDeleted", "theirsWhitespaceOverridden", "frozenByConflict", "snapshotLimited")
 
 
 def _merged_result(request: Request, connection, session, did: UUID, data: dict) -> dict:

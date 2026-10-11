@@ -253,7 +253,7 @@ export async function insertDocumentSection(id: string, expectedRevision: number
 
 // ---- 阶段2 S5：合并保存与冲突（01 §4.3、§4.4） ----
 export interface Person { id: string; name: string }
-export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; frozenByConflict?: string[]; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
+export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; snapshotLimited?: { conflictId: string; itemIndex: number }[]; frozenByConflict?: string[]; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
 export interface ConflictLocation { headingPath?: string[]; ordinal?: number | null; kind?: string; label?: string | null }
 export interface ConflictSide { markdown?: string | null; revision?: number | null; deleted?: boolean; updatedBy?: Person | null; updatedAt?: string | null; deletedBy?: Person | null; deletedAt?: string | null; /** K1-M1：这一段最近一次是冲突作者本人改的（如重新打开后在正文里改了） */ latestBySelf?: boolean }
 export interface ConflictItem {

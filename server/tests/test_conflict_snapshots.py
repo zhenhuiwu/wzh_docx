@@ -319,3 +319,41 @@ def test_snapshot_total_bytes_cap_per_conflict(team, monkeypatch):
     assert "20MB" in over.json()["error"]["message"]
     # 同键重放不受上限影响
     assert _mine(client, did, cid, 0, "一二三四五", "cap-key-0001").status_code == 200
+
+
+def _snapshot_rows(cid):
+    with connect() as connection:
+        row = connection.execute("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(markdown AS BLOB))), 0) AS b "
+                                 "FROM document_conflict_mine_snapshots WHERE conflict_id=%s", (cid,)).fetchone()
+        return int(row["n"]), int(row["b"])
+
+
+def test_resubmit_frozen_snapshots_count_toward_size_and_count_caps(team, monkeypatch):
+    """审查建议 4：从旧修订重交冻结段（resubmit → _append_frozen）也计入 20MB / 500 份上限，不能绕过；
+    超限时冻结段不再追加快照，正文其余修改照常保存，响应里 snapshotLimited 标出是哪一处。"""
+    client, did, _ = team
+    details = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})
+    cid = details["conflictId"]
+    start = current(client, did)
+    first = start["markdownContent"].replace("A2。", "B2。续写一。")
+    ok = save(client, did, 1, first, _as(client, "editor2"), key="cap-resubmit-01")
+    assert ok.status_code == 200, ok.text
+    assert "snapshotLimited" not in ok.json()["data"]
+    count, used = _snapshot_rows(cid)
+    monkeypatch.setattr("app.document_commit.MAX_SNAPSHOT_BYTES_PER_CONFLICT", used + 10)
+    big = start["markdownContent"].replace("A2。", "B2。续写一。再写很多很多字。").replace("第一段。", "B 改第一段。")
+    over = save(client, did, 1, big, _as(client, "editor2"), key="cap-resubmit-02")
+    assert over.status_code == 200, over.text
+    assert over.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0}]
+    assert _snapshot_rows(cid) == (count, used)  # 没有绕过总大小上限
+    assert "B 改第一段。" in current(client, did)["markdownContent"]  # 其余修改照常保存
+    # 与最新一份相同的内容不算新增，不受上限影响
+    same = start["markdownContent"].replace("A2。", "B2。续写一。").replace("第三段。", "B 改第三段。")
+    again = save(client, did, 1, same, _as(client, "editor2"), key="cap-resubmit-03")
+    assert again.status_code == 200 and "snapshotLimited" not in again.json()["data"], again.text
+    # 份数上限同样生效
+    monkeypatch.setattr("app.document_commit.MAX_SNAPSHOT_BYTES_PER_CONFLICT", 20 * 1024 * 1024)
+    monkeypatch.setattr("app.document_commit.MAX_SNAPSHOTS_PER_ITEM", count)
+    more = save(client, did, 1, start["markdownContent"].replace("A2。", "B2。续写二。"), _as(client, "editor2"), key="cap-resubmit-04")
+    assert more.status_code == 200 and more.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0}], more.text
+    assert _snapshot_rows(cid)[0] == count

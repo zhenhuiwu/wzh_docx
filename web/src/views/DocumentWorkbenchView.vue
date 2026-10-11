@@ -2505,6 +2505,8 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       if (Date.now() - lastConflictAt > 10000) noteMerged(result);
       // 设计师建议 2：这次保存把续写追加成了冲突快照（列表项等）：冲突卡跟着刷新
       if (result.frozenByConflict?.length) void conflictPanel.value?.load();
+      // 审查建议 4：冲突副本到了上限，冻结段这次的新内容没能再存进副本——常驻提示，请先处理冲突
+      if (result.snapshotLimited?.length) sinkNote.value = { conflictId: result.snapshotLimited[0].conflictId, text: "这处冲突的副本已达到保存上限（20MB 或 500 份），冲突段里新写的内容没能再存进“我的版本”。请先在冲突面板处理这处冲突；内容仍在编辑区，处理前不要关闭页面。" };
       // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
       const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
       if (!typedNewer && !frozenOpen.value.length) othersUpdated.value = null;
