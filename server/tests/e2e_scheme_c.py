@@ -772,9 +772,26 @@ def s_other_tab_use_theirs(ctx: Run, page):
 
 @scenario("K1-M1 重开后正文里改冲突段 保留我的 不算到对方")
 def s_reopen_self_edit(ctx: Run, page):
-    """测试工程师 K1-M1：刷新后在正文第 3 段（对方版本）续写，再点“保留我的”：
-    不能提示“张工 又修改了一次”，要说明是你自己在正文里改的、保留我的会换掉它。"""
-    doc_id = ctx.doc(page, "方案C重开后改正文")
+    """测试工程师 K1-M1（设计师定稿）：刷新后在正文第 3 段（对方版本）续写，再点“保留我的”：
+    提示引用补写的字；标题“正文当前版本（含 张工 的修改和你刚补的内容）”；差异里补字单独标出；
+    按钮临时改为“仍然保留我的（覆盖刚补的内容）”。"""
+    doc_id = reopen_self_edit_setup(ctx, page, "方案C重开后改正文")
+    card(page).get_by_role("button", name="保留我的").click()
+    notice = card(page).locator(".ccard-notice")
+    expect(notice).to_contain_text("你重新打开后在正文里又改了这一段（“〔后补XY〕”）", timeout=20000)
+    expect(notice).to_contain_text("你刚补的这些字会被覆盖")
+    expect(card(page).locator(".theirs h4")).to_contain_text("正文当前版本（含 张工 的修改和你刚补的内容）· 已在正文中")
+    expect(card(page).get_by_test_id("theirs-self-add")).to_have_text("〔后补XY〕")
+    ins = " ".join(card(page).locator(".theirs ins").all_inner_texts())
+    assert "后补" not in ins, f"补的字被算成张工的：{ins}"
+    expect(card(page).get_by_role("button", name="仍然保留我的（覆盖刚补的内容）")).to_be_visible()
+    assert "张工 又修改了一次" not in page.locator("body").inner_text()
+    assert_no_self_named(page)
+    return {"notice": notice.inner_text()[:80]}
+
+
+def reopen_self_edit_setup(ctx: Run, page, name):
+    doc_id = ctx.doc(page, name)
     ctx.make_conflict(page, doc_id, "manual", 300)
     ctx.wait_snapshot(doc_id, MARK)
     page.reload()
@@ -786,12 +803,58 @@ def s_reopen_self_edit(ctx: Run, page):
         time.sleep(0.5)
     assert "〔后补XY〕" in ctx.server(doc_id)["markdownContent"], "正文自动保存没进来"
     open_panel(page)
-    card(page).get_by_role("button", name="保留我的").click()
-    notice = card(page).locator(".ccard-notice")
-    expect(notice).to_contain_text("你刚在正文里也改了这一段", timeout=20000)
-    assert "张工 又修改了一次" not in page.locator("body").inner_text()
+    return doc_id
+
+
+def assert_kept_both(ctx: Run, page, doc_id):
+    deadline = time.time() + 20
+    md = ""
+    while time.time() < deadline:
+        md = ctx.server(doc_id)["markdownContent"]
+        if not ctx.items(doc_id) and "〔后补XY〕" in md and MARK in md:
+            break
+        time.sleep(0.5)
+    assert "〔后补XY〕" in md and MARK in md and md.count(MARK) == 1 and md.count("〔后补XY〕") == 1, md[:500]
+    body = page.locator(".paper-content").inner_text()
+    deadline = time.time() + 15
+    while not ("〔后补XY〕" in body and MARK in body) and time.time() < deadline:
+        page.wait_for_timeout(500)
+        body = page.locator(".paper-content").inner_text()
+    assert "〔后补XY〕" in body and MARK in body, body[:400]
+
+
+@scenario("K1-M1 重开补字后 两段都保留 不丢字")
+def s_reopen_self_edit_both(ctx: Run, page):
+    doc_id = reopen_self_edit_setup(ctx, page, "方案C重开补字两段都保留")
+    # 服务端“两段都保留”是把我的版本插在正文当前这一段（含刚补的字）之后，不需要再确认；若提示了就再点一次
+    card(page).get_by_role("button", name="两段都保留").click()
+    page.wait_for_timeout(1500)
+    notice = page.locator(".conflict-panel .ccard-notice")
+    if notice.count():
+        expect(notice.first).to_contain_text("再点「两段都保留」")
+        card(page).get_by_role("button", name="两段都保留").click()
+    assert_kept_both(ctx, page, doc_id)
     assert_no_self_named(page)
-    return {"notice": notice.inner_text()[:80]}
+    return {}
+
+
+@scenario("K1-M1 重开补字后 手动合并 不丢字")
+def s_reopen_self_edit_manual(ctx: Run, page):
+    doc_id = reopen_self_edit_setup(ctx, page, "方案C重开补字手动合并")
+    card(page).get_by_role("button", name="手动合并").click()
+    area = card(page).locator("textarea")
+    card(page).get_by_role("button", name="插入我的版本").click()
+    assert MARK in area.input_value()
+    card(page).get_by_role("button", name="采用合并结果").click()
+    notice = card(page).locator(".ccard-notice")
+    if notice.count() or "〔后补XY〕" not in area.input_value():
+        expect(notice).to_contain_text("合并框里的正文版本已换成当前版本", timeout=20000)
+        value = area.input_value()
+        assert "〔后补XY〕" in value and MARK in value, value
+        card(page).get_by_role("button", name="采用合并结果").click()
+    assert_kept_both(ctx, page, doc_id)
+    assert_no_self_named(page)
+    return {}
 
 
 @scenario("M2 隐形框存不上 先记草稿 联网补发 关页重开补发")
@@ -995,7 +1058,7 @@ def s_other_tab_resolved_sink(ctx: Run, page):
 
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen, s_sink_position,
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_reopen_self_edit_both, s_reopen_self_edit_manual, s_sink_offline, s_reload_close_reopen, s_sink_position,
              s_other_tab_resolved_keep, s_other_tab_resolved_theirs, s_other_tab_resolved_sink]
 
 

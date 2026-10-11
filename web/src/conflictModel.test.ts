@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { addedText } from "./conflictModel";
 import { ResolveKeys, actionsFor, changedByText, classifyResolveError, conflictCount, conflictOpensPanel } from "./conflictModel";
 
 describe("冲突 N 与面板（⑧ ⑪）", () => {
@@ -75,4 +76,10 @@ describe("theirsName（J2-L：对方就是自己时不显示自己的名字）",
     expect(theirsName({ actor: null, theirs: { updatedBy: me } }, "u1")).toBe(SELF_THEIRS_NAME);
     expect(theirsName({ actor: null, theirs: { updatedBy: zhang } }, "u1")).toBe("张工");
   });
+});
+
+describe("addedText（K1-M1 引用刚补的内容）", () => {
+  it("段末补字", () => expect(addedText("第3段：原始内容 3（对方改同段）。", "第3段：原始内容 3（对方改同段）。〔后补XY〕")).toBe("〔后补XY〕"));
+  it("中间补字", () => expect(addedText("甲乙丙", "甲乙XY丙")).toBe("XY"));
+  it("没变", () => expect(addedText("甲乙", "甲乙")).toBe(""));
 });

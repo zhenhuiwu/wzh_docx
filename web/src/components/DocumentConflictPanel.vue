@@ -5,7 +5,7 @@ import ConflictCompareDialog from "./ConflictCompareDialog.vue";
 import { diffWords, isTable, tableCellDiffs } from "../textDiff";
 import { ApiError } from "../api/client";
 import { getConflictCopy, listConflicts, resolveConflict, type ConflictItem, type MineLatest, type ResolveRequestItem, type ResolveResult } from "../api/documents";
-import { ACTION_DONE_TEXT, REASON_TEXT, SELF_THEIRS_NAME, normalizeListMarkers, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
+import { ACTION_DONE_TEXT, REASON_TEXT, addedText, SELF_THEIRS_NAME, normalizeListMarkers, theirsName, USE_THEIRS_CONFIRM, ResolveKeys, actionsFor, classifyResolveError, type ActionChoice } from "../conflictModel";
 import { locationText, shortTime } from "../saveModel";
 import { continuedChars, type LiveMine } from "../frozenConflict";
 import { readSession } from "../session";
@@ -37,6 +37,8 @@ const cardError = ref<Record<string, string>>({});
 const cardNotice = ref<Record<string, string>>({});
 const manualOpen = ref<Record<string, string>>({});
 const confirmTheirs = ref<ConflictItem | null>(null);
+/** K1-M1：重新打开后你在正文里补的字（再次冲突时由 latestBySelf 识别），按卡片记 */
+const selfAdded = ref<Record<string, string>>({});
 const handledOpen = ref(false);
 const keys = new ResolveKeys();
 const id = (item: ConflictItem) => `${item.conflictId}:${item.itemIndex}`;
@@ -93,7 +95,30 @@ function savedDesc(item: ConflictItem, frozen: boolean): string {
 }
 function theirsTitle(item: ConflictItem): string {
   if (item.theirs?.deleted) return `删除前的内容 · ${whoOf(item)} 已删除`;
-  return selfTheirs(item) ? "你在另一处保存的版本 · 已在正文中（其他人看到的是这一版）" : `${whoOf(item)} 的版本 · 已在正文中（其他人看到的是这一版）`;
+  // K1-M1 定稿：正文这一段里既有对方的修改也有你刚补的字
+  if (selfAdded.value[id(item)]) return `正文当前版本（含 ${whoOf(item)} 的修改和你刚补的内容）· 已在正文中`;
+  if (selfTheirs(item)) return "你在另一处保存的版本 · 已在正文中（其他人看到的是这一版）";
+  // 设计师 S7：对方是“你”时写“你的版本”
+  return `${whoOf(item)}${whoOf(item) === "你" ? "" : " "}的版本 · 已在正文中（其他人看到的是这一版）`;
+}
+/** 设计师 S6：对方是本人时卡片标题与按钮不用“对方” */
+function cardTitle(item: ConflictItem): string {
+  if (item.reason === "MODIFIED" && selfTheirs(item)) return "你在另一处也改了这一段";
+  return REASON_TEXT[item.reason];
+}
+function labelOf(item: ConflictItem, choice: ActionChoice): string {
+  if (choice.action === "keep_mine" && selfAdded.value[id(item)]) return "仍然保留我的（覆盖刚补的内容）";
+  if (choice.action === "use_theirs" && selfTheirs(item)) return "使用正文里的版本";
+  return choice.label;
+}
+/** K1-M1：对方版本的差异里不把你刚补的字算成对方的——先比去掉补字后的正文，补字单独标出 */
+function theirsParts(item: ConflictItem): Array<{ type: string; text: string }> {
+  const extra = selfAdded.value[id(item)];
+  const theirs = item.theirs?.markdown || "";
+  const at = extra ? theirs.lastIndexOf(extra) : -1;
+  if (!extra || at < 0) return diffOf(item.base?.markdown, theirs);
+  const after = theirs.slice(at + extra.length);
+  return [...diffOf(item.base?.markdown, theirs.slice(0, at)), { type: "self", text: extra }, ...(after ? [{ type: "same", text: after }] : [])];
 }
 
 // —— 方案 C：我的版本以最新快照为准（编辑区里正在写的优先）——
@@ -125,7 +150,7 @@ function mineStatus(item: ConflictItem): string {
 }
 const withLatest = (item: ConflictItem): ConflictItem => tab.value === "mine" && !item.mine?.deleted ? { ...item, mine: { ...item.mine, markdown: mineText(item) } } : item;
 const theirsConfirm = (item: ConflictItem) => frozenHere(item)
-  ? `编辑区里这一段会换成 ${whoOf(item)} 的版本。你的版本（含后来续写的内容）仍保存在冲突记录中，可在「已处理」里查看和下载。`
+  ? `编辑区里这一段会换成${selfTheirs(item) ? "正文里的版本" : ` ${whoOf(item)} 的版本`}。你的版本（含后来续写的内容）仍保存在冲突记录中，可在「已处理」里查看和下载。`
   : USE_THEIRS_CONFIRM;
 
 async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string) {
@@ -183,11 +208,26 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
         keys.done();
         const fresh = (apiError.details?.conflicts as ConflictItem[] | undefined)?.find(entry => entry.itemIndex === item.itemIndex);
         if (fresh) {
+          const oldTheirs = item.theirs?.markdown || "";
+          const freshTheirs = fresh.theirs?.markdown || "";
           items.value = items.value.map(entry => entry === item ? { ...entry, ...fresh, conflictId: item.conflictId } : entry);
-          // K1-M1：这次是你自己在正文里改了这一段（如重新打开后），不能算到对方名下，并说清“保留我的”会换掉正文里的这次修改
-          cardNotice.value = { ...cardNotice.value, [id(item)]: fresh.theirs?.latestBySelf
-            ? "你刚在正文里也改了这一段（卡片上方“已在正文中”的版本已更新）。「保留我的」会用你的冲突版本替换正文这一段，正文里的这次修改会被换掉；两边都要留下请用「手动合并」或「两段都保留」。"
-            : `${whoOf(fresh)} 又修改了一次，请重新确认。` };
+          if (fresh.theirs?.latestBySelf) {
+            // K1-M1 定稿：是你自己重新打开后在正文里补的字——引用这些字，不算到对方名下；“保留我的”临时改为“仍然保留我的（覆盖刚补的内容）”
+            const extra = addedText(oldTheirs, freshTheirs) || selfAdded.value[id(item)] || "";
+            if (extra) selfAdded.value = { ...selfAdded.value, [id(item)]: extra };
+            const quoted = extra ? `（“${extra.length > 30 ? `…${extra.slice(-30)}` : extra}”）` : "";
+            // 合并框里还是旧的正文版本时换成当前版本，补的字不丢
+            const open = manualOpen.value[id(item)];
+            if (open !== undefined && oldTheirs && open.includes(oldTheirs)) manualOpen.value = { ...manualOpen.value, [id(item)]: open.replace(oldTheirs, freshTheirs) };
+            const text = choice.action === "keep_both"
+              ? `你重新打开后在正文里又改了这一段${quoted}。卡片上方已换成正文当前版本（含你刚补的内容），再点「两段都保留」会把它和“我的版本”都留在正文里。`
+              : choice.action === "manual"
+                ? `你重新打开后在正文里又改了这一段${quoted}。合并框里的正文版本已换成当前版本（含你刚补的内容），请检查后再点「采用合并结果」。`
+                : `你重新打开后在正文里又改了这一段${quoted}。再点「保留我的」，正文这一段会换成下面“我的版本”，你刚补的这些字会被覆盖；两边都要留下，请用「两段都保留」或「手动合并」。`;
+            cardNotice.value = { ...cardNotice.value, [id(item)]: text };
+          } else {
+            cardNotice.value = { ...cardNotice.value, [id(item)]: `${whoOf(fresh)} 又修改了一次，请重新确认。` };
+          }
         }
         return;
       }
@@ -268,10 +308,10 @@ async function downloadCopy(item: ConflictItem) {
       <template v-if="phase === 'loading'"><div class="ccard skeleton" aria-hidden="true" /><div class="ccard skeleton" aria-hidden="true" /><p class="sr-only" role="status">正在加载冲突…</p></template>
       <div v-else-if="phase === 'error'" class="conflict-empty"><p role="alert">冲突列表加载失败：{{ loadError }}</p><button type="button" class="ghost sm" @click="load">重试</button></div>
       <p v-else-if="empty" class="conflict-empty" role="status">没有待处理的冲突</p>
-      <article v-for="item in items" v-else :key="id(item)" class="ccard" :data-conflict="id(item)" tabindex="-1" :aria-busy="busyKey === id(item)" :aria-label="`${REASON_TEXT[item.reason]}：${locationText(item.location)}`">
+      <article v-for="item in items" v-else :key="id(item)" class="ccard" :data-conflict="id(item)" tabindex="-1" :aria-busy="busyKey === id(item)" :aria-label="`${cardTitle(item)}：${locationText(item.location)}`">
         <p v-if="cardNotice[id(item)]" class="ccard-notice" role="status">{{ cardNotice[id(item)] }}</p>
         <div class="chead">
-          <div class="ctitle"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg><strong>{{ REASON_TEXT[item.reason] }}</strong><time v-if="whenOf(item)">{{ whenOf(item) }}</time></div>
+          <div class="ctitle"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg><strong>{{ cardTitle(item) }}</strong><time v-if="whenOf(item)">{{ whenOf(item) }}</time></div>
           <div class="cloc"><span>{{ locationText(item.location) }}<span v-if="approxKeys?.includes(id(item))" class="approx">（大致）</span></span><button type="button" class="text" data-testid="conflict-locate" @click="emit('locate', item)">定位</button></div>
           <p v-if="tab === 'members'" class="cdesc">提交人：{{ item.actor?.name || "未记录" }}（只读，仅本人可以处理）</p>
           <p v-if="item.reason === 'DELETED' && item.theirs?.deleted" class="cdesc">{{ whoOf(item) }} 于 {{ whenOf(item) }} 删除了这一段，但你修改过它。</p>
@@ -286,7 +326,7 @@ async function downloadCopy(item: ConflictItem) {
           <h4><span class="avatar alt" aria-hidden="true">{{ initial(whoOf(item)) }}</span>{{ theirsTitle(item) }}</h4>
           <p v-if="tableOf(item) && !item.theirs?.deleted" class="ctable">表格 · {{ cellDiffs(item, 'theirs') }} 处单元格不同（相对修改前）<span class="hint">表格差异请用“并排对比”查看。</span></p>
           <pre v-else-if="item.theirs?.deleted || !item.base?.markdown" :class="{ gone: item.theirs?.deleted }">{{ item.theirs?.markdown || "（无）" }}</pre>
-          <pre v-else class="diff"><template v-for="(part, n) in diffOf(item.base?.markdown, item.theirs?.markdown)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><template v-else>{{ part.text }}</template></template></pre>
+          <pre v-else class="diff"><template v-for="(part, n) in theirsParts(item)" :key="n"><ins v-if="part.type === 'ins'">{{ part.text }}</ins><del v-else-if="part.type === 'del'">{{ part.text }}</del><mark v-else-if="part.type === 'self'" class="self-add" title="你刚在正文里补的内容" data-testid="theirs-self-add">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></pre>
         </section>
         <section class="cver ccard-side mine">
           <h4><span class="avatar" aria-hidden="true">{{ tab === 'members' ? initial(item.actor?.name) : '我' }}</span>{{ tab === 'members' ? `${item.actor?.name || "提交人"} 的版本 · 未写入正文` : frozenHere(item) ? "我的版本 · 在你的编辑区，未写入正文" : "我的版本 · 未写入正文" }}</h4>
@@ -309,14 +349,14 @@ async function downloadCopy(item: ConflictItem) {
               <button type="button" class="primary sm" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '采用合并结果' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
             </div>
           </div>
-          <div v-else-if="confirmTheirs === item" class="ccard-confirm" role="alertdialog" aria-label="使用对方的版本">
+          <div v-else-if="confirmTheirs === item" class="ccard-confirm" role="alertdialog" :aria-label="labelOf(item, { action: 'use_theirs', label: '使用对方的版本' })">
             <p>{{ theirsConfirm(item) }}</p>
-            <div class="row"><button type="button" class="ghost sm" @click="confirmTheirs = null">返回</button><button type="button" class="primary danger sm" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">使用对方的版本</button></div>
+            <div class="row"><button type="button" class="ghost sm" @click="confirmTheirs = null">返回</button><button type="button" class="primary danger sm" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">{{ labelOf(item, { action: 'use_theirs', label: '使用对方的版本' }) }}</button></div>
           </div>
           <div v-else-if="tab === 'mine' && canResolve" class="row choices" :style="{ gridTemplateColumns: `repeat(${ordered(item).length === 4 ? 2 : ordered(item).length}, minmax(0, 1fr))` }">
             <template v-for="choice in ordered(item)" :key="choice.label">
-              <button v-if="choice.action === 'manual'" type="button" class="primary sm" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ choice.label }}</button>
-              <button v-else type="button" :class="[!allowed(item).some(c => c.action === 'manual') && choice === allowed(item)[0] ? 'primary' : 'ghost', 'sm']" :title="choice.hint" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : choice.label }}</button>
+              <button v-if="choice.action === 'manual'" type="button" class="primary sm" :disabled="Boolean(busyKey)" @click="openManual(item)">{{ labelOf(item, choice) }}</button>
+              <button v-else type="button" :class="[!allowed(item).some(c => c.action === 'manual') && choice === allowed(item)[0] ? 'primary' : 'ghost', 'sm']" :title="choice.hint" :disabled="Boolean(busyKey)" @click="apply(item, choice)">{{ busyKey === id(item) && busyLabel === choice.label ? "正在处理…" : labelOf(item, choice) }}</button>
             </template>
           </div>
           <p v-if="tab === 'mine' && canResolve && ordered(item).some(c => c.hint)" class="choice-hint" data-testid="conflict-table-hint">{{ ordered(item).find(c => c.hint)?.hint }}</p>
@@ -339,7 +379,7 @@ async function downloadCopy(item: ConflictItem) {
       </details>
       <p v-if="items.length" class="hint">处理后正文立即更新，并记录到版本记录中。不处理也可以离开文档，冲突会一直保留，下次打开时继续处理。</p>
     </div>
-    <ConflictCompareDialog v-if="comparing" :item="withLatest(comparing)" :theirs-name="theirName(comparing)" :mine-label="tab === 'members' ? `${comparing.actor?.name || '提交人'} 的版本` : undefined" :can-resolve="tab === 'mine' && canResolve" :busy="Boolean(busyKey)"
+    <ConflictCompareDialog v-if="comparing" :item="withLatest(comparing)" :theirs-name="theirName(comparing)" :mine-label="tab === 'members' ? `${comparing.actor?.name || '提交人'} 的版本` : undefined" :use-theirs-label="labelOf(comparing, { action: 'use_theirs', label: '使用对方的版本' })" :can-resolve="tab === 'mine' && canResolve" :busy="Boolean(busyKey)"
       @close="comparing = null" @merge="compareMerge(comparing!, $event)" @edit="compareEdit(comparing!, $event)" @keep-mine="compareAction(comparing!, 'keep_mine')" @use-theirs="compareAction(comparing!, 'use_theirs')" />
   </aside>
 </template>
@@ -385,6 +425,7 @@ async function downloadCopy(item: ConflictItem) {
 .mine-status { margin:0 0 var(--space-1); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .mine-status.local { color:var(--warning-700, var(--text-secondary)); }
 .cver ins { background:var(--diff-ins-bg); text-decoration:none; border-radius:2px; padding:0 1px; }
+.cver mark.self-add { background:var(--warning-50); color:inherit; border-bottom:1px dashed var(--warning-600); border-radius:2px; padding:0 1px; }
 .cver del { background:var(--diff-del-bg); color:var(--danger-700); border-radius:2px; padding:0 1px; }
 .ctable { display:grid; gap:2px; margin:0; color:var(--text-primary); }
 .cbase { padding:var(--space-2) 14px; border-bottom:1px solid var(--border-subtle); color:var(--text-secondary); font-size:var(--text-xs); }

@@ -101,6 +101,8 @@ let loadSinkComposing = false;
  * 这时焦点落到隐形输入框，接着打的字（含直接上屏/组字）并入这条冲突“我的版本”的快照，并给出常驻提示（处理该冲突或点“知道了”才消失）。
  */
 let unfrozenConflict: { conflictId: string; itemIndex: number; mine: string; at: number; item?: ConflictItem } | null = null;
+/** 设计师 S1：不能冻结的那一项还没在编辑区换成对方版本时提示写“正在换成…”，重绘后看到对方版本再改成“已换成” */
+let pendingSwap: { conflictId: string; item: ConflictItem; text: string } | null = null;
 let caretSink: HTMLTextAreaElement | null = null;
 let caretSinkTarget: { conflictId: string; itemIndex: number; mine: string; synced?: boolean } | null = null;
 let caretSinkComposing = false;
@@ -885,6 +887,10 @@ function conflictName(item: ConflictItem) {
 function applyConflictMarks() {
   if (caretSink) placeCaretSink(); // 必改 A：重绘后输入框跟着那一项
   const root = editor.value;
+  if (pendingSwap && root && (pendingSwap.item.theirs?.deleted || caretSinkAnchorOf(root, pendingSwap.item, true))) {
+    if (sinkNote.value?.conflictId === pendingSwap.conflictId && sinkNote.value.text.startsWith("这一项与")) sinkNote.value = { conflictId: pendingSwap.conflictId, text: pendingSwap.text };
+    pendingSwap = null;
+  }
   if (!root) { conflictMarks.value = []; return; }
   root.querySelectorAll(".blk-conflict").forEach(node => node.classList.remove("blk-conflict"));
   const marks: typeof conflictMarks.value = [];
@@ -1365,17 +1371,17 @@ function leaveEditorCaret(root: HTMLElement) {
   }
 }
 /** 设计师必改 A：被换成对方版本的那一项（按对方版本的文字找 li/单元格/段落；找不到用冲突定位） */
-function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined): HTMLElement | null {
+function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined, exactOnly = false): HTMLElement | null {
   if (!item) return null;
   const norm = (text: string) => text.replace(/[*_`~\\]/g, "").replace(/\s+/g, " ").trim();
   const lines = (item.theirs?.markdown || "").split("\n").map(line => norm(line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\|/, "").replace(/\|$/, ""))).filter(Boolean);
   const candidates = [...root.querySelectorAll("li, p, td, th, h1, h2, h3, h4, h5, h6")] as HTMLElement[];
   for (const line of lines) {
     const own = (el: HTMLElement) => norm([...el.childNodes].filter(node => !(node instanceof HTMLElement && /^(UL|OL)$/.test(node.tagName))).map(node => node.textContent || "").join(""));
-    const hit = candidates.find(el => own(el) === line) || candidates.find(el => line.length >= 6 && own(el).startsWith(line.slice(0, 12)));
+    const hit = candidates.find(el => own(el) === line) || (exactOnly ? undefined : candidates.find(el => line.length >= 6 && own(el).startsWith(line.slice(0, 12))));
     if (hit) return hit;
   }
-  return findConflictBlock(item).block ?? null;
+  return exactOnly ? null : findConflictBlock(item).block ?? null;
 }
 let caretSinkAnchor: HTMLElement | null = null;
 let caretSinkItem: ConflictItem | undefined;
@@ -1536,9 +1542,10 @@ async function flushCaretSink(): Promise<void> {
     const markdown = target.mine + typed;
     caretSinkSeq = nextSeq(caretSinkSeq);
     const quoted = all.length > 30 ? `${all.slice(0, 30)}…` : all;
+    const swapped = caretSinkItem?.theirs?.deleted ? "这一项在正文中已被删除" : `这一项已换成 ${caretSinkItem ? conflictName(caretSinkItem) : "其他成员"} 的版本`;
     const text = looksLikePinyin(all, caretSinkIme)
-      ? "冲突后接着输入的内容没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。"
-      : `冲突后接着输入的“${quoted}”没有写进正文（这一项已换成对方的版本），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
+      ? `冲突后接着输入的内容没有写进正文（${swapped}），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`
+      : `冲突后接着输入的“${quoted}”没有写进正文（${swapped}），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
     sinkNote.value = { conflictId: target.conflictId, text };
     try {
       const result = await saveConflictMine(record.id, target.conflictId, target.itemIndex, markdown, `sink-${caretSinkSeq}`.slice(0, 80), browserTab || undefined, caretSinkSeq);
@@ -2857,7 +2864,14 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
       unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now(), item: loose } : null;
       // 设计师必改 2：不能冻结的条目（列表项等）会换成对方的版本——从这一刻起就常驻说明，不等用户再打字
-      if (loose) sinkNote.value = { conflictId: loose.conflictId, text: `这一项与 ${conflictName(loose)} 的修改冲突，正文里换成 ${conflictName(loose)} 的版本；你在这一项里写的内容（含之后接着写的）存为冲突副本“我的版本”，可在冲突面板里处理。` };
+      if (loose) {
+        const who = conflictName(loose);
+        const tail = "你在这一项里写的内容（含之后接着写的）存为冲突副本“我的版本”，可在冲突面板里处理。";
+        // 设计师 S1：换成对方版本要等重绘——先说“正在换成…”，编辑区里真换好了再说“已换成”；S6：对方删掉了这一项时不说“换成版本”
+        const done = loose.theirs?.deleted ? `这一项与 ${who} 的修改冲突，这一项在正文中已被删除；${tail}` : `这一项与 ${who} 的修改冲突，正文里这一项已换成 ${who} 的版本；${tail}`;
+        sinkNote.value = { conflictId: loose.conflictId, text: loose.theirs?.deleted ? done : `这一项与 ${who} 的修改冲突，正文里这一项正在换成 ${who} 的版本…；${tail}` };
+        pendingSwap = loose.theirs?.deleted ? null : { conflictId: loose.conflictId, item: loose, text: done };
+      }
       void refreshConflicts().then(() => conflictPanel.value?.load());
       if (conflictOpensPanel(trigger)) {
         openConflicts("mine");

@@ -51,6 +51,15 @@ export const REASON_TEXT: Record<ConflictItem["reason"], string> = {
   FORMAT: "合并后无法保持 Word 格式",
 };
 
+/** 两版之间新增的文字（去掉公共前后缀后中间那段，首尾空白去掉）；K1-M1 用来引用“你刚补的内容” */
+export function addedText(before: string, after: string): string {
+  let head = 0;
+  while (head < before.length && head < after.length && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (tail < before.length - head && tail < after.length - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail += 1;
+  return after.slice(head, after.length - tail).trim();
+}
+
 export interface ActionChoice { action: ConflictAction; label: string; placement?: "after_nearest_live" | "section_end"; hint?: string }
 /** 终验回归 I-3：表格冲突按整张表处理，“都保留”会在正文里放两份表格（单元格级合并记入遗留）。 */
 export const TABLE_KEEP_BOTH_HINT = "“两份表格都保留”会在正文里放两张表（我的和对方的各一张），需要你再手动合并成一张。";

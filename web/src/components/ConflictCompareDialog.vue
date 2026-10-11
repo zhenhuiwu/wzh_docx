@@ -5,7 +5,7 @@ import type { ConflictItem } from "../api/documents";
 import { locationText, shortTime } from "../saveModel";
 import { alignRows, isTable, mergeRows, structureRows, tableCells } from "../textDiff";
 
-const props = defineProps<{ item: ConflictItem; theirsName: string; mineLabel?: string; canResolve: boolean; busy: boolean }>();
+const props = defineProps<{ item: ConflictItem; theirsName: string; mineLabel?: string; useTheirsLabel?: string; canResolve: boolean; busy: boolean }>();
 const emit = defineEmits<{ close: []; merge: [markdown: string]; edit: [markdown: string]; keepMine: []; useTheirs: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const base = props.item.base?.markdown || "";
@@ -74,7 +74,7 @@ onMounted(() => void nextTick(() => dialog.value?.showModal()));
         <button type="button" class="primary" data-testid="compare-apply" :disabled="busy || !merged.trim()" @click="emit('merge', merged)">{{ busy ? "正在处理…" : "采用合并结果" }}</button>
       </template>
       <template v-else-if="canResolve">
-        <button type="button" class="ghost" :disabled="busy" @click="emit('useTheirs')">使用对方的版本</button>
+        <button type="button" class="ghost" :disabled="busy" @click="emit('useTheirs')">{{ useTheirsLabel || "使用对方的版本" }}</button>
         <button type="button" class="primary" :disabled="busy" @click="emit('keepMine')">{{ busy ? "正在处理…" : "保留我的" }}</button>
       </template>
     </footer>
