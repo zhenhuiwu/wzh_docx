@@ -493,6 +493,18 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                 dedupe = others == 0 if base_markdown is None else revision == base_revision and base_markdown == _version_markdown(
                     connection, document_id, base_revision)
                 result = merge3(base_md, theirs, mine_md, dedupe_inserts=dedupe)
+                if result.table_rows_merged:
+                    # 设计师复验 2 C：按行合并出的表若通不过 Word 校验（含合并单元格的表，同一合并区两边各改一行），
+                    # 不退为整篇 FORMAT 冲突——关掉按行合并重来，这张表按整表冲突处理，别处的修改照常进正文
+                    try:
+                        check_word(result.markdown)
+                    except AppError as error:
+                        if error.code not in WORD_CODES:
+                            raise
+                        own = _own_word_error(check_word, base_md, mine_md)
+                        if own is not None:
+                            raise own from None
+                        result = merge3(base_md, theirs, mine_md, dedupe_inserts=dedupe, table_rows=False)
                 if result.conflicts or result.prefix_conflict:
                     if not result.conflicts:
                         result.conflicts = []
@@ -533,6 +545,11 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
             except AppError as error:
                 if error.code not in {"AI_FORMAT_INVALID", "WORD_BLOCK_PROTECTED"} or not merged_flag:
                     raise
+                # 设计师复验 2 C：自己这次的修改本身就通不过 Word 校验（如改了合并单元格）——按单人路径直接 422，
+                # 界面给［撤销这一段的修改］，不退为整篇 FORMAT 冲突把别处的修改也撤出正文
+                own = _own_word_error(check_word, base_md, mine_md)
+                if own is not None:
+                    raise own from None
                 item = _whole_item(0, "FORMAT", mine_md, theirs, base_md)
                 if error.details and error.details.get("location"):
                     item["location"] = error.details["location"]
@@ -575,6 +592,22 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
             data["markdownContent"] = merged
             return data
     raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
+
+
+WORD_CODES = frozenset({"AI_FORMAT_INVALID", "WORD_BLOCK_PROTECTED"})
+
+
+def _own_word_error(check_word, base_md: str, mine_md: str) -> AppError | None:
+    """设计师复验 2 C：我这次的修改本身（不含别人的）能否写回原 Word；不能时返回那个 422（单人路径，界面给［撤销这一段的修改］）。"""
+    if mine_md == base_md:
+        return None
+    try:
+        check_word(mine_md)
+    except AppError as own:
+        if own.code in WORD_CODES:
+            return own
+        raise
+    return None
 
 
 def _snapshot_limit_hit(connection, conflict_id, item_index: int, nbytes: int) -> str | None:

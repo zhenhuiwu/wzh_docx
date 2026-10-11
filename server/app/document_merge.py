@@ -36,6 +36,7 @@ class MergeResult:
     whitespace_dropped: int = 0   # 我方只改了空白、因对方也改了这一处而没写入的块数（合并提示用）
     whitespace_deleted: int = 0   # 我方只改了空白、但对方删掉了这一块
     theirs_whitespace_overridden: int = 0   # 对方只改了空白、我方改了这一块的文字（采用我方，对方的空白修改没保留）
+    table_rows_merged: int = 0   # 按行合并的表格数（设计师复验 2 C：合并后 Word 校验失败时由调用方关掉按行合并重来）
 
     def whitespace_notes(self) -> dict[str, int]:
         """合并提示用的计数（只返回非零项，键名即接口字段名）。"""
@@ -267,7 +268,7 @@ def _merge_table_rows(base: Block, theirs: Block, mine: Block) -> Block | None:
     return Block(theirs.kind, "".join(merged), theirs.gap_after, theirs.heading_level)
 
 
-def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool = False) -> MergeResult:
+def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool = False, table_rows: bool = True) -> MergeResult:
     """mine 相对 base 的修改合并到 theirs 上。冲突处在结果中保留 theirs，并逐处列出。"""
     base_prefix, base = split(base_md)
     theirs_prefix, theirs = split(theirs_md)
@@ -356,8 +357,9 @@ def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool =
             copy_theirs(t2)
             continue
         if len(seg_b) == 1 and len(seg_t) == 1 and len(seg_m) == 1:
-            rows = _merge_table_rows(seg_b[0], seg_t[0], seg_m[0])
+            rows = _merge_table_rows(seg_b[0], seg_t[0], seg_m[0]) if table_rows else None
             if rows is not None:
+                result.table_rows_merged += 1
                 result.entries.append(Entry(rows, "m", m1))
                 cursor = max(cursor, t2)
                 continue
