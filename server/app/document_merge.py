@@ -81,22 +81,8 @@ def _dropped_whitespace(seg_b: list[Block], seg_t: list[Block], seg_m: list[Bloc
 SPLIT_SIMILARITY = 0.5
 
 
-def _similar(a: str, b: str) -> bool:
-    if a == b:
-        return True
-    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
-    return matcher.real_quick_ratio() >= SPLIT_SIMILARITY and matcher.quick_ratio() >= SPLIT_SIMILARITY \
-        and matcher.ratio() >= SPLIT_SIMILARITY
-
-
 def _ratio(a: str, b: str) -> float:
     return 1.0 if a == b else difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
-
-
-def _better(x: str, y: str, own_x: str, own_y: str) -> bool:
-    """x、y 足够相似，且比 y（或 x）与自己按位置配对的那块更像：说明按位置配对错位了。"""
-    score = _ratio(x, y)
-    return score >= SPLIT_SIMILARITY and score > _ratio(own_x, own_y)
 
 
 def _upper(a: str, b: str) -> float:
@@ -180,30 +166,23 @@ def _positional_is_unique_best(a: list[str], b: list[str]) -> bool:
     return True
 
 
-PAIR_EXACT_LIMIT = 40
+# 审查 M5：精确判定（匈牙利最优匹配）最多 60 块（模板化最坏约 0.2s）；更大的等长替换区间不再按旧的逐对规则拆，
+# 一律整块作为结构冲突——旧规则在模板化“整章修改 / 挪动粘贴”里会错配，重交后正文出现同一段的两个版本
+PAIR_EXACT_LIMIT = 60
 
 
 def _pairable(ops, a_blocks, b_blocks):
     """审查 N1 / M3：块数相同的替换按位置逐块拆开前先核对配对：按位置配对必须是全局唯一最优（见上），
     且每一对要么相似（≥ 0.5），要么是原位整段改写（与区间里别的块都不更像）。否则改记为 replace_whole，
-    整块作为一个 hunk（结构冲突），不按位置错配。超大区间（> PAIR_EXACT_LIMIT 块）退回逐对的错位检查。"""
+    整块作为一个 hunk（结构冲突），不按位置错配。超大区间（> PAIR_EXACT_LIMIT 块）直接整块（审查 M5）。"""
     out = []
     for tag, i1, i2, j1, j2 in ops:
         if tag == "replace" and i2 - i1 == j2 - j1 > 1:
             size = i2 - i1
             a = [block.body for block in a_blocks[i1:i2]]
             b = [block.body for block in b_blocks[j1:j2]]
-            if size <= PAIR_EXACT_LIMIT:
-                if not _positional_is_unique_best(a, b):
-                    tag = "replace_whole"
-            else:
-                for k in range(size):
-                    if _similar(a[k], b[k]):
-                        continue
-                    if any(_better(a[other], b[k], a[k], b[k]) or _better(a[k], b[other], a[other], b[other])
-                           for other in range(size) if other != k):
-                        tag = "replace_whole"
-                        break
+            if size > PAIR_EXACT_LIMIT or not _positional_is_unique_best(a, b):
+                tag = "replace_whole"
         out.append((tag, i1, i2, j1, j2))
     return out
 
