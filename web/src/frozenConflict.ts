@@ -50,7 +50,11 @@ export function noteYields(current: NoteKind, showing: boolean, next: NoteKind):
 }
 
 /** 方案 C：编辑区冻结区里我的最新版本（冲突面板用，键为 conflictId:itemIndex）。 */
-export interface LiveMine { markdown: string; saved: boolean; savedAt: string | null; failing?: boolean; original: string; otherTab?: boolean; snapshotId?: string | null }
+export interface LiveMine { markdown: string; saved: boolean; savedAt: string | null; failing?: boolean; original: string; otherTab?: boolean; snapshotId?: string | null;
+  /** 测试工程师 N3：副本已到上限、这一份存不进服务器（处理时随请求带上） */
+  limited?: boolean;
+  /** 编辑区里没有这一段（恢复草稿后等），只在卡片上 */
+  detached?: boolean }
 
 /** 快照序号（审查点 2）：同一标签页内单调递增；用毫秒时间戳，刷新后（同一 tabId）仍比之前的大，本机草稿补发用草稿时间。 */
 export function nextSeq(previous: number, now = Date.now()): number {

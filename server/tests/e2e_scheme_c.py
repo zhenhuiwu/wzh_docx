@@ -277,7 +277,7 @@ def s_keep_mine(ctx: Run, page):
     expect(card(page).get_by_test_id("conflict-mine-status")).to_contain_text("已存为冲突副本")
     card(page).get_by_role("button", name="保留我的").click()
     expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
-    expect(page.locator(".wb-notice", has_text="已用你的版本（含续写）更新这一段。")).to_be_visible(timeout=5000)
+    expect(page.locator(".wb-notice", has_text="已用你的版本（含续写）替换正文里的这一段")).to_be_visible(timeout=5000)
     assert not page.locator(".conflict-panel .ccard-notice").count(), "第一次点就要求重新确认"
     assert not ctx.items(doc_id), "冲突仍未处理"
     md = ctx.server(doc_id)["markdownContent"]
@@ -1124,6 +1124,151 @@ SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
              s_other_tab_keep_mine, s_other_tab_use_theirs, s_other_tab_then_mine, s_only_this_tab_no_confirm, s_reopen_self_edit, s_reopen_self_edit_both, s_reopen_self_edit_manual, s_sink_offline, s_reload_close_reopen, s_sink_position,
              s_other_tab_resolved_keep, s_other_tab_resolved_theirs, s_other_tab_resolved_sink]
+
+
+def snapshot_bytes(conflict_id: str) -> int:
+    from app.db import connect
+    with connect() as connection:
+        row = connection.execute("SELECT COALESCE(SUM(LENGTH(CAST(markdown AS BLOB))), 0) AS n FROM document_conflict_mine_snapshots "
+                                 "WHERE conflict_id=%s", (conflict_id,)).fetchone()
+    return int(row["n"])
+
+
+def fill_snapshots(ctx: Run, doc_id: str, hit: dict, rest: int = 20) -> None:
+    """把这条冲突的快照总大小推到只剩 rest 字节（比冲突段本身还小；不带标签页，不进 mineOthers）。"""
+    from app.document_commit import MAX_SNAPSHOT_BYTES_PER_CONFLICT as cap
+    for n in range(40):
+        room = cap - snapshot_bytes(hit["conflictId"]) - rest
+        if room <= 0:
+            return
+        size = min(room, 5_900_000)
+        tail = f"〔填满{n:03d}〕"
+        body = size - len(tail.encode())
+        md = tail + "满" * max(0, body // 3) + "x" * max(0, body % 3) if body > 0 else "x" * size
+        ctx.li.call("POST", f"/documents/{doc_id}/conflicts/{hit['conflictId']}/mine", json={
+            "itemIndex": hit["itemIndex"], "markdown": md, "clientSaveKey": str(uuid.uuid4())})
+    raise AssertionError("填不满快照")
+
+
+def capped_conflict(ctx: Run, page, name: str) -> tuple[str, dict]:
+    doc_id = ctx.doc(page, name)
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    hit = ctx.wait_snapshot(doc_id, MARK)
+    fill_snapshots(ctx, doc_id, hit)
+    base.type_after(page, MARK, "〔满后写〕")
+    page.wait_for_timeout(5000)
+    return doc_id, hit
+
+
+@scenario("N3 副本满 处理不再要求先保存 保留我的用编辑区最新一版")
+def s_capped_keep_mine(ctx: Run, page):
+    """测试工程师 N3（用户决定）：快照到 20MB 上限后，处理按钮不再被“请先保存”挡住；处理请求带上编辑区里没存上的最新“我的版本”。"""
+    doc_id, hit = capped_conflict(ctx, page, "方案C副本满保留")
+    assert "〔满后写〕" not in ((ctx.wait_snapshot(doc_id, "〔满后写〕", 2).get("mineLatest") or {}).get("markdown") or ""), "前提不成立：没到上限"
+    open_panel(page)
+    status = card(page).get_by_test_id("conflict-mine-status")
+    expect(status).to_contain_text("副本已满", timeout=15000)
+    assert "联网后自动保存" not in status.inner_text()
+    card(page).get_by_role("button", name="保留我的").click()
+    # 面板是冲突时自动打开的（填满之前）：服务器上那份“填满”的是另一处写的、本标签没有 → 与 A3c 同一个确认（N4 并入）
+    confirm = card(page).get_by_test_id("others-confirm")
+    confirmed = False
+    try:
+        expect(confirm).to_be_visible(timeout=8000)
+        expect(confirm).to_contain_text("〔满后写〕")
+        confirm.get_by_role("button", name="只用这个标签页的版本").click()
+        confirmed = True
+    except AssertionError:
+        pass
+    expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=30000)
+    assert not page.locator(".conflict-panel .ccard-error").filter(has_text="请先保存").count()
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    assert MARK + "〔满后写〕" in md, md[:400]
+    return {"confirmed": confirmed}
+
+
+@scenario("N3 副本满 刷新后恢复草稿 新写的字不丢")
+def s_capped_reload_restore(ctx: Run, page):
+    """测试工程师 N3：副本满后刷新 →（恢复并保存）→ 冲突卡“我的版本”仍是草稿里的最新字，保留我的后进正文。"""
+    doc_id, hit = capped_conflict(ctx, page, "方案C副本满刷新")
+    page.wait_for_function("t => Object.values(localStorage).some(v => v.includes(t))", arg="〔满后写〕", timeout=15000)
+    # 正文另一段也有没存上的修改（保存请求被拦下），刷新后才有“恢复并保存”（QA snap20_ui3 ACT=reload_restore 的路径）
+    block = "**/documents/*/content"
+    page.route(block, lambda route: route.abort())
+    base.type_after(page, "第5段", "〔正文改〕")
+    page.wait_for_function("t => Object.values(localStorage).some(v => v.includes(t))", arg="〔正文改〕", timeout=15000)
+    page.wait_for_timeout(1500)
+    page.unroute(block)
+    page.reload()
+    expect(page.locator(".paper-content")).to_be_visible(timeout=90000)
+    page.wait_for_timeout(5000)
+    bar = page.get_by_test_id("draft-recovery")
+    restored = False
+    if bar.count() and bar.get_by_role("button", name="恢复并保存").count():
+        bar.get_by_role("button", name="恢复并保存").click()
+        restored = True
+        page.wait_for_timeout(6000)
+    open_panel(page)
+    expect(card(page)).to_contain_text("〔满后写〕", timeout=20000)
+    expect(card(page).get_by_test_id("conflict-mine-status")).to_contain_text("副本已满")
+    card(page).get_by_role("button", name="保留我的").click()
+    deadline = time.time() + 30
+    while ctx.items(doc_id) and time.time() < deadline:
+        time.sleep(0.5)
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    assert "〔满后写〕" in md, md[:400]
+    assert restored and "〔正文改〕" in md, ("恢复并保存没生效", restored, md[:400])
+    expect(page.locator(".paper-content")).to_contain_text("〔满后写〕", timeout=15000)
+    return {"restored": restored}
+
+
+@scenario("N8 同一人两个标签同段都冲突 后保存的标签冻结不丢字 按标签各存一份")
+def s_two_tabs_same_paragraph(ctx: Run, page):
+    """测试工程师 N8（mtab_t6f）：两个标签页都改了第 3 段、都遇到冲突。后保存的标签返回 200 + frozenByConflict，
+    编辑区这一段要冻结（不被重绘掉），两边续写按标签各存一份；处理时卡片列出另一标签的（mineOthers），手动合并两份都在。"""
+    doc_id = ctx.doc(page, "方案C两标签同段")
+    other = page.context.new_page()
+    base.open_pages.append(other)
+    ctx.open(other, doc_id)
+    base.type_after(page, "第3段", "【甲写】")
+    base.type_after(other, "第3段", "【乙写】")
+    ctx.zhang_edit(doc_id, P3, P3_THEIRS)
+    other.bring_to_front()
+    other.keyboard.press("Control+s")
+    expect(other.locator(".paper-content [data-frozen]").first).to_be_visible(timeout=30000)
+    page.bring_to_front()
+    page.keyboard.press("Control+s")
+    expect(page.locator(".paper-content [data-frozen]").first).to_be_visible(timeout=30000)
+    expect(page.locator(".paper-content [data-frozen]").first).to_contain_text("【甲写】")
+    page.keyboard.type("〔甲续〕", delay=40)
+    ctx.wait_snapshot(doc_id, "〔甲续〕")
+    other.bring_to_front()
+    other.keyboard.type("〔乙续〕", delay=40)
+    hit = ctx.wait_snapshot(doc_id, "〔乙续〕")
+    assert any("〔甲续〕" in tab["markdown"] for tab in hit.get("mineOthers") or []), hit.get("mineOthers")
+    md = ctx.server(doc_id)["markdownContent"]
+    assert "【甲写】" not in md and "【乙写】" not in md, "冲突段不应写进正文"
+    page.bring_to_front()
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    confirm = card(page).get_by_test_id("others-confirm")
+    expect(confirm).to_be_visible(timeout=20000)
+    expect(confirm.get_by_test_id("others-text")).to_contain_text("〔乙续〕")
+    confirm.get_by_role("button", name="手动合并（两份都放进去）").click()
+    card(page).get_by_role("button", name="采用合并结果").click()
+    deadline = time.time() + 20
+    while ctx.items(doc_id) and time.time() < deadline:
+        time.sleep(0.5)
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    for text in ("【甲写】", "〔甲续〕", "【乙写】", "〔乙续〕"):
+        assert text in md, (text, md[:500])
+    return {}
+
+
+SCENARIOS += [s_capped_keep_mine, s_capped_reload_restore, s_two_tabs_same_paragraph]
 
 
 def main() -> int:

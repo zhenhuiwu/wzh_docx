@@ -214,6 +214,8 @@ interface Frozen {
   /** 审查员 M1：以服务器上较新的一份快照为准（另一个标签页写的）；冻结区文字仍是 from 时卡片显示 markdown */
   adopted?: { from: string; markdown: string } | null;
   failing: boolean;
+  /** 测试工程师 N3：副本已到上限，冻结区的新内容存不进服务器（不再重试；处理冲突时随请求带上，不再要求先保存） */
+  limited?: boolean;
   /** 冻结区第一块在编辑区顶层块里的位置（冻结区被整段删掉时据此放回占位） */
   index: number;
   /** 已处理，等下一次重绘时撤掉 */
@@ -222,6 +224,10 @@ interface Frozen {
 const frozen = ref<Record<string, Frozen>>({});
 const frozenOpen = computed(() => Object.values(frozen.value).filter(item => !item.resolved));
 const frozenUnsaved = computed(() => frozenOpen.value.filter(item => item.mine !== item.saved).length);
+/** 还要存成快照的（副本已满的不算：存不进去，处理时随请求带上） */
+const frozenPending = computed(() => frozenOpen.value.filter(item => item.mine !== item.saved && !item.limited).length);
+/** 测试工程师 N3：编辑区里没有这一段（重新打开 / 恢复草稿后）、副本又已满存不进去的“我的版本”：卡片显示，处理时随请求带上；写进本机草稿 */
+const limitedMine = ref<Record<string, { conflictId: string; itemIndex: number; markdown: string }>>({});
 let snapshotTimer: number | undefined;
 const snapshotKeys = new Map<string, { markdown: string; key: string; seq: number }>();
 // 审查点 2：快照序号（本标签单调递增）
@@ -350,7 +356,7 @@ const editable = computed(() => !aiLocked.value && !addingHeading.value && !read
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
 const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
-const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0);
+const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0 || Object.keys(limitedMine.value).length > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: (offline.value || (!online.value && frozenUnsaved.value > 0)) && hasUnsaved.value,
@@ -623,22 +629,32 @@ function findLocalDrafts(record: DocumentRecord) {
 async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
   for (const draft of drafts) {
     let all = true;
+    const limited: DraftV2["conflictsEdits"] = [];
     for (const [n, edit] of draft.conflictsEdits.entries()) {
       try {
         await saveConflictMine(record.id, edit.conflictId, edit.itemIndex, edit.markdown, `draft-${draft.savedAt}-${n}-${draft.tabId}`.slice(0, 80), draft.tabId, draft.savedAt || undefined);
       } catch (error) {
-        if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED"].includes(error.code))) all = false;
+        // 测试工程师 N3：副本已满存不进去——留在本页（卡片显示、写进本标签草稿），处理冲突时随请求带上，不随恢复 / 舍弃草稿丢掉
+        if (error instanceof ApiError && error.code === "SNAPSHOT_LIMIT") {
+          if (document.value === record) { limitedMine.value = { ...limitedMine.value, [`${edit.conflictId}:${edit.itemIndex}`]: { ...edit } }; limited.push(edit); }
+          else all = false;
+        } else if (!(error instanceof ApiError && ["CONFLICT_ALREADY_RESOLVED", "FORBIDDEN", "NOT_FOUND", "IDEMPOTENCY_KEY_REUSED"].includes(error.code))) all = false;
         // 必改 B：草稿里的冲突续写对应的冲突已处理——不静默丢弃，内容放进常驻提示
         else if (error.code === "CONFLICT_ALREADY_RESOLVED") sinkNote.value = { conflictId: "", text: `上次在冲突段里写的内容没能存进冲突副本（这条冲突已在别处处理）：“${edit.markdown.length > 120 ? `…${edit.markdown.slice(-120)}` : edit.markdown}”。请复制后粘贴到需要的位置。` };
       }
     }
+    if (limited.length && document.value === record) {
+      persistLocalDraft();
+      noteAction("上次在冲突段里写的内容没能存进冲突副本（副本已满），已放在冲突卡的“我的版本”里；处理这条冲突时会直接用这一版。", 10000);
+    }
     if (!all || document.value !== record) continue;
-    const rest: DraftV2 = { ...draft, conflictsEdits: [] };
+    // 本标签自己的草稿：副本已满的那几份仍留在里面（上面写本标签草稿时已带上）
+    const rest: DraftV2 = { ...draft, conflictsEdits: draft.tabId === browserTab ? limited : [] };
     if (draft.wholeDocument && draft.markdown === record.markdownContent) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
       localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
       localDraft.value = localDrafts.value[0] ?? null;
-      noteAction("上次关闭页面前在冲突段里写的内容已存为冲突副本（见冲突面板）。", 6000);
+      if (!limited.length) noteAction("上次关闭页面前在冲突段里写的内容已存为冲突副本（见冲突面板）。", 6000);
     } else if (writeDraft(window.localStorage, account(), rest) === "ok") {
       localDrafts.value = localDrafts.value.map(item => sameDraft(item, draft) ? rest : item);
       if (localDraft.value && sameDraft(localDraft.value, draft)) localDraft.value = rest;
@@ -2169,7 +2185,7 @@ function onEditorInput(event?: Event) {
   lastInputAt = Date.now();
   aiUndo.value = null;
   syncValueFromEditor();
-  if (frozenUnsaved.value) scheduleSnapshot();
+  if (frozenPending.value) scheduleSnapshot();
   scheduleDraftWrite();
   scheduleMarks();
   if (event) clearUpdatedAt(event.target instanceof Node && editor.value?.contains(event.target) ? window.getSelection()?.anchorNode ?? null : null);
@@ -2222,6 +2238,7 @@ function currentDraft(): DraftV2 | null {
       ...sinkBacklog.value.map(edit => ({ ...edit })),
       ...leftovers.value.map(edit => ({ ...edit })),
       ...(sinkUnsaved.value ? [{ ...sinkUnsaved.value }] : []),
+      ...Object.values(limitedMine.value).map(edit => ({ ...edit })),
     ],
     pendingSave: pendingKey ? { clientSaveKey: pendingKey.key, sentAt: Date.now() } : null,
     writer: pageInstance,
@@ -2233,7 +2250,7 @@ function persistLocalDraft(): boolean {
   if (!record || !browserTab) return false;
   window.clearTimeout(draftTimer);
   draftTimer = undefined;
-  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length && !leftovers.value.length) {
+  if (!isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length && !leftovers.value.length && !Object.keys(limitedMine.value).length) {
     // 审查 M1：只删本页面写的那份（复制出的标签若曾共用 tabId，不会删掉对方的草稿）。
     // 终验回归 H1：恢复条正列着本标签的旧草稿时不删（由“恢复/舍弃”处理）
     if (!localDrafts.value.some(draft => draft.tabId === browserTab)) removeDraft(window.localStorage, account(), record.id, browserTab, { writer: pageInstance });
@@ -2469,7 +2486,31 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       const result = await updateDocumentContent(record.id, base, content, memory, undefined,
         { clientSaveKey: key, allowMerge: true, ...(explicit !== null ? { baseMarkdown: explicit } : {}) });
       if (!current()) return;
-      const sent = editor?.content ?? content;
+      let sent = editor?.content ?? content;
+      // 测试工程师 N8：这次提交里有段落落在本人另一处（另一个标签页）已冲突、未处理的段上——服务器把它追加为快照、正文保留原样（200 + frozenByConflict）。
+      // 本标签编辑区里这一段同样冻结（不按服务器正文重绘掉），并以本标签的身份存一份快照（卡片上按标签页区分，见 mineOthers）
+      const unseen = (result.frozenByConflict || []).filter(cid => !frozenOpen.value.some(entry => entry.conflictId === cid));
+      if (unseen.length && !draftRestoring && !editor) {
+        const items = await conflictsToFreeze(record, unseen);
+        if (!current()) return;
+        if (items.length) {
+          const unchanged = markdownContent.value === sent;
+          const keys = freezeConflicts(items);
+          for (const key of keys) {
+            const entry = frozen.value[key];
+            // 服务器上最新一份不是本标签存的（是这次重交追加的，不带标签页）：按本标签再存一份
+            if (entry && entry.savedTab !== browserTab) entry.saved = "\u0000";
+          }
+          if (keys.length) {
+            syncValueFromEditor();
+            if (unchanged) sent = markdownContent.value;
+            scheduleDraftWrite();
+            void nextTick(() => applyConflictMarks());
+            scheduleSnapshot(0);
+            noteAction("这一段你在另一个标签页里也改过、正有未处理的冲突。本标签写的内容已冻结在编辑区并存为冲突副本，请在冲突面板一起处理。", 10000);
+          }
+        }
+      }
       const typedNewer = markdownContent.value !== sent;
       const serverText = result.markdownContent ?? content;
       const changedText = serverText !== sent;
@@ -2504,9 +2545,20 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       // 设计师建议 1：冲突后重交其余部分时合并进来的正是冲突对方的那次修改（已在冲突卡里），不再误报“已合并”
       if (Date.now() - lastConflictAt > 10000) noteMerged(result);
       // 设计师建议 2：这次保存把续写追加成了冲突快照（列表项等）：冲突卡跟着刷新
-      if (result.frozenByConflict?.length) void conflictPanel.value?.load();
+      // 测试工程师 N8：本标签可能还没收到过这条冲突（另一个标签页遇到的）——冲突入口和计数一起刷新
+      if (result.frozenByConflict?.length) void refreshConflicts().then(() => conflictPanel.value?.load());
       // 审查建议 4：冲突副本到了上限，冻结段这次的新内容没能再存进副本——常驻提示，请先处理冲突
-      if (result.snapshotLimited?.length) sinkNote.value = { conflictId: result.snapshotLimited[0].conflictId, text: "这处冲突的副本已达到保存上限（20MB 或 500 份），冲突段里新写的内容没能再存进“我的版本”。请先在冲突面板处理这处冲突；内容仍在编辑区，处理前不要关闭页面。" };
+      // 测试工程师 N3：存不进去的内容不丢——冻结区标为 limited；编辑区里没有这一段时（恢复草稿等）记进 limitedMine。处理时随请求带上
+      if (result.snapshotLimited?.length) {
+        for (const hit of result.snapshotLimited) {
+          const key = `${hit.conflictId}:${hit.itemIndex}`;
+          const entry = frozen.value[key];
+          if (entry && !entry.resolved) entry.limited = true;
+          else if (typeof hit.markdown === "string") limitedMine.value = { ...limitedMine.value, [key]: { conflictId: hit.conflictId, itemIndex: hit.itemIndex, markdown: hit.markdown } };
+        }
+        persistLocalDraft();
+        sinkNote.value = { conflictId: result.snapshotLimited[0].conflictId, text: "这处冲突的副本已达到保存上限（20MB 或 500 份），冲突段里新写的内容没能再存进“我的版本”，已记在本页和本机草稿里。请在冲突面板处理这处冲突，处理时会直接用这一版；处理前不要清除浏览器数据。" };
+      }
       // 界面复验 N4：保存时合并进来的他人修改，重绘后同样加蓝色块标记和目录蓝点
       const mergedIn = result.merged && rerender ? mergedInBlocks(content, serverText) : [];
       if (!typedNewer && !frozenOpen.value.length) othersUpdated.value = null;
@@ -2664,8 +2716,15 @@ function freezeConflicts(items: ConflictItem[]): string[] {
     };
     keys.push(key);
   }
-  if (keys.length && frozenUnsaved.value) scheduleSnapshot(0);
+  if (keys.length && frozenPending.value) scheduleSnapshot(0);
   return keys;
+}
+/** 测试工程师 N8：保存响应里 frozenByConflict 指向、本标签还没冻结的冲突条目 */
+async function conflictsToFreeze(record: DocumentRecord, ids: string[]): Promise<ConflictItem[]> {
+  try {
+    const items = await listConflicts(record.id, "open", "me");
+    return items.filter(item => ids.includes(item.conflictId) && !(frozen.value[`${item.conflictId}:${item.itemIndex}`] && !frozen.value[`${item.conflictId}:${item.itemIndex}`].resolved));
+  } catch { return []; }
 }
 /** 冻结区续写的快照：与自动保存同一节拍（停手 3 秒）；同一份内容重发用同一个键。 */
 function scheduleSnapshot(delay = 3000) {
@@ -2674,11 +2733,11 @@ function scheduleSnapshot(delay = 3000) {
 }
 async function flushSnapshots(): Promise<void> {
   window.clearTimeout(snapshotTimer);
-  if (snapshotFlight) { await snapshotFlight.catch(() => undefined); if (!frozenUnsaved.value) return; }
+  if (snapshotFlight) { await snapshotFlight.catch(() => undefined); if (!frozenPending.value) return; }
   const record = document.value;
   if (!record || readonly.value) return;
   if (editor.value) editorText();
-  const work = frozenOpen.value.filter(entry => entry.mine !== entry.saved);
+  const work = frozenOpen.value.filter(entry => entry.mine !== entry.saved && !entry.limited);
   if (!work.length) return;
   snapshotFlight = (async () => {
     let failed = false;
@@ -2705,8 +2764,10 @@ async function flushSnapshots(): Promise<void> {
         }
         if (error instanceof ApiError && error.code === "SNAPSHOT_LIMIT") {
           // 副本到上限（每条 500 份或总大小 20MB，422）：内容仍在编辑区和本机草稿里，提示先处理冲突（不再自动重试）
-          entry.failing = true;
-          noteAction("这处冲突的副本已到上限（份数或总大小 20MB），请先在冲突面板处理这条冲突；你写的内容仍在编辑区和本机草稿里。", 10000);
+          // 测试工程师 N3：不再要求“先保存”（存不进去会死锁）——标为 limited，处理时把编辑区这一版随请求带上
+          entry.limited = true;
+          entry.failing = false;
+          noteAction("这处冲突的副本已到上限（份数或总大小 20MB），新写的内容没能存进冲突副本，仍在编辑区和本机草稿里。请在冲突面板处理这条冲突，处理时会直接用编辑区里的这一版。", 10000);
           continue;
         }
         entry.failing = true;
@@ -3085,13 +3146,16 @@ async function beforeResolve(): Promise<boolean> {
   await flushCaretSink();
   // 让冲突面板拿到刚存上的快照 id（审查点 3：处理请求带上它）
   await nextTick();
-  return !isDirty.value && !frozenUnsaved.value && !sinkUnsaved.value && !sinkBacklog.value.length;
+  // 测试工程师 N3：副本已满的冻结区不算“没保存”（存不进去，处理时随请求带上）
+  return !isDirty.value && !frozenPending.value && !sinkUnsaved.value && !sinkBacklog.value.length;
 }
 /** 卡片上“我的版本”的实时内容（冻结区里的文字）与快照状态。 */
 const liveMine = computed(() => Object.fromEntries(frozenOpen.value.map(entry => [entry.key, {
   markdown: entry.adopted && entry.adopted.from === entry.mine ? entry.adopted.markdown : entry.mine, saved: entry.mine === entry.saved, savedAt: entry.savedAt, failing: entry.failing, original: entry.original, snapshotId: entry.snapshotId,
-  otherTab: Boolean(entry.savedTab && entry.savedTab !== browserTab && entry.mine === entry.saved),
-}])));
+  otherTab: Boolean(entry.savedTab && entry.savedTab !== browserTab && entry.mine === entry.saved), limited: Boolean(entry.limited),
+}]).concat(Object.entries(limitedMine.value).filter(([key]) => !frozen.value[key] || frozen.value[key].resolved).map(([key, edit]) => [key, {
+  markdown: edit.markdown, saved: false, savedAt: null, failing: false, original: "", snapshotId: null, otherTab: false, limited: true, detached: true,
+}]))));
 /** 审查员 M1：冲突面板发现服务器上有更新的一份“我的版本”（另一个标签页 / 本标签正文保存时追加）→ 以它为准，不再带旧 snapshotId。冻结区有没存上的字时不接（那些字会先存成更新的一份）。 */
 function adoptLatest(key: string, latest: MineLatest) {
   const entry = frozen.value[key];
@@ -3105,10 +3169,17 @@ async function acceptResolution(result: ResolveResult) {
   const record = document.value;
   if (!record) return;
   if (sinkNote.value && (!result.conflictId || sinkNote.value.conflictId === result.conflictId) && result.conflictStatus !== "open") sinkNote.value = null;
+  if (result.conflictId && result.items.some(entry => limitedMine.value[`${result.conflictId}:${entry.itemIndex}`])) {
+    const rest = { ...limitedMine.value };
+    for (const entry of result.items) if (entry.status !== "open") delete rest[`${result.conflictId}:${entry.itemIndex}`];
+    limitedMine.value = rest;
+    persistLocalDraft();
+  }
   conflictSummary.value = { ...(conflictSummary.value || { allOpen: null }), mineOpen: result.mineOpen, mineHandled: (conflictSummary.value?.mineHandled || 0) + result.items.length };
   // 复审 M3：原位置附近已找不到时放到了章节末尾，提醒用户检查
   if (result.items.some(entry => entry.placementFallback)) noteAction("恢复的段落原来的位置已变化，已放在所属章节末尾，请检查。", 10000);
-  else if (result.action === "keep_mine") noteAction("已用你的版本（含续写）更新这一段。", 4000);
+  // K1-M1（L6 第 4 条）：说清楚是替换了正文里的这一段，原来的在版本记录里
+  else if (result.action === "keep_mine") noteAction("已用你的版本（含续写）替换正文里的这一段；替换前的内容可在版本记录里查看。", 6000);
   else if (result.action === "keep_both") noteAction(`已在你的版本前插入 ${result.theirsName || "对方"} 的版本，两段都在正文中。`, 4000);
   // 设计师建议 7：其余处理方式也给成功短提示
   else if (result.action === "use_theirs") noteAction(`已使用 ${result.theirsName || "对方"} 的版本。你的版本可在「已处理」里查看和下载。`, 4000);
@@ -3389,6 +3460,11 @@ function onKeydown(event: KeyboardEvent) {
   if (event.ctrlKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
     void save("manual");
+    // 测试工程师 N3：副本已满、存不进去的冲突段——Ctrl+S 不再“无反应”，说明去处并打开冲突面板
+    if (frozenOpen.value.some(entry => entry.limited && entry.mine !== entry.saved) || Object.keys(limitedMine.value).length) {
+      noteAction("冲突段里新写的内容存不进冲突副本（副本已满），正文其余部分照常保存。请在冲突面板处理这条冲突，处理时会直接用这一版。", 8000);
+      openConflicts("mine");
+    }
   }
 }
 watch(documentId, () => void load());

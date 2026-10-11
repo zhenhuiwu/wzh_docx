@@ -344,7 +344,7 @@ def test_resubmit_frozen_snapshots_count_toward_size_and_count_caps(team, monkey
     big = start["markdownContent"].replace("A2。", "B2。续写一。再写很多很多字。").replace("第一段。", "B 改第一段。")
     over = save(client, did, 1, big, _as(client, "editor2"), key="cap-resubmit-02")
     assert over.status_code == 200, over.text
-    assert over.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0}]
+    assert over.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0, "markdown": "B2。续写一。再写很多很多字。"}]  # N3：带上没存进去的内容
     assert _snapshot_rows(cid) == (count, used)  # 没有绕过总大小上限
     assert "B 改第一段。" in current(client, did)["markdownContent"]  # 其余修改照常保存
     # 与最新一份相同的内容不算新增，不受上限影响
@@ -355,7 +355,7 @@ def test_resubmit_frozen_snapshots_count_toward_size_and_count_caps(team, monkey
     monkeypatch.setattr("app.document_commit.MAX_SNAPSHOT_BYTES_PER_CONFLICT", 20 * 1024 * 1024)
     monkeypatch.setattr("app.document_commit.MAX_SNAPSHOTS_PER_ITEM", count)
     more = save(client, did, 1, start["markdownContent"].replace("A2。", "B2。续写二。"), _as(client, "editor2"), key="cap-resubmit-04")
-    assert more.status_code == 200 and more.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0}], more.text
+    assert more.status_code == 200 and [{k: v for k, v in hit.items() if k != "markdown"} for hit in more.json()["data"]["snapshotLimited"]] == [{"conflictId": cid, "itemIndex": 0}], more.text
     assert _snapshot_rows(cid)[0] == count
 
 
@@ -375,3 +375,28 @@ def test_mine_others_lists_last_snapshot_of_other_tabs(team):
     assert _mine(client, did, cid, 0, "B2。甲一。甲后写。乙的字。", "others-key-0004", tab="tab-b").status_code == 200
     [item] = _open_items(client, did)
     assert [(o["tabId"], o["markdown"]) for o in item["mineOthers"]] == [("tab-a", "B2。甲一。甲后写。")]
+
+
+def test_resolve_at_snapshot_cap_uses_carried_mine_markdown(team, monkeypatch):
+    """测试工程师 N3（用户已定）：副本到上限后，处理请求可带上编辑区 / 草稿里没存上的最新“我的版本”（mineMarkdown），
+    只用于这次处理、不受上限约束；看到的快照 id 不对仍 409；同键重放结果一致。"""
+    client, did, _ = team
+    cid = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})["conflictId"]
+    monkeypatch.setattr("app.document_commit.MAX_SNAPSHOTS_PER_ITEM", 2)
+    assert _mine(client, did, cid, 0, "B2。一", "carry-key-0001").status_code == 200
+    second = _mine(client, did, cid, 0, "B2。一二", "carry-key-0002")
+    assert second.status_code == 200
+    seen = second.json()["data"]["mineLatest"]["snapshotId"]
+    assert _mine(client, did, cid, 0, "B2。一二三（到上限）", "carry-key-0003").json()["error"]["code"] == "SNAPSHOT_LIMIT"
+    rev = current(client, did)["revision"]
+    stale = _resolve(client, did, cid, rev, [{"itemIndex": 0, "action": "keep_mine", "mineSnapshotId": "old-id",
+                                              "mineMarkdown": "B2。一二三（到上限）"}], "carry-resolve-0")
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "MINE_SNAPSHOT_CHANGED"
+    body = {"itemIndex": 0, "action": "keep_mine", "mineSnapshotId": seen, "mineMarkdown": "B2。一二三（到上限）"}
+    done = _resolve(client, did, cid, rev, [body], "carry-resolve-1")
+    assert done.status_code == 200, done.text
+    assert "B2。一二三（到上限）" in current(client, did)["markdownContent"]
+    again = _resolve(client, did, cid, rev, [body], "carry-resolve-1")
+    assert again.status_code == 200, again.text
+    resolved = client.get(f"/api/v1/documents/{did}/conflicts?status=resolved", headers=_as(client, "editor2")).json()["data"]["items"]
+    assert resolved[0]["mineLatest"]["markdown"] == "B2。一二三（到上限）"

@@ -43,6 +43,9 @@ const selfAdded = ref<Record<string, string>>({});
 type OtherTab = { tabId: string; markdown: string; savedAt?: string | null };
 const othersConfirm = ref<Record<string, { choice: ActionChoice; others: OtherTab[] }>>({});
 const othersAccepted = ref<Record<string, boolean>>({});
+/** 测试工程师 N4 / N8：处理时服务器上已有更新的一份（另一个标签页写的），本标签又有那份里没有的字——用户在确认里选了之后，
+ *  按这份 id 提交（不再 409），“只用这个标签页的版本”时把本标签的文字随请求带上（mineMarkdown） */
+const pinned = ref<Record<string, string>>({});
 const handledOpen = ref(false);
 const keys = new ResolveKeys();
 const id = (item: ConflictItem) => `${item.conflictId}:${item.itemIndex}`;
@@ -132,7 +135,7 @@ function theirsParts(item: ConflictItem): Array<{ type: string; text: string }> 
 
 // —— 方案 C：我的版本以最新快照为准（编辑区里正在写的优先）——
 const live = (item: ConflictItem) => tab.value === "mine" ? props.liveMine?.[id(item)] : undefined;
-const frozenHere = (item: ConflictItem) => Boolean(live(item));
+const frozenHere = (item: ConflictItem) => Boolean(live(item) && !live(item)!.detached);
 function mineText(item: ConflictItem): string {
   if (item.mine?.deleted) return "";
   return live(item)?.markdown ?? item.mineLatest?.markdown ?? item.mine?.markdown ?? "";
@@ -149,7 +152,9 @@ function hm(at: string | null | undefined) {
 function mineStatus(item: ConflictItem): string {
   const n = continued(item);
   const state = live(item);
-  if (state && !state.saved) return `${n ? `含冲突后续写的 ${n} 字 · ` : ""}仅在本机 · 联网后自动保存`;
+  // 测试工程师 N3：副本到上限存不进去时不说“联网后自动保存”——处理这条冲突时会直接用这一版
+  if (state && !state.saved && state.limited) return `${n ? `含冲突后续写的 ${n} 字 · ` : ""}副本已满，未存到服务器（仅在本页和本机草稿）· 处理时会直接用这一版`;
+  if (state && !state.saved) return `${n ? `含冲突后续写的 ${n} 字 · ` : ""}仅在本机 · ${state.failing ? "联网后自动保存" : "正在保存…"}`;
   if (!n) return "";
   const at = state?.savedAt || item.mineLatest?.savedAt;
   // 设计师建议 6（边界 5）：最新一份来自另一个标签页时注明来源
@@ -191,8 +196,9 @@ function keepOnlyThisTab(item: ConflictItem) {
   void apply(item, pending.choice);
 }
 
-async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string) {
+async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string): Promise<void> {
   if (!props.canResolve || busyKey.value) return;
+  let retry = false;
   if (choice.action === "use_theirs" && confirmTheirs.value !== item) { confirmTheirs.value = item; return; }
   confirmTheirs.value = null;
   const request: ResolveRequestItem = { itemIndex: item.itemIndex, action: choice.action };
@@ -216,11 +222,19 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     }
     // 审查点 3：带上我看到的“我的版本”快照（处理前已把编辑区里的续写存上）；服务器上不是这一份时 409，不用旧快照处理
     // 审查员 A3b：“使用对方的版本”不用我的版本，不带快照 id（另一个标签页刚写了快照也不该卡住）
-    if (tab.value === "mine" && choice.action !== "use_theirs") request.mineSnapshotId = (live(item) ? live(item)!.snapshotId : item.mineLatest?.snapshotId) ?? "";
+    const state = live(item);
+    const pin = pinned.value[id(item)];
+    const carries = ["keep_mine", "keep_both", "restore_as_new"].includes(choice.action);
+    if (tab.value === "mine" && choice.action !== "use_theirs") request.mineSnapshotId = pin ?? (state && !state.limited ? state.snapshotId : item.mineLatest?.snapshotId) ?? "";
+    // 测试工程师 N3（用户决定）：副本到上限时，编辑区 / 草稿里没存上的最新“我的版本”随请求带上（只用于这次处理，不计入上限）
+    if (state?.limited && !state.saved && carries) request.mineMarkdown = state.markdown;
+    // N4 / N8：已确认按这个标签页的版本处理（服务器上最新一份是别的标签页写的）——带上本标签的文字
+    else if (pin && state && carries) request.mineMarkdown = mineText(item);
     const key = keys.keyFor(JSON.stringify([item.conflictId, request]));
     const result = await resolveConflict(props.documentId, item.conflictId, key, props.revision, [request]);
     keys.done();
     const fallback = result.items.some(entry => entry.placementFallback);
+    delete pinned.value[id(item)];
     emit("resolved", { ...result, conflictId: result.conflictId ?? item.conflictId, action: result.action ?? choice.action, theirsName: result.theirsName ?? whoOf(item) });
     if (fallback) cardNotice.value = { ...cardNotice.value, [id(item)]: "位置已变化，请检查恢复的段落。" };
     delete manualOpen.value[id(item)];
@@ -229,10 +243,28 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     const apiError = error instanceof ApiError ? error : new ApiError(0, "DEPENDENCY_UNAVAILABLE", "暂时不能连接服务。");
     if (apiError.code === "MINE_SNAPSHOT_CHANGED") {
       keys.done();
+      // 测试工程师 N4（并入 A3c 确认）：本标签刚写、还没进服务器上那一份的字不能静默丢
+      const oursBefore = mineText(item);
+      const liveBefore = live(item);
       await load();
       // 审查员 M1：展示服务器上最新的一份（注明来自哪个标签页），以它为准；用户再点一次才按这一份处理（不拿本标签的旧文字覆盖另一个标签页写的字）
       const fresh = items.value.find(entry => id(entry) === id(item));
       const latest = fresh?.mineLatest;
+      if (fresh && latest?.snapshotId && liveBefore) {
+        const oursExtra = addedText(latest.markdown, oursBefore);
+        const otherExtra = addedText(oursBefore, latest.markdown);
+        if (oursExtra && pinned.value[id(fresh)] !== latest.snapshotId) {
+          pinned.value = { ...pinned.value, [id(fresh)]: latest.snapshotId };
+          if (otherExtra) {
+            // 两边各有对方没有的字：与 A3c 同一个确认（并列两份，默认手动合并两份都放进去）
+            othersConfirm.value = { ...othersConfirm.value, [id(fresh)]: { choice, others: [{ tabId: latest.tabId || "", markdown: latest.markdown, savedAt: latest.savedAt }] } };
+            return;
+          }
+          // 服务器上那份的内容本标签都有（本标签写得更多）：直接按本标签的版本再提交一次，不丢字也不多问
+          retry = true;
+          return;
+        }
+      }
       if (fresh && latest?.snapshotId) {
         if (live(fresh)) emit("adopt", id(fresh), latest);
         const tabNow = browserTabIdentity().current;
@@ -287,6 +319,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     busyKey.value = "";
     busyLabel.value = "";
   }
+  if (retry) await apply(item, choice, markdown);
 }
 
 const diffOf = (base: string | null | undefined, changed: string | null | undefined) => diffWords(normalizeListMarkers(base || ""), normalizeListMarkers(changed || ""));

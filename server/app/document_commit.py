@@ -224,6 +224,43 @@ def _other_tab_snapshots(connection, conflict_id, item_index: int, latest: dict 
     return [value for tab, value in last.items() if tab != latest_tab and value["markdown"] != latest_md]
 
 
+def _carry_mine(connection, conflict_id, actor, body) -> set[int]:
+    """测试工程师 N3：处理请求带上的最新“我的版本”（mineMarkdown，副本到上限时编辑区 / 草稿里没存上的那份）。
+    先按客户端看到的快照 id 核对（不一致仍 409 MINE_SNAPSHOT_CHANGED），再在写事务里记成一份快照（不受上限约束），
+    之后这次处理就用它。条目已不是 open 时不记（由后面的“已处理”分支回应）。返回带了内容的条目下标。"""
+    carried: set[int] = set()
+    items = [item for item in body.items if item.mineMarkdown is not None
+             and item.action in {"keep_mine", "keep_both", "restore_as_new"}]
+    if not items:
+        return carried
+    if connection.in_transaction:
+        connection.commit()
+    with write_transaction(connection):
+        state = {int(row["item_index"]): row["status"] for row in connection.execute(
+            "SELECT item_index, status FROM document_conflict_items WHERE conflict_id=%s", (str(conflict_id),)).fetchall()}
+        latest = _latest_snapshots(connection, conflict_id)
+        payload = json.loads(connection.execute("SELECT payload_json FROM document_conflicts WHERE id=%s",
+                                                (str(conflict_id),)).fetchone()["payload_json"])
+        for item in items:
+            key = f"resolve:{body.clientSaveKey}:{item.itemIndex}"
+            replay = connection.execute("SELECT 1 FROM document_conflict_mine_snapshots WHERE conflict_id=%s AND client_save_key=%s",
+                                        (str(conflict_id), key)).fetchone()
+            if replay is None:
+                if state.get(item.itemIndex) != "open":
+                    continue
+                now_id = (latest.get(item.itemIndex) or {}).get("id") or ""
+                if item.mineSnapshotId is not None and item.mineSnapshotId != now_id:
+                    raise AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
+                        "conflictId": str(conflict_id), "itemIndex": item.itemIndex,
+                        "mineLatest": _mine_latest(next((entry for entry in payload["conflicts"]
+                                                         if int(entry["itemIndex"]) == item.itemIndex), {}),
+                                                   latest.get(item.itemIndex))})
+                append_snapshot(connection, conflict_id=conflict_id, item_index=item.itemIndex, actor=actor,
+                                markdown=item.mineMarkdown, key=key, source="editor")
+            carried.add(item.itemIndex)
+    return carried
+
+
 def _mine_latest(item: dict, snapshot: dict | None) -> dict:
     """mineLatest：有快照用最新快照，没有时就是原始 mine（原始 mine 字段本身不变）。"""
     if snapshot is not None:
@@ -555,7 +592,7 @@ def _snapshot_limit_hit(connection, conflict_id, item_index: int, nbytes: int) -
 def _append_frozen(connection, actor, rhash: str, frozen: list[tuple[str, int, str]]) -> list[dict]:
     """冻结段里提交上来的“我的”内容追加为快照（原冲突不变、不新建冲突）。
     审查建议 4：同样受 500 份 / 20MB 上限约束（之前从旧修订反复重交可绕过）；超限的不追加（正文其余部分照常保存），
-    返回 [{conflictId, itemIndex}] 由调用方放进响应 snapshotLimited，前端提示先处理冲突。"""
+    返回 [{conflictId, itemIndex, markdown}] 由调用方放进响应 snapshotLimited，前端提示先处理冲突。"""
     limited: list[dict] = []
     for cid, index, markdown in frozen:
         key = f"resubmit:{rhash[:48]}:{index}"
@@ -564,7 +601,8 @@ def _append_frozen(connection, actor, rhash: str, frozen: list[tuple[str, int, s
         latest = _latest_snapshots(connection, cid).get(index)
         if replay is None and not (latest is not None and latest["markdown"] == markdown) \
                 and _snapshot_limit_hit(connection, cid, index, len(markdown.encode("utf-8"))):
-            limited.append({"conflictId": str(cid), "itemIndex": index})
+            # 测试工程师 N3：带上没存进去的内容——编辑区里没有这一段时（恢复草稿等）前端据此保留，处理时作为 mineMarkdown 带上
+            limited.append({"conflictId": str(cid), "itemIndex": index, "markdown": markdown})
             continue
         append_snapshot(connection, conflict_id=cid, item_index=index, actor=actor, markdown=markdown, key=key, source="resubmit")
     return limited
@@ -714,6 +752,9 @@ class ResolveItem(BaseModel):
     placement: Placement | None = None
     # 审查点 3：客户端看到（并据此确认）的“我的版本”快照 id；""＝没有快照（原始版本）。与服务器最新一份不一致时 409
     mineSnapshotId: str | None = Field(default=None, max_length=64)
+    # 测试工程师 N3（用户已定）：副本到上限后编辑区 / 本机草稿里还有没存进服务器的最新“我的版本”——随处理请求带上，
+    # 只用于这次处理（记为一份快照以便“已处理”里下载，不受 500 份 / 20MB 上限约束）
+    mineMarkdown: str | None = Field(default=None, max_length=2_000_000)
 
 
 class ResolveBody(BaseModel):
@@ -978,6 +1019,7 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
             raise AppError(422, "VALIDATION_FAILED", "同一处冲突在一次请求中只能出现一次。")
         rhash = request_hash(body.model_dump(exclude={"clientSaveKey"}))
         ensure_committed(connection, did)
+        carried = _carry_mine(connection, conflict["id"], principal.user_id, body)
         for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
             guard = document_lock(did) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
             with guard:
@@ -1008,7 +1050,7 @@ def resolve_conflict(request: Request, document_id: str, conflict_id: str, body:
                 payload = json.loads(conflict["payload_json"])
                 used = _latest_snapshots(connection, conflict["id"])
                 for request_item in body.items:
-                    seen = request_item.mineSnapshotId
+                    seen = None if request_item.itemIndex in carried else request_item.mineSnapshotId
                     now_id = (used.get(request_item.itemIndex) or {}).get("id") or ""
                     if seen is not None and seen != now_id:
                         raise AppError(409, "MINE_SNAPSHOT_CHANGED", "你的版本刚有更新，请确认最新内容后再处理。", details={
