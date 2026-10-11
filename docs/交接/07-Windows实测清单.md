@@ -1,6 +1,6 @@
 # 07 Windows 实测清单（local/stabilize，2026-10-10）
 
-代码审查员终审（对应 5f6afcf）的结论是“可合入”，前提之一是下面三类项目在真实 Windows 上或 GitHub Windows CI 中跑通。开发环境是 Linux，这些项目**都还没有实测过**。逐项执行，并在每项后面记录结果、日期、Windows 版本和执行人。
+代码审查员终审（对应 5f6afcf）的结论是“可合入”，前提之一是下面三类项目在真实 Windows 上或 GitHub Windows CI 中跑通。原审查环境是 Linux。2026-10-11 已在本机 Windows 用 `DOCWB_E2E=1` 与独立测试库完成全量回归：671 通过、0 失败、1 跳过（仅适用于旧 Node.js 的版本拒绝用例，本机为 22.23.1），6 个子测试通过，包含密码/ACL 与浏览器编辑往返。打包脚本语法与快照回归通过；新 exe 完整构建、换机启动、管理员身份与其他本机用户检查仍待验收。当前完整记录以 [未达标项与后续开发计划](../开发设计/2026-10-11-未达标项与后续开发计划.md) 为准。
 
 准备：Windows 10/11 x64，安装 uv（≥0.4.30）、Node.js（≥22.13，见根目录 `.nvmrc`）、Git、PowerShell 5.1 或 7。用**普通用户**和**以管理员身份运行**各做一遍第 1 类。
 
@@ -12,6 +12,7 @@
 2. 运行仓库自带的用例（含两种独立校验：pywin32 读回，以及 `icacls /save` 的 SDDL 加 `whoami /user`）：
    ```powershell
    $env:DOCWB_TEST_DATABASE_URL = "sqlite:///$env:TEMP\docwb-test.db"
+   $env:DOCWB_E2E = "1"
    uv run pytest -q -rs tests/test_desktop_package.py
    ```
    预期：`test_windows_password_file_has_owner_only_protected_dacl`、`test_windows_acl_seen_by_icacls`、`test_windows_initial_admin_file_is_owner_only` 三项都**通过，不能是跳过**。
@@ -32,7 +33,7 @@
 
 ## 2. GitHub Windows CI job
 
-依据：`.github/workflows/ci.yml` 的 `windows` job，它从未在 GitHub 上运行过。
+依据：`.github/workflows/ci.yml` 的 `windows` job。本轮未核对 GitHub 上的运行记录，不能将本机通过写成云端 CI 通过。
 
 1. **推送前必须由用户本人确认**（仓库是公开的）。确认后推送分支或开 PR，打开 Actions 页面。
 2. 检查 `windows` job 的每一步：
@@ -52,7 +53,7 @@
    - 把 PATH 中的 Node 换成 20.x，预期报“Node.js 版本过低”。
 2. **build.ps1**（PowerShell，`cd deploy`）：
    - `./build.ps1 -NoZip`：`release/文档工作室` 中只刷新 exe 和 `_internal`，原有 `data`、`.env` 保留；
-   - `./build.ps1`：zip 只含 exe、`_internal`、`data`、`.env.example`、`使用说明.txt`、`部署校验.json`。在 `release/文档工作室` 里放一个 `.env` 和 `初始管理员密码.txt`，确认它们**不会**进入 zip；
+   - `./build.ps1`：私有迁移 zip 只含 exe、`_internal`、`data`、重新生成的 `.env`、`.env.example`、`使用说明.txt`、`部署校验.json`。确认 `.env` 的 AI 地址、模型、密钥和思考强度迁移后有效，路径为包内相对路径；密钥不进入其他说明/校验文件；`release/文档工作室` 里旧的 `.env`、日志和 `初始管理员密码.txt` 不被直接复制；
    - 让某个测试任务的被测系统密码为 `123456`，并在文档正文中写“产品编号 123456”，预期打包停止并报 `documents.markdown_content`；再用 `./build.ps1 -AllowCredentialText documents.markdown_content` 打包成功，`部署校验.json` 的 `accepted_leftovers` 记录了次数；
    - 解压 zip，用文本搜索确认 `data/app.db` 中没有该任务的被测系统密码（除上一步明确放行的正文外）。
 3. **exe**（把 zip 解压到一个空目录，库中没有账号的全新数据）：
