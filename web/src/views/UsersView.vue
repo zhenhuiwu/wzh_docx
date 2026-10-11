@@ -16,6 +16,7 @@ import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { formatDateTime, initialOf } from "../format";
 import { useFieldErrors } from "../fieldErrors";
+import { disableBlockedMoreText, disableBlockedText, type DisableBlockedProject } from "../memberModel";
 
 const page = ref(1);
 const pageSize = 10;
@@ -42,6 +43,8 @@ const reason = ref("");
 const pending = ref<AccountUser | null>(null);
 const pendingAction = ref<"disable" | "enable" | "reset" | "revoke" | "">("");
 const accountInput = ref<HTMLInputElement | null>(null);
+// A05 U-5（16 §2.13）：停用某些项目唯一的启用负责人被拒（409 LAST_OWNER）时，弹窗不关，切到“不能停用”状态
+const blocked = ref<{ projects: DisableBlockedProject[]; total: number } | null>(null);
 let usersRequest = 0;
 
 const globalRoles = computed(() => roles.value.filter((item) => item.scope === "global" && item.assignable));
@@ -164,11 +167,13 @@ function ask(user: AccountUser, action: "disable" | "enable" | "reset" | "revoke
   reason.value = "";
   password.value = "";
   formError.value = "";
+  blocked.value = null;
   notice.value = "";  askFields.clear();
 }
 
 function cancelAsk() {
   pending.value = null;
+  blocked.value = null;
   pendingAction.value = "";
   reason.value = "";
   password.value = "";
@@ -201,7 +206,10 @@ async function confirmAsk() {
     cancelAsk();
     await loadUsers();
   } catch (error) {
-    formError.value = messageOf(error);
+    if (pendingAction.value === "disable" && error instanceof ApiError && error.status === 409 && error.code === "LAST_OWNER") {
+      const projects = Array.isArray(error.details?.projects) ? error.details!.projects as DisableBlockedProject[] : [];
+      blocked.value = { projects, total: Number(error.details?.total ?? projects.length) };
+    } else formError.value = messageOf(error);
   } finally {
     submitting.value = false;
   }
@@ -353,8 +361,24 @@ onMounted(async () => {
 
     <dialog ref="confirmDialog" class="app-dialog confirm" aria-labelledby="confirm-user-title" @cancel.prevent="dismissAsk">
       <form v-if="pending" class="create" novalidate @submit.prevent="confirmAsk">
-        <div class="dialog-head"><h2 id="confirm-user-title">{{ actionTitle }} {{ pending.name }}（{{ pending.account }}）？</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="submitting" @click="dismissAsk"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
-        <div class="dialog-body confirm-body">
+        <div class="dialog-head"><h2 id="confirm-user-title">{{ blocked ? `不能停用 ${pending.name}（${pending.account}）` : `${actionTitle} ${pending.name}（${pending.account}）？` }}</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="submitting" @click="dismissAsk"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
+        <div v-if="blocked" class="dialog-body confirm-body" data-testid="user-disable-blocked">
+          <p class="form-alert" role="alert">{{ disableBlockedText(pending.name, blocked.total) }}</p>
+          <div class="table-wrap blocked-projects">
+            <table>
+              <thead><tr><th>项目</th><th class="th-right">操作</th></tr></thead>
+              <tbody>
+                <tr v-for="item in blocked.projects" :key="item.id" data-testid="user-disable-project" :data-project-id="item.id">
+                  <td><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener">{{ item.name }}</a></td>
+                  <td class="cell-right"><a class="link" :href="`/projects/${item.id}#members`" target="_blank" rel="noopener" :aria-label="`打开项目概述：${item.name}`">打开项目概述</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="disableBlockedMoreText(blocked.total, blocked.projects.length)" class="hint">{{ disableBlockedMoreText(blocked.total, blocked.projects.length) }}</p>
+          <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
+        </div>
+        <div v-else class="dialog-body confirm-body">
           <p class="dialog-text">
             <template v-if="pendingAction === 'disable'">停用后不能登录，已有会话会失效。</template>
             <template v-else-if="pendingAction === 'enable'">启用后可以重新登录。</template>
@@ -375,7 +399,11 @@ onMounted(async () => {
           </div>
           <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         </div>
-        <div class="dialog-actions">
+        <div v-if="blocked" class="dialog-actions">
+          <button type="button" class="ghost" :disabled="submitting" @click="cancelAsk">关闭</button>
+          <button type="submit" class="primary" data-testid="user-disable-recheck" :disabled="submitting">{{ submitting ? "正在检查…" : "重新检查并停用" }}</button>
+        </div>
+        <div v-else class="dialog-actions">
           <button type="button" class="ghost" :disabled="submitting" @click="cancelAsk">取消</button>
           <button type="submit" class="primary" :class="{ danger: pendingAction === 'disable' }" :disabled="submitting">{{ submitting ? "正在提交" : `确认${actionTitle}` }}</button>
         </div>
@@ -393,6 +421,7 @@ onMounted(async () => {
 .role-list { display:inline-flex; flex-wrap:wrap; gap:var(--space-1); }
 .confirm-body { display:grid; gap:var(--space-4); }
 .confirm-body .dialog-text { margin:0; }
+.blocked-projects { max-height:calc(44px * 8); overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-control); }
 .create { display:block; padding:0; }
 .create label { margin:0; }
 </style>
