@@ -51,7 +51,7 @@ def test_legacy_109_database_upgrades_and_backfills_lazily(tmp_path, monkeypatch
         connection.commit()
     assert migrate() == ["110_project_member_owner_backfill.sql", "111_document_objects.sql",
                          "112_document_changes.sql", "113_document_conflicts.sql", "114_document_objects_deleted_after.sql",
-                         "115_document_conflict_mine_snapshots.sql"]
+                         "115_document_conflict_mine_snapshots.sql", "116_project_members_v2.sql"]
     with connect() as connection:
         assert connection.execute("SELECT role FROM project_members WHERE project_id=%s", (project,)).fetchone()["role"] == "owner"
         row = connection.execute("SELECT objects_revision, updated_by, revision FROM documents WHERE id=%s", (document,)).fetchone()
@@ -141,11 +141,15 @@ def test_down_script_restores_110_schema(tmp_path, monkeypatch):
     with connect() as connection:
         expected = _schema(connection)
     assert migrate() == ["111_document_objects.sql", "112_document_changes.sql", "113_document_conflicts.sql",
-                         "114_document_objects_deleted_after.sql", "115_document_conflict_mine_snapshots.sql"]
+                         "114_document_objects_deleted_after.sql", "115_document_conflict_mine_snapshots.sql",
+                         "116_project_members_v2.sql"]
+    # 116 与 111–115 无关，按回滚顺序先单独回滚 116，再执行 113→111 的 down 脚本
+    from app.rollback_migration_116 import rollback as rollback_116
+    assert rollback_116(db.database_path(), apply=True) == 0
     with connect() as connection:
         connection._conn.executescript(DOWN.read_text(encoding="utf-8"))
         assert _schema(connection) == expected
-    assert len(migrate()) == 5
+    assert len(migrate()) == 6
 
 
 def test_down_script_keeps_legacy_document_tests_green(document_context):  # noqa: F811
