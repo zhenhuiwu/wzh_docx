@@ -474,6 +474,16 @@ const templateTag = computed(() => {
   const tag = (record.templateName || "").trim();
   return tag && tag !== record.name.trim() ? tag : "";
 });
+// A06（16 §3.4）：模板版本。legacySnapshot 只显示“版本化之前”，不显示第 N 版与“模板已有新版本”；不提供升级。
+const templateVersion = computed(() => {
+  const info = document.value?.sourceType === "template" ? document.value.template : null;
+  if (!info) return null;
+  if (info.legacySnapshot) return { legacy: true, label: "", newer: "" };
+  if (!info.seq) return null;
+  const published = info.publishedAt ? info.publishedAt.slice(0, 10) : "";
+  return { legacy: false, label: `第 ${info.seq} 版${published ? `（${published}）` : ""}`,
+    newer: info.latestSeq && info.latestSeq > info.seq ? `模板已有第 ${info.latestSeq} 版，本文档仍按第 ${info.seq} 版的结构和指导编写。` : "" };
+});
 const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdownContent.value.trim()) : aiScope.value === "selection" ? Boolean(selectedText.value) : selectedHeading.value !== null);
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
 const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
@@ -3671,7 +3681,10 @@ onUnmounted(() => {
         <button type="button" class="subtle icon-btn" aria-label="返回文档列表" title="返回文档列表" :disabled="opBusy" @click="goBack"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg></button>
         <div class="doctitle">
           <h1 :title="document.name">{{ document.name }}</h1>
-          <span v-if="templateTag" class="tag plain">{{ templateTag }}</span>
+          <span v-if="templateTag" class="tag plain" data-testid="doc-template-tag">{{ templateTag }}<template v-if="templateVersion && !templateVersion.legacy"> · {{ templateVersion.label }}</template></span>
+          <span v-else-if="templateVersion && !templateVersion.legacy" class="tag plain" data-testid="doc-template-tag">模板{{ templateVersion.label }}</span>
+          <span v-if="templateVersion?.legacy" class="tag plain" data-testid="doc-template-legacy" title="本文档创建于模板版本管理之前，使用当时的模板结构，不受之后的模板版本影响。">版本化之前</span>
+          <span v-if="templateVersion?.newer" class="tag info" data-testid="doc-template-newer" :title="templateVersion.newer">模板有新版本</span>
           <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
           <span v-if="wholeSave" class="whole-tag" data-testid="whole-save" tabindex="0" aria-describedby="whole-save-tip">整篇保存<span id="whole-save-tip" class="tip" role="tooltip">这份文档暂时只能整篇保存。和他人同时编辑时，冲突按整段对比，不影响保存。</span></span>
         </div>

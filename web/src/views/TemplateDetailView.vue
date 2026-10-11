@@ -11,6 +11,7 @@ import TemplateImportEditor from "../components/TemplateImportEditor.vue";
 import FilePicker from "../components/FilePicker.vue";
 import { rememberCrumb } from "../crumbs";
 import { useFieldErrors } from "../fieldErrors";
+import { formatDateTime } from "../format";
 
 // 只读角色（templates.read）不显示导入、核对、移除（09 审查 M2）。
 const canManage = computed(() => hasPermission(readSession(), "templates.manage"));
@@ -200,7 +201,11 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       <template v-else>
         <div class="section-bar"><h2>模板文档</h2><span class="count">{{ documents.length }}</span></div>
         <StatePanel v-if="documents.length === 0" title="还没有模板文档" text="请导入 Word 模板，解析后逐项核对内容用途。" />
-        <div v-else class="table-wrap doc-table"><table><thead><tr><th>模板文档</th><th class="col-review">内容核对</th><th class="col-ops th-right"><span class="sr">操作</span></th></tr></thead><tbody><tr v-for="doc in documents" :key="doc.id"><td class="doc-name">{{ doc.name }}</td><td><span class="tag" :class="doc.importStructure?.reviewed ? 'success' : 'warning'">{{ doc.importStructure?.reviewed ? '已核对' : '待核对' }}</span></td><td class="doc-actions"><template v-if="canManage"><button type="button" class="text" :disabled="busy" @click="review(doc)">核对模板</button><button type="button" class="text danger" :disabled="busy" @click="removeDocument(doc)">移除</button></template></td></tr></tbody></table></div>
+        <div v-else class="table-wrap doc-table"><table><thead><tr><th>模板文档</th><th class="col-version">当前版本</th><th class="col-draft">草稿</th><th class="col-usage">使用中</th><th class="col-ops th-right"><span class="sr">操作</span></th></tr></thead><tbody><tr v-for="doc in documents" :key="doc.id" data-testid="tpl-doc-row"><td class="doc-name">{{ doc.name }}</td>
+          <td><template v-if="doc.currentVersion"><span class="version-line" data-testid="tpl-doc-version">第 {{ doc.currentVersion.seq }} 版<span class="muted"> · {{ formatDateTime(doc.currentVersion.publishedAt) }}<template v-if="doc.currentVersion.publishedBy"> · {{ doc.currentVersion.publishedBy }}</template></span></span></template><span v-else class="tag warning">待核对</span></td>
+          <td><span v-if="doc.hasDraft" class="tag info">有草稿</span><span v-else class="muted">无</span></td>
+          <td>{{ doc.usageCount ?? 0 }} 篇</td>
+          <td class="doc-actions"><router-link v-if="doc.currentVersion" class="text" :class="{ disabled: busy }" :to="{ name: 'template-editor', params: { id: templateId, docId: doc.id } }" data-testid="tpl-doc-edit">{{ canManage ? '编辑模板' : '查看' }}</router-link><template v-if="canManage"><button v-if="!doc.importStructure?.reviewed" type="button" class="text" :disabled="busy" @click="review(doc)">核对模板</button><button type="button" class="text danger" :disabled="busy" @click="removeDocument(doc)">移除</button></template></td></tr></tbody></table></div>
       </template>
     </template>
     </div>
@@ -215,8 +220,12 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
 .section-bar h2 { margin:0; font-size:var(--text-md); font-weight:var(--weight-semibold); }
 .doc-table { flex:1; min-height:0; overflow-y:auto; }
 .doc-table table { table-layout:fixed; }
-.col-review { width:14%; }
-.col-ops { width:16%; }
+.col-version { width:24%; }
+.col-draft { width:10%; }
+.col-usage { width:10%; }
+.col-ops { width:20%; }
+.muted { color:var(--text-tertiary); }
+.version-line { white-space:nowrap; }
 .doc-name { font-weight:var(--weight-medium); }
 .import-form { display:flex; flex:none; align-items:flex-start; gap:var(--space-4); padding:var(--space-4); border-bottom:1px solid var(--border-subtle); }
 .import-form label { display:grid; flex:1; min-width:0; gap:6px; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
