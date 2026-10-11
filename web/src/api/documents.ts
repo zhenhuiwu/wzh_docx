@@ -9,6 +9,8 @@ export interface DocumentRecord {
   templateDocumentId?: string;
   templateDocumentName?: string;
   templateName?: string | null;
+  /** A06：本文档使用的模板版本；legacySnapshot=true 表示创建于模板版本管理之前（不显示第 N 版）。 */
+  template?: { name: string | null; documentName: string | null; versionId: string | null; seq: number | null; publishedAt: string | null; latestSeq: number | null; legacySnapshot: boolean } | null;
   originalDocxFileId?: string;
   formatTemplate: Record<string, any>;
   markdownContent: string;
