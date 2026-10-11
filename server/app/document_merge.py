@@ -248,6 +248,25 @@ def assemble_entries(prefix: str, entries: list[Entry]) -> str:
     return "".join(parts)
 
 
+def _merge_table_rows(base: Block, theirs: Block, mine: Block) -> Block | None:
+    """表格整块被双方都改了：行数不变、每一行至多一方改过（或双方改法相同）时按行合并；否则 None（仍是冲突）。
+    测试工程师 table_other 偶发整表冲突：客户端平移不了（保存在途时续打等）退回按块合并，不同行的修改不该成冲突。"""
+    if not (base.kind == theirs.kind == mine.kind == "table"):
+        return None
+    rows_b, rows_t, rows_m = (block.body.splitlines(keepends=True) for block in (base, theirs, mine))
+    if not (len(rows_b) == len(rows_t) == len(rows_m)):
+        return None
+    merged: list[str] = []
+    for row_b, row_t, row_m in zip(rows_b, rows_t, rows_m):
+        if row_m == row_b or row_m == row_t:
+            merged.append(row_t)
+        elif row_t == row_b:
+            merged.append(row_m)
+        else:
+            return None
+    return Block(theirs.kind, "".join(merged), theirs.gap_after, theirs.heading_level)
+
+
 def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool = False) -> MergeResult:
     """mine 相对 base 的修改合并到 theirs 上。冲突处在结果中保留 theirs，并逐处列出。"""
     base_prefix, base = split(base_md)
@@ -337,6 +356,11 @@ def merge3(base_md: str, theirs_md: str, mine_md: str, *, dedupe_inserts: bool =
             copy_theirs(t2)
             continue
         if len(seg_b) == 1 and len(seg_t) == 1 and len(seg_m) == 1:
+            rows = _merge_table_rows(seg_b[0], seg_t[0], seg_m[0])
+            if rows is not None:
+                result.entries.append(Entry(rows, "m", m1))
+                cursor = max(cursor, t2)
+                continue
             reason = "MODIFIED"
         elif len(seg_b) == 1 and (not seg_t or not seg_m):
             reason = "DELETED"
