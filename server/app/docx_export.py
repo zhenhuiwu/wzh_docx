@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+
+from app.fast_diff import bounded_opcodes
 from pathlib import Path
 from shutil import copyfile
 from io import BytesIO
@@ -261,20 +263,8 @@ def _inline_chunks(element, bold=False, italic=False):
 
 def _anchored_operations(old: Sequence, new: Sequence):
     """Anchor unchanged boundaries so repeated words cannot steal their run style."""
-    prefix = 0
-    while prefix < min(len(old), len(new)) and old[prefix] == new[prefix]:
-        prefix += 1
-    suffix = 0
-    while suffix < min(len(old), len(new)) - prefix and old[-1 - suffix] == new[-1 - suffix]:
-        suffix += 1
-    if prefix:
-        yield "equal", 0, prefix, 0, prefix
-    for operation, start, end, new_start, new_end in SequenceMatcher(
-        None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix], autojunk=False
-    ).get_opcodes():
-        yield operation, start + prefix, end + prefix, new_start + prefix, new_end + prefix
-    if suffix:
-        yield "equal", len(old) - suffix, len(old), len(new) - suffix, len(new)
+    # 测试工程师 N7：先去公共前后缀；中间很长时线性对齐，不再二次方（app/fast_diff.py）
+    yield from bounded_opcodes(old, new)
 
 
 def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
@@ -299,14 +289,22 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
     if old_text != paragraph.text:
         raise ValueError("此段包含复杂 Word 内容，无法安全替换；请在原稿中修改该段。")
     owners = [index for index, run in enumerate(runs) for _ in run.text]
-    pieces = [""] * len(runs)
+    # 测试工程师 N7：按片段收集再拼接，不逐字 += 字符串（长段落时是二次方）
+    parts: list[list[str]] = [[] for _ in runs]
     for operation, start, end, new_start, new_end in _anchored_operations(old_text, new_text):
         if operation == "equal":
-            for old_index in range(start, end):
-                pieces[owners[old_index]] += old_text[old_index]
+            index = start
+            while index < end:
+                owner = owners[index]
+                stop = index + 1
+                while stop < end and owners[stop] == owner:
+                    stop += 1
+                parts[owner].append(old_text[index:stop])
+                index = stop
         elif operation in {"insert", "replace"}:
             owner = owners[start] if start < len(owners) else (owners[-1] if owners else 0)
-            pieces[owner] += new_text[new_start:new_end]
+            parts[owner].append(new_text[new_start:new_end])
+    pieces = ["".join(part) for part in parts]
     for run, value in zip(runs, pieces):
         if not value and run.text:
             run._r.getparent().remove(run._r)
@@ -336,9 +334,10 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
     for position, ((char, bold, italic), owner) in enumerate(zip(target_chars, new_owners)):
         key = (owner, bold, italic)
         if groups and groups[-1][0] == key and position not in cuts:
-            groups[-1][1] += char
+            groups[-1][1].append(char)
         else:
-            groups.append([key, char])
+            groups.append([key, [char]])
+    groups = [[key, "".join(chars)] for key, chars in groups]
     paragraph.clear()
     pending = list(marks)
     offset = 0

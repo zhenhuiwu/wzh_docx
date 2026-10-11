@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-from difflib import SequenceMatcher
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -22,6 +21,7 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 from lxml import etree, html
 
+from app.fast_diff import bounded_opcodes
 from app.docx_export import (
     _html_blocks, _list_items, _word_blocks,
     diagram_images, edit_original_docx,
@@ -336,7 +336,8 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
     target = "".join(value for _, _, value in text_nodes)
     fallback = (_run_css(paragraphs[0], None, theme, table) if paragraphs else {}) | {"white-space": "normal"}
     mapped = [fallback] * len(target)
-    for operation, start, end, new_start, new_end in SequenceMatcher(None, source, target, autojunk=False).get_opcodes():
+    # 测试工程师 N7：不再整段 SequenceMatcher（二次方），见 app/fast_diff.py
+    for operation, start, end, new_start, new_end in bounded_opcodes(source, target):
         if operation == "equal":
             mapped[new_start:new_end] = owners[start:end]
         elif operation in {"insert", "replace"}:
@@ -351,10 +352,11 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
                 # This character is Python-Markdown's HTML serialization
                 # whitespace; <br> already displays the native Word break.
                 css = css | {"white-space": "normal"}
-            if groups and groups[-1][1] == css:
-                groups[-1] = (groups[-1][0] + char, css)
+            # 测试工程师 N7：同一样式的字收集成列表再拼接（逐字拼字符串在长段落上是二次方）
+            if groups and (groups[-1][1] is css or groups[-1][1] == css):
+                groups[-1][0].append(char)
             else:
-                groups.append((char, css))
+                groups.append(([char], css))
         offset += len(value)
         setattr(owner, attribute, None)
         if attribute == "text":
@@ -362,9 +364,9 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
         else:
             parent = owner.getparent()
             position = parent.index(owner) + 1
-        for text, css in groups:
+        for chars, css in groups:
             span = html.Element("span")
-            span.text = text
+            span.text = "".join(chars)
             _set_css(span, css)
             parent.insert(position, span)
             position += 1
