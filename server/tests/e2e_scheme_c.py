@@ -777,6 +777,11 @@ def s_other_tab_then_mine(ctx: Run, page):
     expect(confirm.get_by_test_id("others-text")).to_contain_text("〔乙的字〕")
     expect(confirm).to_contain_text("〔甲后写〕")
     assert ctx.items(doc_id), "确认前就处理掉了"
+    # 设计师复验 2 S-C2：焦点进确认框主按钮；读屏按确认文字朗读；文案说“点「手动合并」会把两份都放进合并框”
+    expect(confirm.get_by_role("button", name="手动合并（两份都放进去）")).to_be_focused(timeout=5000)
+    labelled = confirm.evaluate("el => document.getElementById(el.getAttribute('aria-labelledby') || '')?.textContent || ''")
+    assert "另一个标签页" in labelled, labelled
+    expect(confirm).to_contain_text("会把两份都放进合并框")
     confirm.get_by_role("button", name="手动合并（两份都放进去）").click()
     area = card(page).locator("textarea")
     value = area.input_value()

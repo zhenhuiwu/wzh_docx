@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 冲突面板（02 §3.4；01 §4.4）：按“处”展示，处理动作统一走 resolve 合一接口。 */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import ConflictCompareDialog from "./ConflictCompareDialog.vue";
 import { diffWords, isTable, tableCellDiffs } from "../textDiff";
 import { ApiError } from "../api/client";
@@ -50,6 +50,10 @@ function insertSelfAdded(item: ConflictItem) {
 /** 审查建议 1（A3c）：其他标签页写的“我的版本”没包含在这一版里时，处理前确认（默认手动合并，两份都预填） */
 type OtherTab = { tabId: string; markdown: string; savedAt?: string | null };
 const othersConfirm = ref<Record<string, { choice: ActionChoice; others: OtherTab[] }>>({});
+/** 设计师复验 2 S-C2：确认框出现时焦点移到主按钮（手动合并），读屏按确认文字朗读 */
+function focusOthersConfirm(key: string) {
+  void nextTick(() => document.querySelector<HTMLButtonElement>(`[data-others-confirm="${CSS.escape(key)}"] button.primary`)?.focus());
+}
 const othersAccepted = ref<Record<string, boolean>>({});
 /** 测试工程师 N4 / N8：处理时服务器上已有更新的一份（另一个标签页写的），本标签又有那份里没有的字——用户在确认里选了之后，
  *  按这份 id 提交（不再 409），“只用这个标签页的版本”时把本标签的文字随请求带上（mineMarkdown） */
@@ -232,6 +236,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
       const others = await missingOtherTabs(item);
       if (others.length) {
         othersConfirm.value = { ...othersConfirm.value, [id(item)]: { choice, others } };
+        focusOthersConfirm(id(item));
         return;
       }
     }
@@ -273,6 +278,7 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
           if (otherExtra) {
             // 两边各有对方没有的字：与 A3c 同一个确认（并列两份，默认手动合并两份都放进去）
             othersConfirm.value = { ...othersConfirm.value, [id(fresh)]: { choice, others: [{ tabId: latest.tabId || "", markdown: latest.markdown, savedAt: latest.savedAt }] } };
+            focusOthersConfirm(id(fresh));
             return;
           }
           // 服务器上那份的内容本标签都有（本标签写得更多）：直接按本标签的版本再提交一次，不丢字也不多问
@@ -450,8 +456,8 @@ async function downloadCopy(item: ConflictItem) {
               <button type="button" class="primary sm" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '采用合并结果' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
             </div>
           </div>
-          <div v-else-if="othersConfirm[id(item)]" class="ccard-confirm others" role="alertdialog" aria-label="另一个标签页写的内容没有包含在这一版里" data-testid="others-confirm">
-            <p>你在另一个标签页写的“我的版本”（{{ othersConfirm[id(item)].others.map(other => hm(other.savedAt) || "较早").join("、") }} 保存）里有这个标签页没有的内容。直接「{{ othersConfirm[id(item)].choice.label }}」只会用这个标签页的版本，那些字不会写进正文。建议手动合并，两份都已放进合并框。</p>
+          <div v-else-if="othersConfirm[id(item)]" class="ccard-confirm others" role="alertdialog" :aria-labelledby="`others-confirm-text-${id(item)}`" :data-others-confirm="id(item)" data-testid="others-confirm">
+            <p :id="`others-confirm-text-${id(item)}`">你在另一个标签页写的“我的版本”（{{ othersConfirm[id(item)].others.map(other => hm(other.savedAt) || "较早").join("、") }} 保存）里有这个标签页没有的内容。直接「{{ othersConfirm[id(item)].choice.label }}」只会用这个标签页的版本，那些字不会写进正文。建议点「手动合并」，会把两份都放进合并框。</p>
             <h5>这个标签页的版本</h5>
             <pre>{{ mineText(item) }}</pre>
             <template v-for="other in othersConfirm[id(item)].others" :key="other.tabId"><h5>另一个标签页的版本{{ hm(other.savedAt) ? ` · ${hm(other.savedAt)}` : "" }}</h5><pre data-testid="others-text">{{ other.markdown }}</pre></template>
