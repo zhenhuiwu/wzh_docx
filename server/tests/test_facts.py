@@ -173,7 +173,7 @@ def test_hidden_knowledge_base_is_not_copied(client: TestClient) -> None:
     assert "密件" not in unbound.text
     member = client.put(
         f"/api/v1/projects/{project_id}/members/{other_id}",
-        json={"userId": other_id, "role": "owner", "expectedProjectRevision": project.json()["data"]["revision"]},
+        json={"userId": other_id, "role": "owner", "expectedMembersRevision": project.json()["data"]["membersRevision"]},
         headers={"X-CSRF-Token": csrf},
     )
     assert member.status_code == 200, member.text
@@ -181,7 +181,7 @@ def test_hidden_knowledge_base_is_not_copied(client: TestClient) -> None:
     other_csrf = _login(other, "dev06-other")
     bound = other.put(
         f"/api/v1/projects/{project_id}/knowledge-bindings",
-        json={"expectedProjectRevision": project.json()["data"]["revision"] + 1, "baseIds": [base_id]},
+        json={"expectedProjectRevision": project.json()["data"]["revision"], "baseIds": [base_id]},  # A05：成员变更不再加项目 revision
         headers={"X-CSRF-Token": other_csrf},
     )
     assert bound.status_code == 404

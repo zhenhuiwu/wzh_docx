@@ -264,7 +264,7 @@ def get_workbench(request: Request) -> dict[str, object]:
             f"""
             select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
                    p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
-                   p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
+                   p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
                    p.software_version
             from projects p
             join users owner on owner.id = p.owner_id

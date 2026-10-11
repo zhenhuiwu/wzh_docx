@@ -85,9 +85,10 @@ def test_project_writes_hidden_projects_are_404(matrix, operation):
         "修改": ("PATCH", f"/projects/{project}", {"expectedRevision": revision, "description": "x"}),
         "归档": ("POST", f"/projects/{project}/archive", {"expectedRevision": revision, "reason": "矩阵测试归档"}),
         "取消归档": ("POST", f"/projects/{project}/unarchive", {"expectedRevision": revision, "reason": "矩阵测试取消"}),
+        # A05 R5：成员接口校验成员名单独立版本号 membersRevision（新项目为 1）
         "成员-改角色": ("PUT", f"/projects/{project}/members/{target}",
-                     {"userId": str(target), "role": "editor", "expectedProjectRevision": revision}),
-        "成员-移除": ("DELETE", f"/projects/{project}/members/{target}", None),
+                     {"userId": str(target), "role": "editor", "expectedMembersRevision": 1}),
+        "成员-移除": ("DELETE", f"/projects/{project}/members/{target}?expectedMembersRevision=1", None),
     }
     method, path, body = requests[operation]
     got = {role: _call(client, role, method, path, body).status_code

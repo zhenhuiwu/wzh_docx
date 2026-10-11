@@ -19,7 +19,7 @@ from app.permissions import has_permission
 router = APIRouter()
 
 _STATUSES = {"not_started", "active", "paused", "completed"}
-_ROLES = {"owner", "editor", "reviewer", "viewer"}
+_MY_ROLES = {"owner", "editor", "viewer"}
 _SORTS = {
     "updatedAt_desc": "p.updated_at desc, p.name asc",
     "updatedAt_asc": "p.updated_at asc, p.name asc",
@@ -63,14 +63,6 @@ class ReasonBody(BaseModel):
 
     expectedRevision: int = Field(ge=0)
     reason: str
-
-
-class MemberBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    userId: str
-    role: str
-    expectedProjectRevision: int = Field(ge=0)
 
 
 def _parse_uuid(value: str, field: str) -> UUID:
@@ -169,10 +161,12 @@ def require_project_owner(connection, actor, project_id: UUID) -> None:
 
 
 def require_project_editor(connection, actor, project_id: UUID) -> None:
-    if _is_admin(actor.roles):
-        return
-    if project_role(connection, project_id, actor.user_id) not in {"owner", "editor"}:
+    """项目内写入（文档计划、项目文件上传）：编写人员及以上；归档项目只读（A05 P-4）→ 409 PROJECT_ARCHIVED。"""
+    from app.document_access import ensure_project_writable
+
+    if not _is_admin(actor.roles) and project_role(connection, project_id, actor.user_id) not in {"owner", "editor"}:
         raise AppError(403, "FORBIDDEN", "只有项目的编写人员可以修改文档。")
+    ensure_project_writable(connection, project_id)
 
 
 def _public(row: dict) -> dict[str, object]:
@@ -192,6 +186,8 @@ def _public(row: dict) -> dict[str, object]:
         "status": row["status"],
         "archivedAt": None if archived is None else format_timestamp(archived),
         "revision": row["revision"],
+        # A05 R5：成员名单独立版本号（成员变更不加 revision）
+        "membersRevision": row["members_revision"],
         "createdAt": format_timestamp(row["created_at"]),
         "updatedAt": format_timestamp(row["updated_at"]),
         "softwareVersion": row["software_version"],
@@ -219,7 +215,7 @@ def _load(connection, project_id: UUID, user_id: UUID, admin: bool) -> dict[str,
         f"""
         select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
                p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
-               p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
+               p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
                p.software_version
         from projects p
         join users owner on owner.id = p.owner_id
@@ -288,6 +284,48 @@ def _block_archive_if_jobs(connection, project_id: UUID) -> None:
         raise AppError(409, "INVALID_TRANSITION", "还有未处理的运行任务，暂时不能归档。")
 
 
+def _member_event(connection, project_id: UUID, actor_id: UUID | None, target: UUID, action: str,
+                  old_role: str | None, new_role: str | None, revision: int, request_id: str | None) -> None:
+    connection.execute(
+        """insert into project_member_events
+             (id, project_id, actor_id, target_user_id, action, old_role, new_role, members_revision, request_id)
+           values (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (uuid4(), project_id, actor_id, target, action, old_role, new_role, revision, request_id),
+    )
+
+
+def _transfer_owner(connection, request: Request, actor, project_id: UUID, previous: UUID, owner_id: UUID) -> None:
+    """“编辑项目”里改负责人（旧接口，界面现已改为在“成员与权限”中调整）：新负责人设为 owner 并成为主负责人；
+    原主负责人是唯一 owner 时降为编写人员（原行为）。成员变化同样递增 members_revision 并写审计（A05 R5/B-14）。"""
+    _active_owner(connection, owner_id)
+    request_id = getattr(request.state, "request_id", None)
+    connection.execute("update projects set members_revision = members_revision + 1 where id = %s", (project_id,))
+    revision = int(connection.execute("select members_revision from projects where id = %s", (project_id,)).fetchone()["members_revision"])
+    if _owner_count(connection, project_id, exclude=previous) == 0:
+        demoted = connection.execute(
+            """
+            update project_members
+            set role = 'editor', revision = revision + 1, updated_at = now(), updated_by = %s
+            where project_id = %s and user_id = %s and role = 'owner'
+            """,
+            (actor.user_id, project_id, previous),
+        ).rowcount
+        if demoted:
+            _member_event(connection, project_id, actor.user_id, previous, "change_role", "owner", "editor", revision, request_id)
+    existing = project_role(connection, project_id, owner_id)
+    connection.execute(
+        """
+        insert into project_members (project_id, user_id, role, created_at, updated_at, updated_by)
+        values (%s, %s, 'owner', now(), now(), %s)
+        on conflict (project_id, user_id)
+        do update set role = 'owner', revision = project_members.revision + 1, updated_at = now(), updated_by = excluded.updated_by
+        """,
+        (project_id, owner_id, actor.user_id),
+    )
+    _member_event(connection, project_id, actor.user_id, owner_id, "add" if existing is None else "change_role",
+                  existing, "owner", revision, request_id)
+
+
 @router.get("/projects")
 def list_projects(
     request: Request,
@@ -299,12 +337,15 @@ def list_projects(
     ownerId: str | None = None,
     status: str | None = None,
     archived: bool = False,
+    myRole: str | None = None,
 ) -> dict[str, object]:
     actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
     if page < 1 or not 1 <= pageSize <= 50 or sort not in _SORTS:
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     if status is not None and status not in _STATUSES:
         raise AppError(422, "VALIDATION_FAILED", "项目状态不正确。")
+    if myRole is not None and myRole not in _MY_ROLES:
+        raise AppError(422, "VALIDATION_FAILED", "项目权限不正确。")
     admin = _reads_all(actor.roles)
     filters = ["p.archived_at is null" if not archived else "p.archived_at is not null"]
     params: list[object] = []
@@ -323,6 +364,9 @@ def list_projects(
     if status:
         filters.append("p.status = %s")
         params.append(status)
+    if myRole:
+        filters.append("exists (select 1 from project_members mr where mr.project_id = p.id and mr.user_id = %s and mr.role = %s)")
+        params.extend([actor.user_id, myRole])
     where = " and ".join(filters)
     with connect() as connection:
         total_row = connection.execute(
@@ -333,20 +377,31 @@ def list_projects(
             f"""
             select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
                    p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
-                   p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
-                   p.software_version
+                   p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
+                   p.software_version, my.role as my_role
             from projects p
             join users owner on owner.id = p.owner_id
+            left join project_members my on my.project_id = p.id and my.user_id = %s
             where {where}
             order by {_SORTS[sort]}
             limit %s offset %s
             """,
-            [*params, pageSize, (page - 1) * pageSize],
+            [actor.user_id, *params, pageSize, (page - 1) * pageSize],
         ).fetchall()
+        from app.project_members import owners_of
+
+        owners = owners_of(connection, [row["id"] for row in rows])
     total = int(total_row["total"]) if total_row else 0
+    items = []
+    for row in rows:
+        item = _public(row)
+        # A05 B-7：本人在项目中的角色（以管理员/审计员身份可见但不是成员时为 null）；B-6 owners[]
+        item["myRole"] = row["my_role"]
+        item["owners"] = owners[str(row["id"])]
+        items.append(item)
     return {
         "data": {
-            "items": [_public(row) for row in rows],
+            "items": items,
             "page": page,
             "pageSize": pageSize,
             "total": total,
@@ -464,11 +519,13 @@ def create_project(request: Request, body: ProjectCreateBody) -> dict[str, objec
             )
             connection.execute(
                 """
-                insert into project_members (project_id, user_id, role)
-                values (%s, %s, 'owner')
+                insert into project_members (project_id, user_id, role, created_at, updated_at, updated_by)
+                values (%s, %s, 'owner', now(), now(), %s)
                 """,
-                (project_id, owner_id),
+                (project_id, owner_id, actor.user_id),
             )
+            _member_event(connection, project_id, actor.user_id, owner_id, "add", None, "owner", 1,
+                          getattr(request.state, "request_id", None))
             connection.execute(
                 """
                 insert into idempotency_keys (
@@ -494,11 +551,19 @@ def get_project(project_id: str, request: Request) -> dict[str, object]:
 
         # 三审：非成员的全局审计员返回 "auditor"（与文档接口 permissions.projectRole 口径一致），不是 null
         role = member_role(connection, target, actor.user_id)
+        from app.project_members import owners_of
+
+        project["owners"] = owners_of(connection, [target])[str(target)]
+    archived = project["archivedAt"] is not None
     # 测试 L2：前端按此隐藏写操作（与 update_project / 成员管理的判定一致）。
+    # A05 R3：归档项目只读（canEdit/canManageMembers=false，readonlyReason='archived'），可查看和导出。
+    manages = admin or role == "owner"
+    can_edit = has_permission(actor.roles, "projects.manage") and manages and not archived
     project["permissions"] = {
         "projectRole": role,
-        "canEdit": has_permission(actor.roles, "projects.manage") and (admin or role == "owner"),
-        "canManageMembers": admin or role == "owner",
+        "canEdit": can_edit,
+        "canManageMembers": manages and not archived,
+        "readonlyReason": "archived" if archived else (None if manages else "role"),
     }
     return _envelope(request, project)
 
@@ -513,6 +578,9 @@ def update_project(project_id: str, request: Request, body: ProjectPatchBody) ->
         with connection.transaction(immediate=True):
             current = _load(connection, target, actor.user_id, admin)
             require_project_owner(connection, actor, target)
+            if current["archivedAt"] is not None:
+                # A05 R3 / P-4：归档项目只读，恢复后才能修改（恢复走 /unarchive）
+                raise AppError(409, "PROJECT_ARCHIVED", "项目已归档，恢复后才能修改。", details={"readonlyReason": "archived"})
             _check_revision(int(current["revision"]), body.expectedRevision)
             name = current["name"] if body.name is None else _text(body.name, 120, "name", True)
             description = current["description"] if body.description is None else _text(body.description, 2000, "description")
@@ -533,26 +601,8 @@ def update_project(project_id: str, request: Request, body: ProjectPatchBody) ->
             else:
                 end = _date(body.periodEnd, "periodEnd")
             _period(start, end)
-            if body.ownerId is not None:
-                _active_owner(connection, owner_id)
-                if _owner_count(connection, target, exclude=UUID(str(current["ownerId"]))) == 0 and owner_id != UUID(str(current["ownerId"])):
-                    connection.execute(
-                        """
-                        update project_members
-                        set role = 'editor', revision = revision + 1
-                        where project_id = %s and user_id = %s and role = 'owner'
-                        """,
-                        (target, current["ownerId"]),
-                    )
-                connection.execute(
-                    """
-                    insert into project_members (project_id, user_id, role)
-                    values (%s, %s, 'owner')
-                    on conflict (project_id, user_id)
-                    do update set role = 'owner', revision = project_members.revision + 1
-                    """,
-                    (target, owner_id),
-                )
+            if body.ownerId is not None and owner_id != UUID(str(current["ownerId"])):
+                _transfer_owner(connection, request, actor, target, UUID(str(current["ownerId"])), owner_id)
             connection.execute(
                 """
                 update projects
@@ -627,197 +677,3 @@ def unarchive_project(project_id: str, request: Request, body: ReasonBody) -> di
             )
             updated = _load(connection, target, actor.user_id, admin)
     return _envelope(request, updated)
-
-
-def _members(connection, project_id: UUID) -> dict[str, object]:
-    project = connection.execute(
-        "select revision from projects where id = %s",
-        (project_id,),
-    ).fetchone()
-    rows = connection.execute(
-        """
-        select m.user_id, u.name, m.role, m.revision
-        from project_members m
-        join users u on u.id = m.user_id
-        where m.project_id = %s
-        order by u.name, m.user_id
-        """,
-        (project_id,),
-    ).fetchall()
-    return {
-        "items": [
-            {
-                "userId": str(row["user_id"]),
-                "name": row["name"],
-                "role": row["role"],
-                "revision": row["revision"],
-            }
-            for row in rows
-        ],
-        "projectRevision": project["revision"] if project else 0,
-    }
-
-
-def _can_manage_members(connection, actor, project_id: UUID) -> None:
-    if _is_admin(actor.roles):
-        return
-    row = connection.execute(
-        """
-        select role from project_members
-        where project_id = %s and user_id = %s
-        """,
-        (project_id, actor.user_id),
-    ).fetchone()
-    if row is None or row["role"] != "owner":
-        raise AppError(403, "FORBIDDEN", "只有项目负责人可以调整成员。")
-
-
-@router.get("/projects/{project_id}/members")
-def list_members(
-    project_id: str,
-    request: Request,
-    name: str = "",
-    account: str = "",
-    role: str | None = None,
-) -> dict[str, object]:
-    actor = require_session(request)  # S1：按项目成员可见，不再要求全局 projects.read
-    target = _parse_uuid(project_id, "projectId")
-    if role is not None and role not in _ROLES:
-        raise AppError(422, "VALIDATION_FAILED", "项目角色不正确。")
-    with connect() as connection:
-        _load(connection, target, actor.user_id, _reads_all(actor.roles))
-        filters = ["m.project_id = %s"]
-        params: list[object] = [target]
-        if name.strip():
-            filters.append("u.name ilike %s escape '\\'")
-            params.append(_like(name.strip()))
-        if account.strip():
-            filters.append("u.account_key like %s escape '\\'")
-            params.append(_like(account.strip().casefold()))
-        if role:
-            filters.append("m.role = %s")
-            params.append(role)
-        rows = connection.execute(
-            f"""
-            select m.user_id, u.name, m.role, m.revision, p.revision as project_revision
-            from project_members m
-            join users u on u.id = m.user_id
-            join projects p on p.id = m.project_id
-            where {" and ".join(filters)}
-            order by u.name, m.user_id
-            """,
-            params,
-        ).fetchall()
-        revision = rows[0]["project_revision"] if rows else connection.execute(
-            "select revision from projects where id = %s",
-            (target,),
-        ).fetchone()["revision"]
-    return {
-        "data": {
-            "items": [
-                {
-                    "userId": str(row["user_id"]),
-                    "name": row["name"],
-                    "role": row["role"],
-                    "revision": row["revision"],
-                }
-                for row in rows
-            ],
-            "projectRevision": revision,
-        },
-        "requestId": request.state.request_id,
-    }
-
-
-@router.put("/projects/{project_id}/members/{user_id}")
-def set_member(project_id: str, user_id: str, request: Request, body: MemberBody) -> dict[str, object]:
-    actor = require_session(request)
-    require_csrf(request, actor)
-    target = _parse_uuid(project_id, "projectId")
-    member_id = _parse_uuid(user_id, "userId")
-    if body.role not in _ROLES or _parse_uuid(body.userId, "userId") != member_id:
-        raise AppError(422, "VALIDATION_FAILED", "成员信息不正确。")
-    with connect() as connection:
-        with connection.transaction(immediate=True):
-            _load(connection, target, actor.user_id, _reads_all(actor.roles))
-            _can_manage_members(connection, actor, target)
-            current = connection.execute(
-                "select revision from projects where id = %s",
-                (target,),
-            ).fetchone()
-            _check_revision(current["revision"], body.expectedProjectRevision)
-            _active_owner(connection, member_id)
-            if body.role != "owner" and _owner_count(connection, target, exclude=member_id) == 0:
-                existing = connection.execute(
-                    """
-                    select role from project_members
-                    where project_id = %s and user_id = %s
-                    """,
-                    (target, member_id),
-                ).fetchone()
-                if existing and existing["role"] == "owner":
-                    raise AppError(409, "INVALID_TRANSITION", "不能取消最后一个负责人。请先移交。")
-            connection.execute(
-                """
-                insert into project_members (project_id, user_id, role)
-                values (%s, %s, %s)
-                on conflict (project_id, user_id)
-                do update set role = excluded.role, revision = project_members.revision + 1
-                """,
-                (target, member_id, body.role),
-            )
-            if body.role == "owner":
-                connection.execute(
-                    """
-                    update projects
-                    set owner_id = %s, revision = revision + 1, updated_at = now()
-                    where id = %s
-                    """,
-                    (member_id, target),
-                )
-            else:
-                connection.execute(
-                    """
-                    update projects
-                    set revision = revision + 1, updated_at = now()
-                    where id = %s
-                    """,
-                    (target,),
-                )
-            payload = _members(connection, target)
-    return {"data": payload, "requestId": request.state.request_id}
-
-
-@router.delete("/projects/{project_id}/members/{user_id}")
-def remove_member(project_id: str, user_id: str, request: Request) -> dict[str, object]:
-    actor = require_session(request)
-    require_csrf(request, actor)
-    target = _parse_uuid(project_id, "projectId")
-    member_id = _parse_uuid(user_id, "userId")
-    with connect() as connection:
-        with connection.transaction(immediate=True):
-            _load(connection, target, actor.user_id, _reads_all(actor.roles))
-            _can_manage_members(connection, actor, target)
-            existing = connection.execute(
-                """
-                select role from project_members
-                where project_id = %s and user_id = %s
-                """,
-                (target, member_id),
-            ).fetchone()
-            if existing and existing["role"] == "owner" and _owner_count(connection, target, exclude=member_id) == 0:
-                raise AppError(409, "INVALID_TRANSITION", "不能移除最后一个负责人。请先移交。")
-            connection.execute(
-                "delete from project_members where project_id = %s and user_id = %s",
-                (target, member_id),
-            )
-            connection.execute(
-                """
-                update projects
-                set revision = revision + 1, updated_at = now()
-                where id = %s
-                """,
-                (target,),
-            )
-            payload = _members(connection, target)
-    return {"data": payload, "requestId": request.state.request_id}
