@@ -510,7 +510,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                         result.conflicts = []
                     items = build_items(connection, document_id, base_md, theirs, result, base_revision, actor)
                     if not items:
-                        items = [_whole_item(0, "STRUCTURE", mine_md, theirs, base_md)]
+                        items = [_whole_item(0, "STRUCTURE", mine_md, theirs, base_md, _whole_by(connection, document_id, base_revision, actor))]
                     matches = _frozen_matches(connection, document_id, actor, items)
                     frozen = [(cid, index, _frozen_mine(items[position])) for position, (cid, index) in matches.items()]
                     remaining = [item for position, item in enumerate(items) if position not in matches]
@@ -519,7 +519,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                             item["itemIndex"] = number
                         error = store_conflict(connection, document_id=document_id, actor=actor, base_revision=base_revision,
                                                doc_revision=revision, source=source, rhash=rhash, mine_md=mine_md,
-                                               items=remaining or [_whole_item(0, "STRUCTURE", mine_md, theirs, base_md)],
+                                               items=remaining or [_whole_item(0, "STRUCTURE", mine_md, theirs, base_md, _whole_by(connection, document_id, base_revision, actor))],
                                                appliable_md=result.markdown, frozen=frozen)
                         raise error
                 merged = result.markdown
@@ -550,7 +550,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                 own = _own_word_error(check_word, base_md, mine_md)
                 if own is not None:
                     raise own from None
-                item = _whole_item(0, "FORMAT", mine_md, theirs, base_md)
+                item = _whole_item(0, "FORMAT", mine_md, theirs, base_md, _whole_by(connection, document_id, base_revision, actor))
                 if error.details and error.details.get("location"):
                     item["location"] = error.details["location"]
                 raise store_conflict(connection, document_id=document_id, actor=actor, base_revision=base_revision,
@@ -641,10 +641,22 @@ def _append_frozen(connection, actor, rhash: str, frozen: list[tuple[str, int, s
     return limited
 
 
-def _whole_item(index: int, reason: str, mine_md: str, theirs_md: str, base_md: str) -> dict:
+def _whole_by(connection, document_id: UUID, base_revision: int, actor) -> dict:
+    """设计师复验 2 C：整篇冲突（FORMAT / STRUCTURE）也写明“对方”——基准之后最近一次由别人做的修改；没有就留空（界面写“正文当前版本”）。"""
+    row = connection.execute(
+        """SELECT c.actor_id, u.name, c.created_at FROM document_changes c LEFT JOIN users u ON u.id=c.actor_id
+           WHERE c.document_id=%s AND c.doc_revision > %s AND c.actor_id IS NOT NULL AND c.actor_id<>%s
+             AND c.kind NOT IN ('backfill','realign')
+           ORDER BY c.doc_revision DESC LIMIT 1""", (document_id, base_revision, actor)).fetchone()
+    if row is None:
+        return {"updatedBy": None, "updatedAt": None}
+    return {"updatedBy": _person(row["actor_id"], row["name"]), "updatedAt": format_timestamp(row["created_at"])}
+
+
+def _whole_item(index: int, reason: str, mine_md: str, theirs_md: str, base_md: str, by: dict | None = None) -> dict:
     return {"itemIndex": index, "attempt": 1, "reason": reason, "opIndexes": [], "objectIds": [],
             "location": {"headingPath": [], "ordinal": None, "kind": "other", "label": None},
-            "base": {"markdown": base_md}, "theirs": {"markdown": theirs_md, "deleted": False, "revision": None},
+            "base": {"markdown": base_md}, "theirs": {"markdown": theirs_md, "deleted": False, "revision": None, **(by or {})},
             "mine": {"markdown": mine_md}, "theirsRevisions": {}, "afterObjectId": None}
 
 

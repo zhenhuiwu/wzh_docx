@@ -47,3 +47,19 @@ def test_own_invalid_word_edit_returns_422_not_format_conflict(team, monkeypatch
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "WORD_BLOCK_PROTECTED"
     assert "引段（张改）。" in current(client, did)["markdownContent"]
+
+
+def test_format_conflict_names_the_other_editor(team, monkeypatch):
+    """设计师复验 2 C：整篇 FORMAT 冲突的条目带 theirs.updatedBy（基准之后最近一次由别人做的修改），界面不再写“其他成员”。"""
+    client, did, _ = team
+    rev = _start(client, did)
+    monkeypatch.setattr("app.documents._check_word", _fake_word(lambda md: "（张改）" in md and "【李】" in md))
+    assert save(client, did, rev, DOC.replace("引段。", "引段（张改）。"), _as(client, "editor")).status_code == 200
+    response = save(client, did, rev, DOC.replace("尾段。", "尾段【李】。"), _as(client, "editor2"))
+    assert response.status_code == 409, response.text
+    item = response.json()["error"]["details"]["conflicts"][0]
+    assert item["reason"] == "FORMAT"
+    who = item["theirs"].get("updatedBy")
+    assert who and who.get("name") and who.get("id"), item["theirs"]
+    me = client.get("/auth/me", headers=_as(client, "editor2")).json()
+    assert who["id"] != (me.get("user") or me).get("id")
