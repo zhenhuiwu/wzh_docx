@@ -758,6 +758,55 @@ def s_other_tab_keep_mine(ctx: Run, page):
     return {}
 
 
+@scenario("A3c 另一标签快照后本标签又续写 处理前确认 手动合并两份都在")
+def s_other_tab_then_mine(ctx: Run, page):
+    """审查建议 1（A3c，已定）：另一个标签页写了快照（含〔乙的字〕）后，本标签又在冻结段续写，最新一份没有乙的字。
+    点“保留我的”不能静默丢：弹确认、并列两份；默认手动合并两份都预填；采用后正文里两边的字都在。"""
+    doc_id = ctx.doc(page, "方案C另一标签后本标签续写")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    hit = ctx.wait_snapshot(doc_id, MARK)
+    ctx.li.call("POST", f"/documents/{doc_id}/conflicts/{hit['conflictId']}/mine", json={
+        "itemIndex": hit["itemIndex"], "markdown": P3 + MARK + "〔乙的字〕", "clientSaveKey": str(uuid.uuid4()), "tabId": "other-tab", "seq": int(time.time() * 1000)})
+    base.type_after(page, MARK, "〔甲后写〕")
+    latest = ctx.wait_snapshot(doc_id, "〔甲后写〕")
+    assert "〔乙的字〕" not in ((latest.get("mineLatest") or {}).get("markdown") or ""), "前提不成立：最新一份已含乙的字"
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    confirm = card(page).get_by_test_id("others-confirm")
+    expect(confirm).to_be_visible(timeout=20000)
+    expect(confirm.get_by_test_id("others-text")).to_contain_text("〔乙的字〕")
+    expect(confirm).to_contain_text("〔甲后写〕")
+    assert ctx.items(doc_id), "确认前就处理掉了"
+    confirm.get_by_role("button", name="手动合并（两份都放进去）").click()
+    area = card(page).locator("textarea")
+    value = area.input_value()
+    assert "〔甲后写〕" in value and "〔乙的字〕" in value, value
+    card(page).get_by_role("button", name="采用合并结果").click()
+    deadline = time.time() + 20
+    while ctx.items(doc_id) and time.time() < deadline:
+        time.sleep(0.5)
+    assert not ctx.items(doc_id), "冲突仍未处理"
+    md = ctx.server(doc_id)["markdownContent"]
+    assert "〔甲后写〕" in md and "〔乙的字〕" in md, md[:500]
+    expect(page.locator(".paper-content")).to_contain_text("〔乙的字〕", timeout=15000)
+    assert_no_self_named(page)
+    return {}
+
+
+@scenario("A3c 只有本标签写过 不弹确认")
+def s_only_this_tab_no_confirm(ctx: Run, page):
+    """对照：没有别的标签页快照时，“保留我的”照常一次完成（不多弹确认）。"""
+    doc_id = ctx.doc(page, "方案C只本标签")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    ctx.wait_snapshot(doc_id, MARK)
+    open_panel(page)
+    card(page).get_by_role("button", name="保留我的").click()
+    expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
+    assert not page.get_by_test_id("others-confirm").count()
+    assert not ctx.items(doc_id)
+    return {}
+
+
 @scenario("M1 另一标签快照后 使用对方的版本 一次生效")
 def s_other_tab_use_theirs(ctx: Run, page):
     """审查员 A3b：另一个标签页写了快照后，“使用对方的版本”不被卡住。"""
@@ -1073,7 +1122,7 @@ def s_other_tab_resolved_sink(ctx: Run, page):
 
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_reopen_self_edit_both, s_reopen_self_edit_manual, s_sink_offline, s_reload_close_reopen, s_sink_position,
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_other_tab_then_mine, s_only_this_tab_no_confirm, s_reopen_self_edit, s_reopen_self_edit_both, s_reopen_self_edit_manual, s_sink_offline, s_reload_close_reopen, s_sink_position,
              s_other_tab_resolved_keep, s_other_tab_resolved_theirs, s_other_tab_resolved_sink]
 
 

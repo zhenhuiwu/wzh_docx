@@ -39,6 +39,10 @@ const manualOpen = ref<Record<string, string>>({});
 const confirmTheirs = ref<ConflictItem | null>(null);
 /** K1-M1：重新打开后你在正文里补的字（再次冲突时由 latestBySelf 识别），按卡片记 */
 const selfAdded = ref<Record<string, string>>({});
+/** 审查建议 1（A3c）：其他标签页写的“我的版本”没包含在这一版里时，处理前确认（默认手动合并，两份都预填） */
+type OtherTab = { tabId: string; markdown: string; savedAt?: string | null };
+const othersConfirm = ref<Record<string, { choice: ActionChoice; others: OtherTab[] }>>({});
+const othersAccepted = ref<Record<string, boolean>>({});
 const handledOpen = ref(false);
 const keys = new ResolveKeys();
 const id = (item: ConflictItem) => `${item.conflictId}:${item.itemIndex}`;
@@ -91,12 +95,16 @@ function savedDesc(item: ConflictItem, frozen: boolean): string {
   const tail = frozen ? "你的版本还在编辑区（红框内），可以继续写；处理前不会写入正文。" : "两处修改无法自动合并。";
   if (tab.value === "members") return `${whoOf(item)} 在 ${item.actor?.name || "提交人"} 编辑期间保存了这一段，两处修改无法自动合并。`;
   if (selfTheirs(item)) return `你在另一个标签页（或恢复的草稿）里保存了这一段。${tail}`;
+  // 审查建议 2：正文这一段最近一次是你自己（另一个标签页 / 重新打开后）改的
+  if (item.theirs?.latestBySelf) return `${whoOf(item)} 在你编辑期间保存了这一段，之后你在另一处也改了这一段（已在正文中）。${frozen ? tail : "两处修改无法自动合并。"}`;
   return frozen ? `${whoOf(item)} 在你编辑期间保存了这一段。${tail}` : `${whoOf(item)} 在你编辑期间保存了这一段，${tail}`;
 }
 function theirsTitle(item: ConflictItem): string {
   if (item.theirs?.deleted) return `删除前的内容 · ${whoOf(item)} 已删除`;
   // K1-M1 定稿：正文这一段里既有对方的修改也有你刚补的字
   if (selfAdded.value[id(item)]) return `正文当前版本（含 ${whoOf(item)} 的修改和你刚补的内容）· 已在正文中`;
+  // 审查建议 2：最近一次是本人改的但没取到补了哪些字——也不写成“张工 的版本”
+  if (item.theirs?.latestBySelf) return `正文当前版本（含 ${whoOf(item)} 的修改和你在另一处的修改）· 已在正文中`;
   if (selfTheirs(item)) return "你在另一处保存的版本 · 已在正文中（其他人看到的是这一版）";
   // 设计师 S7：对方是“你”时写“你的版本”
   return `${whoOf(item)}${whoOf(item) === "你" ? "" : " "}的版本 · 已在正文中（其他人看到的是这一版）`;
@@ -108,6 +116,7 @@ function cardTitle(item: ConflictItem): string {
 }
 function labelOf(item: ConflictItem, choice: ActionChoice): string {
   if (choice.action === "keep_mine" && selfAdded.value[id(item)]) return "仍然保留我的（覆盖刚补的内容）";
+  if (choice.action === "keep_mine" && item.theirs?.latestBySelf) return "仍然保留我的（覆盖正文里的这次修改）";
   if (choice.action === "use_theirs" && selfTheirs(item)) return "使用正文里的版本";
   return choice.label;
 }
@@ -153,6 +162,35 @@ const theirsConfirm = (item: ConflictItem) => frozenHere(item)
   ? `编辑区里这一段会换成${selfTheirs(item) ? "正文里的版本" : ` ${whoOf(item)} 的版本`}。你的版本（含后来续写的内容）仍保存在冲突记录中，可在「已处理」里查看和下载。`
   : USE_THEIRS_CONFIRM;
 
+/** 其他标签页最后一份快照里多写的字（相对冲突时的我的版本）不在这一版（含编辑区未存的续写）里 → 会被丢掉 */
+async function missingOtherTabs(item: ConflictItem): Promise<OtherTab[]> {
+  let others = item.mineOthers ?? [];
+  try {
+    const fresh = (await listConflicts(props.documentId, "open", "me")).find(entry => entry.conflictId === item.conflictId && entry.itemIndex === item.itemIndex);
+    if (fresh) others = fresh.mineOthers ?? [];
+  } catch { /* 取不到就用已载入的 */ }
+  const tabNow = browserTabIdentity().current;
+  const ours = mineText(item);
+  return others.filter(other => {
+    if (other.tabId === tabNow) return false;
+    const extra = addedText(item.mine?.markdown || "", other.markdown);
+    return Boolean(extra) && !ours.includes(extra);
+  });
+}
+function mergeWithOthers(item: ConflictItem) {
+  const pending = othersConfirm.value[id(item)];
+  if (!pending) return;
+  manualOpen.value = { ...manualOpen.value, [id(item)]: [mineText(item), ...pending.others.map(other => other.markdown)].join("\n\n") };
+  delete othersConfirm.value[id(item)];
+}
+function keepOnlyThisTab(item: ConflictItem) {
+  const pending = othersConfirm.value[id(item)];
+  if (!pending) return;
+  othersAccepted.value = { ...othersAccepted.value, [id(item)]: true };
+  delete othersConfirm.value[id(item)];
+  void apply(item, pending.choice);
+}
+
 async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string) {
   if (!props.canResolve || busyKey.value) return;
   if (choice.action === "use_theirs" && confirmTheirs.value !== item) { confirmTheirs.value = item; return; }
@@ -168,6 +206,13 @@ async function apply(item: ConflictItem, choice: ActionChoice, markdown?: string
     if (!(await props.beforeResolve())) {
       cardError.value = { ...cardError.value, [id(item)]: "正文还有修改没保存成功，请先保存后再处理冲突。" };
       return;
+    }
+    if (tab.value === "mine" && ["keep_mine", "keep_both", "restore_as_new"].includes(choice.action) && !othersAccepted.value[id(item)]) {
+      const others = await missingOtherTabs(item);
+      if (others.length) {
+        othersConfirm.value = { ...othersConfirm.value, [id(item)]: { choice, others } };
+        return;
+      }
     }
     // 审查点 3：带上我看到的“我的版本”快照（处理前已把编辑区里的续写存上）；服务器上不是这一份时 409，不用旧快照处理
     // 审查员 A3b：“使用对方的版本”不用我的版本，不带快照 id（另一个标签页刚写了快照也不该卡住）
@@ -349,6 +394,17 @@ async function downloadCopy(item: ConflictItem) {
               <button type="button" class="primary sm" :disabled="!manualOpen[id(item)]?.trim() || Boolean(busyKey)" @click="apply(item, { action: 'manual', label: '采用合并结果' }, manualOpen[id(item)])">{{ busyKey === id(item) ? "正在处理…" : "采用合并结果" }}</button>
             </div>
           </div>
+          <div v-else-if="othersConfirm[id(item)]" class="ccard-confirm others" role="alertdialog" aria-label="另一个标签页写的内容没有包含在这一版里" data-testid="others-confirm">
+            <p>你在另一个标签页写的“我的版本”（{{ othersConfirm[id(item)].others.map(other => hm(other.savedAt) || "较早").join("、") }} 保存）里有这个标签页没有的内容。直接「{{ othersConfirm[id(item)].choice.label }}」只会用这个标签页的版本，那些字不会写进正文。建议手动合并，两份都已放进合并框。</p>
+            <h5>这个标签页的版本</h5>
+            <pre>{{ mineText(item) }}</pre>
+            <template v-for="other in othersConfirm[id(item)].others" :key="other.tabId"><h5>另一个标签页的版本{{ hm(other.savedAt) ? ` · ${hm(other.savedAt)}` : "" }}</h5><pre data-testid="others-text">{{ other.markdown }}</pre></template>
+            <div class="row">
+              <button type="button" class="ghost sm" @click="delete othersConfirm[id(item)]">返回</button>
+              <button type="button" class="ghost sm" @click="keepOnlyThisTab(item)">只用这个标签页的版本</button>
+              <button type="button" class="primary sm" @click="mergeWithOthers(item)">手动合并（两份都放进去）</button>
+            </div>
+          </div>
           <div v-else-if="confirmTheirs === item" class="ccard-confirm" role="alertdialog" :aria-label="labelOf(item, { action: 'use_theirs', label: '使用对方的版本' })">
             <p>{{ theirsConfirm(item) }}</p>
             <div class="row"><button type="button" class="ghost sm" @click="confirmTheirs = null">返回</button><button type="button" class="primary danger sm" @click="apply(item, { action: 'use_theirs', label: '使用对方的版本' })">{{ labelOf(item, { action: 'use_theirs', label: '使用对方的版本' }) }}</button></div>
@@ -447,6 +503,8 @@ async function downloadCopy(item: ConflictItem) {
 .ccard-manual textarea { width:100%; resize:vertical; }
 .flabel { font-weight:var(--weight-medium); }
 .ccard-confirm p { margin:0 0 var(--space-2); color:var(--text-secondary); font-size:var(--text-xs); }
+.ccard-confirm.others h5 { margin:var(--space-2) 0 var(--space-1); font-size:var(--text-xs); color:var(--text-secondary); font-weight:600; }
+.ccard-confirm.others pre { margin:0; max-height:8em; overflow:auto; white-space:pre-wrap; font-size:var(--text-xs); background:var(--bg-sunken); padding:var(--space-1) var(--space-2); border-radius:var(--radius-control); }
 .field-error { margin:0; color:var(--danger-700); font-size:var(--text-xs); }
 .hint { margin:0; color:var(--text-tertiary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .conflict-handled summary { cursor:pointer; color:var(--text-secondary); }

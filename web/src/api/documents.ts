@@ -262,6 +262,8 @@ export interface ConflictItem {
   action?: string | null; actor?: Person | null; createdAt?: string; resolvedAt?: string | null; objectIds?: string[];
   /** 方案 C：最新一份“我的版本”快照（含冲突后续写）；没有快照时等于原始 mine，savedAt 为 null。 */
   mineLatest?: MineLatest;
+  /** A3c：其他标签页各自最后一份快照（与最新一份不同的） */
+  mineOthers?: Array<{ tabId: string; markdown: string; savedAt?: string | null }>;
 }
 export interface MineLatest { markdown: string; savedAt: string | null; tabId: string | null; snapshotId?: string | null }
 export interface ConflictSummary { mineOpen: number; mineHandled?: number; allOpen: number | null }

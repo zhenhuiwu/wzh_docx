@@ -357,3 +357,21 @@ def test_resubmit_frozen_snapshots_count_toward_size_and_count_caps(team, monkey
     more = save(client, did, 1, start["markdownContent"].replace("A2。", "B2。续写二。"), _as(client, "editor2"), key="cap-resubmit-04")
     assert more.status_code == 200 and more.json()["data"]["snapshotLimited"] == [{"conflictId": cid, "itemIndex": 0}], more.text
     assert _snapshot_rows(cid)[0] == count
+
+
+def test_mine_others_lists_last_snapshot_of_other_tabs(team):
+    """审查建议 1（A3c）：列表带 mineOthers——其他标签页各自最后一份（与最新一份不同的），前端据此在处理前确认。"""
+    client, did, _ = team
+    details = _conflict(client, did, 1, {"第二段。": "B2。"}, {"第二段。": "A2。"})
+    cid = details["conflictId"]
+    assert _mine(client, did, cid, 0, "B2。甲一。", "others-key-0001", tab="tab-a").status_code == 200
+    assert _open_items(client, did)[0]["mineOthers"] == []
+    assert _mine(client, did, cid, 0, "B2。乙的字。", "others-key-0002", tab="tab-b").status_code == 200
+    assert _mine(client, did, cid, 0, "B2。甲一。甲后写。", "others-key-0003", tab="tab-a").status_code == 200
+    [item] = _open_items(client, did)
+    assert item["mineLatest"]["markdown"] == "B2。甲一。甲后写。"
+    assert [(o["tabId"], o["markdown"]) for o in item["mineOthers"]] == [("tab-b", "B2。乙的字。")]
+    # 乙标签合并后成为最新一份：列出的是甲标签的最后一份，不再列乙
+    assert _mine(client, did, cid, 0, "B2。甲一。甲后写。乙的字。", "others-key-0004", tab="tab-b").status_code == 200
+    [item] = _open_items(client, did)
+    assert [(o["tabId"], o["markdown"]) for o in item["mineOthers"]] == [("tab-a", "B2。甲一。甲后写。")]

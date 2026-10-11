@@ -210,6 +210,20 @@ def _latest_snapshots(connection, conflict_id) -> dict[int, dict]:
                                      "tabId": None if row["tab_id"] is None else str(row["tab_id"])} for row in rows}
 
 
+def _other_tab_snapshots(connection, conflict_id, item_index: int, latest: dict | None) -> list[dict]:
+    """审查建议 1（A3c）：其他标签页各自最后一份快照（与最新一份不同的）。最新一份若来自本标签页，
+    另一标签页先写的字可能不在里面——前端处理前比对，没包含就确认并预填手动合并，不静默丢弃。"""
+    rows = connection.execute(
+        "SELECT tab_id, markdown, created_at FROM document_conflict_mine_snapshots "
+        "WHERE conflict_id=%s AND item_index=%s AND tab_id IS NOT NULL ORDER BY rowid", (str(conflict_id), item_index)).fetchall()
+    last: dict[str, dict] = {}
+    for row in rows:
+        last[str(row["tab_id"])] = {"tabId": str(row["tab_id"]), "markdown": row["markdown"], "savedAt": format_timestamp(row["created_at"])}
+    latest_tab = (latest or {}).get("tabId")
+    latest_md = (latest or {}).get("markdown")
+    return [value for tab, value in last.items() if tab != latest_tab and value["markdown"] != latest_md]
+
+
 def _mine_latest(item: dict, snapshot: dict | None) -> dict:
     """mineLatest：有快照用最新快照，没有时就是原始 mine（原始 mine 字段本身不变）。"""
     if snapshot is not None:
@@ -581,6 +595,7 @@ def _item_row(connection, conflict, item: dict, row, latest: dict[int, dict] | N
     if latest is None:
         latest = _latest_snapshots(connection, conflict["id"])
     value["mineLatest"] = _mine_latest(item, latest.get(int(item["itemIndex"])))
+    value["mineOthers"] = _other_tab_snapshots(connection, conflict["id"], int(item["itemIndex"]), latest.get(int(item["itemIndex"])))
     refreshed = _latest_theirs(json.loads(conflict["payload_json"]), int(item["itemIndex"]))
     if refreshed:
         value["theirs"] = refreshed["theirs"]
