@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
+from app.document_access import ensure_project_writable
 from app.errors import AppError
 from app.identity import require_csrf, require_session
 from app.permissions import has_permission
@@ -87,8 +88,9 @@ def _require(actor, permission: str) -> None:
         raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
 
 
-def _writable_project(connection, project_id: UUID, actor, admin: bool, permission: str) -> dict:
-    """非成员写：404；全局审计员能看到项目，写时仍按 403；成员缺权限：403。"""
+def _writable_project(connection, project_id: UUID, actor, admin: bool, permission: str, *, check_archived: bool = True) -> dict:
+    """非成员写：404；全局审计员能看到项目，写时仍按 403；成员缺权限：403；
+    A05 Q-1：归档项目完全只读，事实与知识库绑定的写入在权限检查之后一律 409 PROJECT_ARCHIVED（读照常）。"""
     try:
         project = _visible_project(connection, project_id, actor.user_id, admin)
     except AppError:
@@ -96,6 +98,8 @@ def _writable_project(connection, project_id: UUID, actor, admin: bool, permissi
             raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。") from None
         raise
     _require(actor, permission)
+    if check_archived:
+        ensure_project_writable(connection, project_id)
     return project
 
 
@@ -514,8 +518,9 @@ def set_bindings(project_id: str, request: Request, body: BindingBody) -> dict[s
     base_ids = [_uuid(item, "baseIds") for item in body.baseIds]
     with connect() as connection:
         with connection.transaction():
-            project = _writable_project(connection, target, actor, admin, "projects.manage")
+            project = _writable_project(connection, target, actor, admin, "projects.manage", check_archived=False)
             require_project_owner(connection, actor, target)
+            ensure_project_writable(connection, target)  # A05 Q-1：先判负责人（403），再判归档（409）
             if int(project["revision"]) != body.expectedProjectRevision:
                 raise AppError(409, "REVISION_CONFLICT", "这个项目刚被改过。", current_revision=int(project["revision"]))
             if len(base_ids) > 100:

@@ -69,9 +69,11 @@ const preview = ref<Preview | null>(null);
 const active = ref<ProjectFact | null>(null);
 const showSource = ref(false);
 
-const canEdit = computed(() => permissions.value.includes("facts.edit"));
-const canConfirm = computed(() => permissions.value.includes("facts.confirm"));
-const canBind = computed(() => permissions.value.includes("projects.manage"));
+// A05 Q-1：归档项目完全只读（服务端对事实、知识库关联写入返回 409 PROJECT_ARCHIVED），界面不再给写入口。
+const archived = computed(() => Boolean(project.value?.archivedAt));
+const canEdit = computed(() => !archived.value && permissions.value.includes("facts.edit"));
+const canConfirm = computed(() => !archived.value && permissions.value.includes("facts.confirm"));
+const canBind = computed(() => !archived.value && permissions.value.includes("projects.manage"));
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / 10)));
 const filtering = computed(() => Boolean(appliedName.value || appliedState.value));
 const shownMaterials = computed(() => {
@@ -394,6 +396,7 @@ onMounted(() => void load());
   <section class="card">
     <div class="head"><h1>资料</h1></div>
     <p class="notice">公共信息确认后生效。自动提取暂不可用。已上传的文件会标为待解析。</p>
+    <p v-if="archived" class="notice" role="status" data-testid="materials-archived">项目已归档，资料、公共信息和知识库关联只能查看。恢复项目后才能修改。</p>
     <p v-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
     <p v-else-if="phase === 'loading'" class="empty">正在读取</p>
     <template v-else>
@@ -408,7 +411,7 @@ onMounted(() => void load());
       </div>
 
       <div v-else-if="tab === 'materials'">
-        <form class="create" @submit.prevent="uploadToProject">
+        <form v-if="!archived" class="create" @submit.prevent="uploadToProject">
           <div class="fields">
             <label>资料名称<input v-model="uploadName" class="control" type="text" :disabled="submitting" /></label>
             <label>文件<input class="control" type="file" :disabled="submitting" @change="uploadFileRef = ($event.target as HTMLInputElement).files?.[0] ?? null" /></label>
@@ -433,7 +436,7 @@ onMounted(() => void load());
             <input type="checkbox" :checked="selected.includes(base.id)" :disabled="submitting || !canBind" @change="toggle(base.id)" />
             <span>{{ base.name }}</span>
           </label>
-          <p v-if="!canBind" class="field-error">当前账号不能修改知识库关联。</p>
+          <p v-if="!canBind && !archived" class="field-error">当前账号不能修改知识库关联。</p>
           <div class="actions">
             <button type="button" class="primary" :disabled="submitting || !canBind" @click="saveBindings">
               {{ submitting ? "正在保存" : "保存关联" }}

@@ -23,7 +23,7 @@ from app.documents import _project_visible, _uuid
 from app.ai_capability import require_ai
 from app.errors import AppError
 from app.files import resolve_object
-from app.document_access import document_principal
+from app.document_access import document_principal, ensure_project_writable
 from app.identity import require_permission
 from app.models import format_timestamp
 from app.test_executor import _test_text
@@ -101,12 +101,15 @@ def _envelope(request: Request, data: dict) -> dict:
     return {"data": data, "requestId": request.state.request_id}
 
 
-def _visible(connection, task_id: str, actor):
+def _visible(connection, task_id: str, actor, *, write: bool = False):
+    """write=True：A05 Q-1 归档项目完全只读，测试任务的新建/修改/分析/执行一律 409 PROJECT_ARCHIVED（查看、下载报告照常）。"""
     row = connection.execute("SELECT t.*, p.name AS project_name FROM test_tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=%s",
                              (_uuid(task_id, "taskId"),)).fetchone()
     if row is None:
         raise AppError(404, "NOT_FOUND", "没有这个测试任务。")
     _project_visible(connection, row["project_id"], actor.user_id, "system_admin" in actor.roles)
+    if write:
+        ensure_project_writable(connection, row["project_id"])
     return row
 
 
@@ -520,6 +523,7 @@ def create_task(request: Request, body: TaskCreate) -> dict:
     task_id = uuid4()
     with connect() as connection:
         _project_visible(connection, pid, actor.user_id, "system_admin" in actor.roles)
+        ensure_project_writable(connection, pid)  # A05 Q-1
         _word_file(connection, plan, pid)
         if report:
             _word_file(connection, report, pid)
@@ -556,7 +560,7 @@ def patch_task(request: Request, task_id: str, body: TaskPatch) -> dict:
         raise AppError(422, "VALIDATION_FAILED", "配置字段不能为 null；清空文字字段请使用空字符串。")
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = _visible(connection, task_id, actor)
+        row = _visible(connection, task_id, actor, write=True)
         _idle(row)
         _revision(row, body.expectedRevision)
         name = _name(changes.pop("name", row["name"]))
@@ -585,7 +589,7 @@ def analyze(request: Request, task_id: str) -> dict:
     actor = require_permission(request, "tests.edit")
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = _visible(connection, task_id, actor)
+        row = _visible(connection, task_id, actor, write=True)
         _idle(row)
         task = _task(row, private=True)
         connection.execute("UPDATE test_tasks SET status='analyzing',error='',updated_at=CURRENT_TIMESTAMP WHERE id=%s", (row["id"],))
@@ -612,7 +616,7 @@ def patch_case(request: Request, task_id: str, case_id: str, body: CasePatch) ->
     actor = require_permission(request, "tests.edit")
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = _visible(connection, task_id, actor)
+        row = _visible(connection, task_id, actor, write=True)
         _idle(row)
         _revision(row, body.expectedRevision)
         cases = json.loads(row["cases_json"])
@@ -683,7 +687,7 @@ def run_task(request: Request, task_id: str, body: RunCreate, background: Backgr
     actor = require_permission(request, "tests.execute")
     with connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = _visible(connection, task_id, actor)
+        row = _visible(connection, task_id, actor, write=True)
         _idle(row)
         _revision(row, body.expectedRevision)
         task = _task(row, private=True)
