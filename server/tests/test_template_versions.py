@@ -25,6 +25,7 @@ from app.template_word import new_block_id
 PASSWORD = "a06-template-pw"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 ROOT = Path(__file__).resolve().parents[2]
+RACE_DOCUMENTS = 100  # 17 §3.11：发布与新建文档并发 100 次
 SRS = next((ROOT / "438C-2021全套模板").glob("*[[]SRS[]]*.docx"))
 
 
@@ -513,3 +514,54 @@ def test_backfill_binds_matching_documents_and_marks_legacy(api, tmp_path):
     confirmed = api.send("PATCH", f"/template-documents/{unreviewed_id}/structure", {"expectedRevision": 0, "importStructure": pending})
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["data"]["currentVersion"]["seq"] == 1
+
+
+def test_find_or_store_upload_not_docx_and_publish_racing_new_documents(api):
+    """17 §3.11：find_or_store 命中/逐字节比对/未命中；上传非 docx 得到 422；发布与新建文档并发，每篇文档都绑定存在的版本。"""
+    from app.template_versions import find_or_store
+
+    td, _ = _template(api)
+    td_id = td["id"]
+    content = SRS.read_bytes()
+    with connect() as connection:
+        first, digest = find_or_store(connection, content, "SRS.docx")
+        again, _ = find_or_store(connection, content, "SRS.docx")
+        other, _ = find_or_store(connection, content + b"\0", "SRS-2.docx")
+        connection.commit()
+    assert again == first and other != first and len(digest) == 64
+    junk = store_bytes(name="不是Word.docx", media_type=DOCX, purpose="template", content=b"not a docx at all")
+    bad = api.send("POST", f"/template-documents/{td_id}/draft:upload", {"wordFileId": str(junk.id), "expectedDraftRevision": 0})
+    assert bad.status_code == 422, bad.text
+
+    base = _base(api, td_id)
+    guidance = next(b["id"] for b in _top(base["structure"]["blocks"]) if b["kind"] == "guidance")
+    created: list = []
+    errors: list = []
+    headers = dict(api.headers)
+    cookies = dict(api.client.cookies)
+
+    def create_many():
+        from app.main import create_app
+        with TestClient(create_app()) as other_client:
+            other_client.cookies.update(cookies)
+            for index in range(RACE_DOCUMENTS):
+                response = other_client.post(f"/api/v1/projects/{api.project}/documents", headers=headers,
+                                             json={"name": f"并发 {index}", "sourceType": "template", "templateDocumentId": td_id})
+                (created if response.status_code == 200 else errors).append(response.json()["data"]["id"] if response.status_code == 200 else response.text)
+
+    worker = threading.Thread(target=create_many)
+    worker.start()
+    revision = 0
+    for round_ in range(3):
+        structure = _edit_text(_base(api, td_id)["structure"], guidance, f"并发第 {round_} 次")
+        saved = api.send("PUT", f"/template-documents/{td_id}/draft", {"structure": structure, "expectedDraftRevision": revision})
+        assert saved.status_code == 200, saved.text
+        published = api.send("POST", f"/template-documents/{td_id}/versions", {"draftRevision": saved.json()["data"]["draftRevision"], "note": f"并发 {round_}"})
+        assert published.status_code == 201, published.text
+    worker.join()
+    assert not errors and len(created) == RACE_DOCUMENTS
+    with connect() as connection:
+        rows = connection.execute(f"""SELECT d.template_version_id, v.status FROM documents d LEFT JOIN template_document_versions v
+                                       ON v.id = d.template_version_id WHERE d.id IN ({','.join(['%s'] * len(created))})""", created).fetchall()
+    assert len(rows) == RACE_DOCUMENTS and all(row["template_version_id"] and row["status"] in {"published", "superseded"} for row in rows)
+
