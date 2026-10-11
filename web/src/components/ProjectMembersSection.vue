@@ -574,7 +574,8 @@ defineExpose({ reload: () => load(true) });
 </template>
 
 <style scoped>
-.members-section { padding-top:var(--space-6); border-top:1px solid var(--border-subtle); scroll-margin-top:var(--space-5); }
+.section-head { display:flex; justify-content:space-between; align-items:center; gap:var(--space-5); margin-bottom:var(--space-4); }
+.members-section { min-width:0; padding-top:var(--space-6); border-top:1px solid var(--border-subtle); scroll-margin-top:var(--space-5); }
 .members-section:focus { outline:none; }
 .members-head { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
 .members-note { margin-left:var(--space-2); color:var(--text-tertiary); font-size:var(--text-sm); }
