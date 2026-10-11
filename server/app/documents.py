@@ -584,6 +584,7 @@ def create_document(
 
         # 根据来源类型处理
         template_doc_id = None
+        template_version_id = None
         original_file_id = None
         format_template = {}
         markdown_content = ""
@@ -595,27 +596,35 @@ def create_document(
 
             template_doc_id = _uuid(body.templateDocumentId, "templateDocumentId")
 
-            # 获取模板文档信息
-            td_row = conn.execute(
+            # A06：读取当前已发布版本（不可变，事务外读取也一致），不读草稿（17 §3.5“新建文档”）
+            from app.template_versions import ensure, word_file_id
+            from app.template_word import clean_version
+
+            exists = conn.execute("SELECT id FROM template_documents WHERE id = %s", [template_doc_id]).fetchone()
+            if not exists:
+                raise AppError(404, "NOT_FOUND", "模板文档不存在。")
+            ensure(template_doc_id, session.user_id)
+            version = conn.execute(
                 """
-                SELECT td.word_file_id, td.format_template, f.storage_key
+                SELECT v.id, v.version, v.source_file_id, v.edited_file_id, v.structure_json, f.storage_key
                 FROM template_documents td
-                JOIN files f ON f.id = td.word_file_id
+                JOIN template_document_versions v ON v.id = td.current_version_id
+                JOIN files f ON f.id = coalesce(v.edited_file_id, v.source_file_id)
                 WHERE td.id = %s
                 """,
                 [template_doc_id]
             ).fetchone()
-
-            if not td_row:
-                raise AppError(404, "NOT_FOUND", "模板文档不存在。")
-
-            format_template = td_row[1] if td_row[1] else {}
-            storage_key = td_row[2]
-            structure = format_template.get("importStructure")
-            if not structure or not structure.get("reviewed"):
+            if not version:
                 raise AppError(409, "TEMPLATE_REVIEW_REQUIRED", "请先在模板管理中核对并确认模板结构，再创建文档。")
+            structure = json.loads(version["structure_json"])
+            template_version_id = version["id"]
+            word_id = word_file_id({"edited_file_id": version["edited_file_id"], "source_file_id": version["source_file_id"]})
+            word_path = resolve_object(get_settings().file_data_dir, version["storage_key"])
             try:
-                cleaned = clean_template(resolve_object(get_settings().file_data_dir, storage_key), structure)
+                if version["version"] == 1 and version["edited_file_id"] is None:
+                    cleaned = clean_template(word_path, structure)
+                else:
+                    cleaned = clean_version(word_path, structure)
                 parsed = parse_docx(BytesIO(cleaned), outline_headings=True)
             except ValueError as exc:
                 raise AppError(422, "TEMPLATE_STRUCTURE_INVALID", str(exc)) from None
@@ -627,7 +636,7 @@ def create_document(
                                  purpose="attachment", content=cleaned, project_id=pid, connection=conn)
             original_file_id = stored.id
             format_template = {**parsed.format_template, "images": parsed.images,
-                               "importStructure": structure, "templateSourceFileId": str(td_row[0]), "wordOutlineHeadings": True}
+                               "importStructure": structure, "templateSourceFileId": str(word_id), "wordOutlineHeadings": True}
 
         elif body.sourceType == "upload":
             if not body.wordFileId:
@@ -658,13 +667,13 @@ def create_document(
             """
             INSERT INTO documents
             (id, project_id, name, source_type, template_document_id, original_docx_file_id,
-             format_template, markdown_content, outline, status, owner_id, revision)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0)
+             format_template, markdown_content, outline, status, owner_id, revision, template_version_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0, %s)
             """,
             [
                 doc_id, pid, name, body.sourceType, template_doc_id, original_file_id,
                 json.dumps(format_template), markdown_content, json.dumps(outline),
-                session.user_id
+                session.user_id, template_version_id
             ]
         )
         record_current_version(conn, doc_id, expected_revision=0, kind="created")
@@ -696,6 +705,25 @@ def create_document(
         }
 
 
+def _template_info(conn, document_id, template_document_id, document_name, group_name) -> dict | None:
+    """A06 文档信息：模板 · 第 N 版；结构早于版本化的老文档 legacySnapshot=true，不显示版本号（16 §3.4）。"""
+    if template_document_id is None:
+        return None
+    row = conn.execute(
+        """SELECT d.template_version_id, v.version, v.published_at,
+                  (SELECT max(x.version) FROM template_document_versions x
+                    WHERE x.template_document_id = d.template_document_id AND x.status <> 'draft') AS latest
+           FROM documents d LEFT JOIN template_document_versions v ON v.id = d.template_version_id WHERE d.id = %s""",
+        (document_id,),
+    ).fetchone()
+    legacy = row["template_version_id"] is None
+    return {"name": group_name, "documentName": document_name,
+            "versionId": None if legacy else str(row["template_version_id"]),
+            "seq": None if legacy else row["version"],
+            "publishedAt": None if legacy or row["published_at"] is None else format_timestamp(row["published_at"]),
+            "latestSeq": row["latest"], "legacySnapshot": legacy}
+
+
 @router.get("/documents/{document_id}")
 def get_document(request: Request, document_id: str) -> dict[str, object]:
     """获取文档详情（包含 Markdown 内容）"""
@@ -710,6 +738,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
             "SELECT t.name FROM template_documents td JOIN templates t ON t.id = td.template_id WHERE td.id = %s",
             (row[4],),
         ).fetchone() if row[4] else None
+        template = _template_info(conn, did, row[4], row[15], None if group is None else group[0])
 
         return {
             "data": {
@@ -730,6 +759,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "projectName": row[14],
                 "templateDocumentName": row[15],
                 "templateName": None if group is None else group[0],
+                "template": template,
                 "permissions": permissions_of(row.project_role, row.admin, row.archived),
             },
             "requestId": request.state.request_id,

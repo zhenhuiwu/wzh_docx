@@ -29,6 +29,8 @@ from app.document_diagrams import router as document_diagrams_router
 from app.document_plans import router as document_plans_router
 from app.facts import router as facts_router
 from app.templates import router as templates_router
+from app.template_versions import router as template_versions_router
+from app.migrate_template_versions import backfill as backfill_template_versions
 from app.test_management import router as test_management_router, recover_interrupted_tasks
 from app.users import router as users_router
 from app.workbench import router as workbench_router
@@ -57,6 +59,7 @@ def get_health(request: Request) -> dict[str, object]:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     service_lock.acquire(database_path())  # 维护脚本据此判断服务是否在运行
     migrate()
+    backfill_template_versions()
     logger.info("sqlite journal_mode=%s", journal_mode())
     seed_writing_skills()
     bootstrap_first_admin()
@@ -122,6 +125,7 @@ def create_app() -> FastAPI:
     api.include_router(project_members_router)
     api.include_router(jobs_router)
     api.include_router(templates_router)
+    api.include_router(template_versions_router)
     api.include_router(writing_skills_router)
     api.include_router(documents_router)
     api.include_router(document_diagrams_router)

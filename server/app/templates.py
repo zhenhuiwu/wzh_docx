@@ -15,6 +15,7 @@ from app.files import guard_knowledge_file, resolve_object
 from app.identity import require_permission
 from app.models import format_timestamp
 from app.template_import import parse_template, validate_structure
+from app.template_versions import ensure_v1, sync_initial_draft
 
 router = APIRouter()
 
@@ -95,6 +96,22 @@ def _document_data(row) -> dict:
             "wordFileId": str(row[4]), "formatTemplate": format_template,
             "importStructure": format_template.get("importStructure"),
             "createdAt": format_timestamp(row[6]), "updatedAt": format_timestamp(row[7])}
+
+
+def _version_summary(conn, td_id) -> dict:
+    """A06 模板文档表：当前版本 · 草稿 · 使用中的文档数（16 §3.2）。"""
+    row = conn.execute("""SELECT v.id, v.version, v.published_at, u.name AS published_by_name,
+                                 (SELECT count(*) FROM template_document_versions d
+                                   WHERE d.template_document_id = td.id AND d.status = 'draft' AND d.parent_version_id IS NOT NULL) AS drafts,
+                                 (SELECT count(*) FROM documents x WHERE x.template_document_id = td.id) AS used
+                          FROM template_documents td
+                          LEFT JOIN template_document_versions v ON v.id = td.current_version_id
+                          LEFT JOIN users u ON u.id = v.published_by WHERE td.id = %s""", [td_id]).fetchone()
+    current = None if row["id"] is None else {
+        "versionId": str(row["id"]), "seq": row["version"],
+        "publishedAt": format_timestamp(row["published_at"]) if row["published_at"] else None,
+        "publishedBy": row["published_by_name"]}
+    return {"currentVersion": current, "hasDraft": bool(row["drafts"]), "usageCount": row["used"]}
 
 
 def _uuid(value: str, field: str) -> UUID:
@@ -398,7 +415,7 @@ def list_template_documents(request: Request, template_id: str) -> dict[str, obj
             [tid]
         ).fetchall()
 
-        items = [_document_data(row) for row in rows]
+        items = [{**_document_data(row), **_version_summary(conn, row[0])} for row in rows]
 
         return {
             "data": {"items": items},
@@ -413,7 +430,7 @@ def create_template_document(
     body: TemplateDocumentCreateBody
 ) -> dict[str, object]:
     """添加文档到模板组（上传 Word 并解析）"""
-    require_permission(request, "templates.manage")
+    principal = require_permission(request, "templates.manage")
     tid = _uuid(template_id, "templateId")
     word_file_id = _uuid(body.wordFileId, "wordFileId")
 
@@ -482,6 +499,8 @@ def create_template_document(
             """,
             [doc_id, tid, name, body.description, body.displayOrder, word_file_id, json.dumps(format_template)]
         )
+        # A06：已核对的结构直接成为第 1 版；未核对的记一份初始草稿
+        ensure_v1(conn, doc_id, principal.user_id)
         conn.commit()
 
         # 返回创建的记录
@@ -494,7 +513,7 @@ def create_template_document(
         ).fetchone()
 
         return {
-            "data": _document_data(row),
+            "data": {**_document_data(row), **_version_summary(conn, doc_id)},
             "requestId": request.state.request_id,
         }
 
@@ -513,9 +532,9 @@ def get_template_document(request: Request, document_id: str) -> dict:
     with connect() as conn:
         row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
                               format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
-    if row is None:
-        raise AppError(404, "NOT_FOUND", "模板文档不存在。")
-    data = _document_data(row)
+        if row is None:
+            raise AppError(404, "NOT_FOUND", "模板文档不存在。")
+        data = {**_document_data(row), **_version_summary(conn, did)}
     if data["importStructure"] is None:
         data["importStructure"] = _parse_structure(_word_path(request, row[4]))
     return {"data": data, "requestId": request.state.request_id}
@@ -523,14 +542,17 @@ def get_template_document(request: Request, document_id: str) -> dict:
 
 @router.patch("/template-documents/{document_id}/structure")
 def update_template_structure(request: Request, document_id: str, body: TemplateStructureBody) -> dict:
-    require_permission(request, "templates.manage")
+    principal = require_permission(request, "templates.manage")
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
-                              format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
+                              format_template, created_at, updated_at, current_version_id FROM template_documents WHERE id=%s""", [did]).fetchone()
         if row is None:
             raise AppError(404, "NOT_FOUND", "模板文档不存在。")
+        if row["current_version_id"] is not None:
+            # A06：确认后的结构是不可变的版本；之后的修改走“编辑模板”草稿 → 发布新版本
+            raise AppError(409, "TEMPLATE_VERSIONED", "模板已发布版本，请在“编辑模板”中修改草稿并发布新版本。")
         format_template = dict(row[5] or {})
         saved = format_template.get("importStructure") or {"revision": 0}
         if saved["revision"] != body.expectedRevision:
@@ -541,10 +563,12 @@ def update_template_structure(request: Request, document_id: str, body: Template
         checked["revision"] += 1
         format_template["importStructure"] = checked
         conn.execute("UPDATE template_documents SET format_template=%s, updated_at=now() WHERE id=%s", [json.dumps(format_template), did])
+        sync_initial_draft(conn, did, checked, principal.user_id)
         conn.commit()
         row = conn.execute("""SELECT id, name, description, display_order, word_file_id,
                               format_template, created_at, updated_at FROM template_documents WHERE id=%s""", [did]).fetchone()
-    return {"data": _document_data(row), "requestId": request.state.request_id}
+        data = {**_document_data(row), **_version_summary(conn, did)}
+    return {"data": data, "requestId": request.state.request_id}
 
 
 @router.delete("/template-documents/{document_id}")
@@ -573,7 +597,9 @@ def delete_template_document(request: Request, document_id: str) -> dict[str, ob
         if usage and usage[0] > 0:
             raise AppError(409, "IN_USE", f"该模板文档已被 {usage[0]} 个项目文档使用，无法删除。")
 
-        # 删除
+        # 删除（未被引用的模板文档连同其版本行一起删除；文件保留）
+        conn.execute("UPDATE template_documents SET current_version_id = NULL WHERE id = %s", [doc_id])
+        conn.execute("DELETE FROM template_document_versions WHERE template_document_id = %s", [doc_id])
         conn.execute("DELETE FROM template_documents WHERE id = %s", [doc_id])
         conn.commit()
 
