@@ -926,9 +926,77 @@ def s_sink_position(ctx: Run, page):
     return {"gap": round(gap, 1), "h": [round(h1), round(h2)]}
 
 
+def resolve_as_other_tab(ctx: Run, doc_id: str, hit: dict, action: str) -> None:
+    """同一账号的另一个标签页处理这条冲突（与界面上点按钮走同一接口）。"""
+    rev = ctx.server(doc_id)["revision"]
+    item = {"itemIndex": hit["itemIndex"], "action": action}
+    if action == "keep_mine":
+        item["theirsRevision"] = (hit.get("theirs") or {}).get("revision")
+    ctx.li.call("POST", f"/documents/{doc_id}/conflicts/{hit['conflictId']}/resolve",
+                json={"clientSaveKey": str(uuid.uuid4()), "baseDocumentRevision": rev, "items": [item]})
+
+
+def wait_body(ctx: Run, doc_id: str, text: str, timeout: float = 30) -> str:
+    deadline = time.time() + timeout
+    while True:
+        md = ctx.server(doc_id)["markdownContent"]
+        if text in md or time.time() > deadline:
+            return md
+        time.sleep(0.5)
+
+
+def other_tab_resolved_round(ctx: Run, page, action: str) -> dict:
+    doc_id = ctx.doc(page, f"方案C另一标签已处理{action}")
+    ctx.make_conflict(page, doc_id, "manual", 300)
+    page.keyboard.type("〔甲批〕", delay=40)
+    hit = ctx.wait_snapshot(doc_id, "〔甲批〕")
+    assert "〔甲批〕" in hit["mineLatest"]["markdown"], hit
+    resolve_as_other_tab(ctx, doc_id, hit, action)
+    page.keyboard.type("〔乙批，丙批〕", delay=60)
+    note = page.get_by_test_id("sink-note")
+    expect(note).to_contain_text("已在你另一个标签页处理", timeout=30000)
+    expect(note).to_contain_text("已接到这一段末尾", timeout=30000)
+    expect(page.locator(".paper-content [data-frozen]")).to_have_count(0, timeout=20000)
+    md = wait_body(ctx, doc_id, "〔乙批，丙批〕")
+    block = next((blk for blk in md.split("\n\n") if "〔乙批，丙批〕" in blk), "")
+    head = (P3 + MARK) if action == "keep_mine" else P3_THEIRS
+    assert block.startswith(head) and block.endswith("〔乙批，丙批〕"), f"多写的字没接回这一段末尾：{md[:400]}"
+    assert md.count("〔乙批，丙批〕") == 1, md[:400]
+    assert "其他成员 更新了你正在看的这一段" not in page.locator("body").inner_text()
+    base.wait_saved(page, 30000)
+    page.reload()
+    expect(page.locator(".paper-content")).to_contain_text("〔乙批，丙批〕", timeout=90000)
+    return {"block": block[-40:]}
+
+
+@scenario("B 另一标签已处理 冻结段续写不丢 保留我的")
+def s_other_tab_resolved_keep(ctx: Run, page):
+    return other_tab_resolved_round(ctx, page, "keep_mine")
+
+
+@scenario("B 另一标签已处理 冻结段续写不丢 使用对方的")
+def s_other_tab_resolved_theirs(ctx: Run, page):
+    return other_tab_resolved_round(ctx, page, "use_theirs")
+
+
+@scenario("B 另一标签已处理 隐形框续写不丢")
+def s_other_tab_resolved_sink(ctx: Run, page):
+    doc_id = list_conflict_with_sink(ctx, page, "方案C另一标签已处理隐形框")
+    hit = ctx.wait_snapshot(doc_id, "续零")
+    resolve_as_other_tab(ctx, doc_id, hit, "use_theirs")
+    page.get_by_test_id("caret-sink").focus()
+    page.keyboard.type("〔隐形框后写〕", delay=60)
+    expect(page.get_by_test_id("sink-note")).to_contain_text("已接到这一段末尾", timeout=30000)
+    md = wait_body(ctx, doc_id, "〔隐形框后写〕")
+    line = next((ln for ln in md.split("\n") if "〔隐形框后写〕" in ln), "")
+    assert "列表项一（对方改）" in line, f"没接回这一项末尾：{md[:400]}"
+    return {"line": line[-40:]}
+
+
 SCENARIOS = [s_repro, s_dom, s_other, s_keep_mine, s_use_theirs, s_keep_both, s_manual, s_leave, s_reload_draft, s_reconflict, s_copy, s_copy_export_ai, s_tm2,
              s_timing_small, s_timing_big, s_tablist, s_load_lock, s_self_theirs, s_list_batches, s_offline_reopen,
-             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen, s_sink_position]
+             s_other_tab_keep_mine, s_other_tab_use_theirs, s_reopen_self_edit, s_sink_offline, s_reload_close_reopen, s_sink_position,
+             s_other_tab_resolved_keep, s_other_tab_resolved_theirs, s_other_tab_resolved_sink]
 
 
 def main() -> int:

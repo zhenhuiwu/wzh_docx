@@ -1558,6 +1558,7 @@ async function flushCaretSink(): Promise<void> {
         sinkUnsaved.value = null;
         caretSinkText = caretSinkSent = caretSinkPrefix = "";
         persistLocalDraft();
+        void refreshConflicts().then(() => conflictPanel.value?.load());
         return;
       }
       if (error instanceof ApiError && ["FORBIDDEN", "NOT_FOUND", "SNAPSHOT_LIMIT"].includes(error.code)) {
@@ -2734,9 +2735,10 @@ async function settleResolvedElsewhere(entries: Frozen[]) {
       }
       return tops[Math.min(entry.index, tops.length - 1)] ?? null;
     });
-    if (keep) { leftovers.value = leftovers.value.filter(item => item !== keep); persistLocalDraft(); }
+    // 深层 ref 里是 Proxy，不能与原对象 ===（同设计师上轮必改 3）
+    if (keep) { leftovers.value = leftovers.value.filter(item => !(item.conflictId === keep.conflictId && item.itemIndex === keep.itemIndex)); persistLocalDraft(); }
   }
-  void refreshConflicts();
+  void refreshConflicts().then(() => conflictPanel.value?.load());
 }
 /** 把多写的字接回某段末尾（普通修改，按最新修订保存）；接不回就放进常驻提示 */
 async function reattachLeftover(text: string, conflictId: string, find: (root: HTMLElement) => HTMLElement | null): Promise<boolean> {
