@@ -296,28 +296,37 @@ def test_bootstrap_admin_must_change_password_before_other_apis(runtime_env, mon
         assert client.get("/api/v1/projects").status_code == 200
 
 
-def test_known_default_password_is_flagged_for_change(runtime_env) -> None:
-    from app.bootstrap_admin import flag_known_default_passwords
-    from app.identity import hash_password
+def test_existing_admin_password_and_access_survive_restarts(runtime_env) -> None:
+    from app.main import create_app
 
-    for account in ("admin", "dev03-default", "dev03-strong"):
-        _reset(account)
-        create_user(account=account, name=account, password=PASSWORD, roles=["project_creator"])
-    flag_known_default_passwords()
+    create_user(account="admin", name="管理员", password="admin123", roles=["system_admin"])
     with connect() as connection:
-        with connection.transaction():
-            connection.execute(
-                "update users set password_hash = %s where account_key in ('admin', 'dev03-default')",
-                (hash_password("admin123"),),
-            )
-    assert flag_known_default_passwords() >= 2
+        original_hash = connection.execute(
+            "select password_hash from users where account_key = 'admin'"
+        ).fetchone()["password_hash"]
+    for _ in range(2):
+        with TestClient(create_app()) as client:
+            signed = _login(client, "admin", "admin123")
+            assert signed.status_code == 200, signed.text
+            assert signed.json()["data"]["user"]["requiresFirstLoginChange"] is False
+            assert client.get("/api/v1/projects").status_code == 200
     with connect() as connection:
-        rows = {
-            row["account_key"]: bool(row["must_change_password"])
-            for row in connection.execute(
-                "select account_key, must_change_password from users "
-                "where account_key in ('admin', 'dev03-default', 'dev03-strong')"
-            )
-        }
-    assert rows == {"admin": True, "dev03-default": True, "dev03-strong": False}
-    assert flag_known_default_passwords() == 0
+        assert connection.execute(
+            "select password_hash from users where account_key = 'admin'"
+        ).fetchone()["password_hash"] == original_hash
+
+
+@pytest.mark.parametrize("password,status", [("1234567", 422), ("admin123", 204), ("x" * 1024, 204), ("x" * 1025, 422)])
+def test_change_password_length_limits(client: TestClient, password: str, status: int) -> None:
+    create_user(account="password-length", name="长度检查", password=PASSWORD, roles=["project_creator"])
+    signed = _login(client, "password-length", PASSWORD)
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        json={"currentPassword": PASSWORD, "newPassword": password},
+        headers={"X-CSRF-Token": signed.json()["data"]["csrfToken"]},
+    )
+    assert changed.status_code == status, changed.text
+    if status == 422:
+        assert changed.json()["error"]["fieldErrors"][0]["field"] == "newPassword"
+    client.cookies.clear()
+    assert _login(client, "password-length", password if status == 204 else PASSWORD).status_code == 200

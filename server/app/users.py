@@ -515,7 +515,7 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
     reason = _clean_reason(body.reason)
     from app.identity import _require_new_password, hash_password
 
-    _require_new_password(body.password)
+    _require_new_password(body.password, "password")
     stored = hash_password(body.password)
     # A password chosen by someone else must be replaced by its owner.
     must_change = target != actor.user_id

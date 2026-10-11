@@ -6,7 +6,7 @@ import { changePassword } from "../api/identity";
 import { ensureSession, loginDestination, readSession } from "../session";
 import { flash } from "../flash";
 
-const MIN_LENGTH = 12;
+const MIN_LENGTH = 8;
 
 const router = useRouter();
 const route = useRoute();
@@ -137,10 +137,10 @@ function signOut() {
           autocomplete="new-password"
           :disabled="busy"
           :aria-invalid="nextError ? 'true' : undefined"
-          aria-describedby="new-hint"
+          :aria-describedby="nextError ? 'new-error' : 'new-hint'"
           @input="clearError('next')"
         />
-        <p v-if="nextError" class="field-error">{{ nextError }}</p>
+        <p v-if="nextError" id="new-error" class="field-error">{{ nextError }}</p>
         <p v-else id="new-hint" class="hint">至少 {{ MIN_LENGTH }} 位，且不能与当前密码相同。</p>
       </div>
 

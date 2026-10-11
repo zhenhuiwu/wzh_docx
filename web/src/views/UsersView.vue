@@ -134,7 +134,7 @@ async function submitCreate() {
   if (await fields.report({
     account: account.value.trim() ? "" : "请填写账号。",
     name: personName.value.trim() ? "" : "请填写姓名。",
-    password: password.value.length < 12 || password.value.length > 1024 ? "密码需为 12 至 1024 个字符。" : "",
+    password: password.value.length < 8 || password.value.length > 1024 ? "密码需为 8 至 1024 个字符。" : "",
   })) return;
   submitting.value = true;
   try {
@@ -179,7 +179,7 @@ async function confirmAsk() {
   if (submitting.value || !pending.value || !pendingAction.value) return;
   // 字段级校验（08 复验 N-S3）：顺序与界面一致，先新密码后原因。
   if (await askFields.report({
-    password: pendingAction.value === "reset" && (password.value.length < 12 || password.value.length > 1024) ? "密码需为 12 至 1024 个字符。" : "",
+    password: pendingAction.value === "reset" && (password.value.length < 8 || password.value.length > 1024) ? "密码需为 8 至 1024 个字符。" : "",
     reason: pendingAction.value !== "revoke" && !reason.value.trim() ? "请填写原因。" : "",
   })) return;
   submitting.value = true;
@@ -338,9 +338,9 @@ onMounted(async () => {
           </div>
           <div class="field span-2">
             <label for="user-password" class="required">初始密码</label>
-            <input id="user-password" v-model="password" class="control" v-bind="fields.invalid('password', 'user-password-hint')" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" :disabled="submitting" @input="fields.clear('password')" />
+            <input id="user-password" v-model="password" class="control" v-bind="fields.invalid('password', 'user-password-hint')" type="password" autocomplete="new-password" required minlength="8" maxlength="1024" :disabled="submitting" @input="fields.clear('password')" />
             <span v-if="fields.errors.value.password" :id="fields.errorId('password')" class="field-error" role="alert">{{ fields.errors.value.password }}</span>
-            <p id="user-password-hint" class="hint">至少 12 个字符，用户首次登录后须修改。</p>
+            <p id="user-password-hint" class="hint">至少 8 个字符，用户首次登录后须修改。</p>
           </div>
         </div>
         <p v-if="formError" class="form-alert dialog-status" role="alert">{{ formError }}</p>
@@ -364,9 +364,9 @@ onMounted(async () => {
           </p>
           <div v-if="pendingAction === 'reset'" class="field">
             <label for="ask-password" class="required">新密码</label>
-            <input id="ask-password" v-model="password" class="control" v-bind="askFields.invalid('password', 'ask-password-hint')" type="password" autocomplete="new-password" required minlength="12" maxlength="1024" :disabled="submitting" @input="askFields.clear('password')" />
+            <input id="ask-password" v-model="password" class="control" v-bind="askFields.invalid('password', 'ask-password-hint')" type="password" autocomplete="new-password" required minlength="8" maxlength="1024" :disabled="submitting" @input="askFields.clear('password')" />
             <span v-if="askFields.errors.value.password" :id="askFields.errorId('password')" class="field-error" role="alert">{{ askFields.errors.value.password }}</span>
-            <p id="ask-password-hint" class="hint">至少 12 个字符。</p>
+            <p id="ask-password-hint" class="hint">至少 8 个字符。</p>
           </div>
           <div v-if="pendingAction !== 'revoke'" class="field">
             <label for="ask-reason" class="required">原因</label>

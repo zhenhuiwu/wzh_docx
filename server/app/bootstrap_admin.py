@@ -6,7 +6,7 @@ initial password before any other API call is accepted.
 
 Two ways:
 - set BOOTSTRAP_ADMIN_ACCOUNT, BOOTSTRAP_ADMIN_NAME and BOOTSTRAP_ADMIN_PASSWORD
-  (at least 12 characters); the server creates the account on start-up;
+  (at least 8 characters); the server creates the account on start-up;
 - run ``python -m app.bootstrap_admin`` without BOOTSTRAP_ADMIN_PASSWORD and a
   random initial password is generated and printed exactly once.
 """
@@ -209,41 +209,6 @@ def bootstrap_first_admin() -> bool:
     return True
 
 
-# Passwords published by earlier portable packages and docs. Any account still
-# using one must change it.
-KNOWN_DEFAULT_PASSWORDS = ("admin123",)
-
-
-def flag_known_default_passwords() -> int:
-    """Force a password change for every account still using a published default.
-
-    Hash checks are slow, so they run on a plain read without holding the
-    write lock; only the accounts that matched are flagged in a short
-    transaction, and only if their hash did not change in between.
-    """
-    with connect() as connection:
-        rows = connection.execute(
-            "select id, password_hash from users where must_change_password = 0"
-        ).fetchall()
-    matched = [
-        (row["id"], row["password_hash"]) for row in rows
-        if any(verify_password(password, row["password_hash"]) for password in KNOWN_DEFAULT_PASSWORDS)
-    ]
-    flagged = 0
-    if matched:
-        with connect() as connection:
-            with connection.transaction(immediate=True):
-                for user_id, stored in matched:
-                    flagged += connection.execute(
-                        "update users set must_change_password = 1 "
-                        "where id = %s and password_hash = %s and must_change_password = 0",
-                        (user_id, stored),
-                    ).rowcount
-    if flagged:
-        logger.warning("%d 个账号仍在使用公开的默认密码，已要求其下次登录时修改。", flagged)
-    return flagged
-
-
 class ResetError(RuntimeError):
     """The offline reset could not be applied."""
 
@@ -291,7 +256,7 @@ def main() -> None:
         if bootstrap_first_admin():
             print("已创建第一个管理员。首次登录后必须修改密码。")
             return
-        print("没有创建账号：已有用户，或环境变量不完整、密码少于 12 位。")
+        print(f"没有创建账号：已有用户，或环境变量不完整、密码少于 {MIN_PASSWORD_LENGTH} 位。")
         raise SystemExit(1)
     if _has_users():
         print("没有创建账号：已有用户。")

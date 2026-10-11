@@ -174,6 +174,30 @@ def test_admin_creates_without_returning_password(client: TestClient) -> None:
     assert conflict.status_code == 409
 
 
+def test_create_and_reset_accept_eight_characters_and_reject_seven(client: TestClient) -> None:
+    csrf = _admin(client)
+    body = {"account": "password-length", "name": "长度检查", "password": "1234567"}
+    headers = {"Idempotency-Key": "password-length", "X-CSRF-Token": csrf}
+    short = client.post("/api/v1/users", json=body, headers=headers)
+    assert short.status_code == 422, short.text
+    assert short.json()["error"]["fieldErrors"][0]["field"] == "password"
+    body["password"] = "admin123"
+    created = client.post("/api/v1/users", json=body, headers=headers)
+    assert created.status_code == 201, created.text
+    user = created.json()["data"]
+    path = f"/api/v1/users/{user['id']}/reset-credentials"
+    reset_body = {"expectedRevision": user["revision"], "reason": "长度校验", "password": "1234567"}
+    short = client.post(path, json=reset_body, headers={"X-CSRF-Token": csrf})
+    assert short.status_code == 422, short.text
+    assert short.json()["error"]["fieldErrors"][0]["field"] == "password"
+    reset_body["password"] = "87654321"
+    reset = client.post(path, json=reset_body, headers={"X-CSRF-Token": csrf})
+    assert reset.status_code == 200, reset.text
+    with connect() as connection:
+        row = connection.execute("select password_hash from users where id = %s", (user["id"],)).fetchone()
+        assert verify_password("87654321", row["password_hash"])
+
+
 def test_last_admin_and_disable_revoke_session(client: TestClient) -> None:
     csrf = _admin(client)
     _reset("dev04-member")

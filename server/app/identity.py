@@ -46,7 +46,7 @@ def _matches(left: str, right: str) -> bool:
         return False
     return hmac.compare_digest(left, right)
 
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 8
 _ITERATIONS = 210_000
 _SESSION_HOURS = 12
 _CHALLENGE_MINUTES = 10
@@ -130,14 +130,14 @@ def _clean_password(password: str, field: str) -> str:
     return password
 
 
-def _require_new_password(password: str) -> str:
-    cleaned = _clean_password(password, "newPassword")
+def _require_new_password(password: str, field: str = "newPassword") -> str:
+    cleaned = _clean_password(password, field)
     if len(cleaned) < MIN_PASSWORD_LENGTH:
         raise AppError(
             422,
             "VALIDATION_FAILED",
             "新密码太短。",
-            [{"field": "newPassword", "message": "至少需要 12 位。"}],
+            [{"field": field, "message": f"至少需要 {MIN_PASSWORD_LENGTH} 位。"}],
         )
     return cleaned
 
@@ -207,7 +207,7 @@ def create_user(
         raise AppError(422, "VALIDATION_FAILED", "姓名不正确。")
     if len(department) > 120:
         raise AppError(422, "VALIDATION_FAILED", "部门不正确。")
-    _require_new_password(password)
+    _require_new_password(password, "password")
     unknown = [role for role in roles if role not in GLOBAL_ROLES]
     # 管理界面可以创建不带全局角色的“仅项目成员”账号；初始化管理员等内部调用仍要求至少一个角色。
     if (not roles and not allow_no_roles) or unknown:

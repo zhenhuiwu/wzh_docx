@@ -13,7 +13,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.bootstrap_admin import bootstrap_first_admin, flag_known_default_passwords
+from app.bootstrap_admin import bootstrap_first_admin
 from app import service_lock
 from app.db import database_path, journal_mode, migrate, ping
 from app.errors import AppError, database_busy_error, error_content, install_error_handlers
@@ -59,7 +59,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("sqlite journal_mode=%s", journal_mode())
     seed_writing_skills()
     bootstrap_first_admin()
-    flag_known_default_passwords()
     recover_interrupted_tasks()
     try:
         yield
