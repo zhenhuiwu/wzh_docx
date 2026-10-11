@@ -220,9 +220,9 @@ def test_non_member_writes_get_404_member_without_permission_gets_403(client: Te
     assert created.status_code == 201, created.text
     fact = created.json()["data"]
     member = str(create_user(account="facts-404-member", name="成员", password=PASSWORD, roles=[], allow_no_roles=True))
-    revision = client.get(f"/api/v1/projects/{project_id}").json()["data"]["revision"]
+    members_revision = client.get(f"/api/v1/projects/{project_id}/members").json()["data"]["membersRevision"]
     added = client.put(f"/api/v1/projects/{project_id}/members/{member}",
-                       json={"userId": member, "role": "editor", "expectedProjectRevision": revision}, headers={"X-CSRF-Token": csrf})
+                       json={"userId": member, "role": "editor", "expectedMembersRevision": members_revision}, headers={"X-CSRF-Token": csrf})
     assert added.status_code == 200, added.text
     project_revision = client.get(f"/api/v1/projects/{project_id}").json()["data"]["revision"]
     create_user(account="facts-404-outsider", name="外人", password=PASSWORD, roles=[], allow_no_roles=True)

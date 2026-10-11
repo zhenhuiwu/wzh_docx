@@ -253,6 +253,26 @@ def test_disabling_sole_owner_is_409_and_lists_projects(ctx):
     assert ctx.disable("alice").status_code == 200
 
 
+def test_disabling_sole_owner_of_archived_project_is_still_blocked(ctx):
+    """Q-2（2026-10-11 用户授权决定）：归档项目里的唯一启用负责人照样挡停用；列表里带 archived 标记供界面标“（已归档）”。"""
+    _archive(ctx)
+    blocked = ctx.disable("alice")
+    assert blocked.status_code == 409, blocked.text
+    error = blocked.json()["error"]
+    assert error["code"] == "LAST_OWNER" and error["details"]["total"] == 1
+    assert error["details"]["projects"] == [{"id": ctx.project, "name": "成员项目", "archived": True}]
+    with connect() as connection:
+        assert connection.execute("select status from users where id = %s", (ctx.users["alice"],)).fetchone()[0] == "active"
+    # 归档项目成员只读：要先恢复才能加第二负责人，之后才能停用
+    ctx.as_("alice")
+    assert ctx.batch(["bob"], "owner").json()["error"]["code"] == "PROJECT_ARCHIVED"
+    ctx.as_("admin")
+    assert ctx.req("POST", f"/projects/{ctx.project}/unarchive", {"expectedRevision": ctx.project_rev(), "reason": "恢复"}).status_code == 200
+    ctx.as_("alice")
+    assert ctx.batch(["bob"], "owner").status_code == 200
+    assert ctx.disable("alice").status_code == 200
+
+
 def test_disabled_accounts_cannot_be_added(ctx):
     assert ctx.disable("dave").status_code == 200
     ctx.as_("alice")
@@ -409,6 +429,78 @@ def test_archived_project_is_read_only_for_members_and_documents(ctx):
     assert ctx.rev() == 2
 
 
+def _code(response):
+    return response.status_code, (response.json().get("error") or {}).get("code")
+
+
+def test_archived_project_blocks_facts_test_tasks_and_bindings(ctx):
+    """Q-1（2026-10-11 用户授权决定）：归档项目完全只读。事实、测试任务、知识库绑定的写入一律 409 PROJECT_ARCHIVED，
+    读照常；权限检查先于归档检查（无权限仍 403、非成员仍 404）。"""
+    word, buffer = Document(), BytesIO()
+    word.add_heading("测试计划", level=1)
+    word.add_paragraph("计划正文。")
+    word.save(buffer)
+    plan = store_bytes(name="计划.docx", media_type=DOCX, purpose="attachment", project_id=ctx.project, content=buffer.getvalue())
+    ctx.as_("alice")
+    assert ctx.batch(["bob"], "editor").status_code == 200
+    ctx.as_("admin")
+    fact = ctx.req("POST", f"/projects/{ctx.project}/facts", {"key": "software_version", "label": "软件版本", "value": "V1.0",
+                                                              "decisionReason": "归档前录入"})
+    assert fact.status_code == 201, fact.text
+    fact = fact.json()["data"]
+    task = ctx.req("POST", "/test-tasks", {"name": "归档前任务", "projectId": ctx.project, "planFileId": str(plan.id)})
+    assert task.status_code == 201, task.text
+    task = task.json()["data"]
+    bindings_before = ctx.get(f"/projects/{ctx.project}/knowledge-bindings").json()["data"]
+    _archive(ctx)
+    project_revision = ctx.project_rev()
+
+    ctx.as_("admin")
+    blocked = {
+        "create fact": ctx.req("POST", f"/projects/{ctx.project}/facts", {"key": "k2", "label": "新事实", "value": "x", "decisionReason": "r"}),
+        "revise fact": ctx.req("PATCH", f"/facts/{fact['id']}", {"expectedRevision": fact["revision"], "value": "V2.0", "decisionReason": "r"}),
+        "confirm fact": ctx.req("POST", f"/facts/{fact['id']}/confirm", {"expectedRevision": fact["revision"], "reason": "确认"}),
+        "bindings": ctx.req("PUT", f"/projects/{ctx.project}/knowledge-bindings", {"expectedProjectRevision": project_revision, "baseIds": []}),
+        "create task": ctx.req("POST", "/test-tasks", {"name": "归档后任务", "projectId": ctx.project, "planFileId": str(plan.id)}),
+        "patch task": ctx.req("PATCH", f"/test-tasks/{task['id']}", {"expectedRevision": task["revision"], "name": "改名"}),
+        "analyze": ctx.req("POST", f"/test-tasks/{task['id']}/analyze"),
+        "patch case": ctx.req("PATCH", f"/test-tasks/{task['id']}/cases/c1", {"enabled": False}),
+        "run": ctx.req("POST", f"/test-tasks/{task['id']}/run", {"expectedRevision": task["revision"]}),
+    }
+    for name, response in blocked.items():
+        assert response.status_code == 409, (name, response.text)
+        error = response.json()["error"]
+        assert error["code"] == "PROJECT_ARCHIVED" and error["details"]["readonlyReason"] == "archived", (name, error)
+
+    # 权限检查先于归档：编写人员改绑定仍 403；非成员仍 404（不泄露项目存在）
+    ctx.as_("bob")
+    assert _code(ctx.req("PUT", f"/projects/{ctx.project}/knowledge-bindings",
+                         {"expectedProjectRevision": project_revision, "baseIds": []})) == (403, "FORBIDDEN")
+    ctx.as_("outsider")
+    assert ctx.req("POST", f"/projects/{ctx.project}/facts", {"key": "k3", "label": "x", "value": "x", "decisionReason": "r"}).status_code == 404
+
+    # 读照常，且没有被写入
+    ctx.as_("admin")
+    facts = ctx.get(f"/projects/{ctx.project}/facts")
+    assert facts.status_code == 200 and [item["key"] for item in facts.json()["data"]["items"]] == ["software_version"]
+    assert facts.json()["data"]["items"][0]["revision"] == fact["revision"]
+    assert ctx.get(f"/projects/{ctx.project}/knowledge-bindings").json()["data"]["items"] == bindings_before["items"]
+    detail = ctx.get(f"/test-tasks/{task['id']}")
+    assert detail.status_code == 200 and detail.json()["data"]["name"] == "归档前任务"
+    assert detail.json()["data"]["revision"] == task["revision"]
+    listed = ctx.get(f"/test-tasks?projectId={ctx.project}").json()["data"]
+    assert [item["name"] for item in listed["items"]] == ["归档前任务"]
+    assert ctx.project_rev() == project_revision
+
+    # 恢复后可写
+    restored = ctx.req("POST", f"/projects/{ctx.project}/unarchive", {"expectedRevision": project_revision, "reason": "恢复"})
+    assert restored.status_code == 200, restored.text
+    renamed = ctx.req("PATCH", f"/test-tasks/{task['id']}", {"expectedRevision": task["revision"], "name": "恢复后改名"})
+    assert renamed.status_code == 200, renamed.text
+    revised = ctx.req("PATCH", f"/facts/{fact['id']}", {"expectedRevision": fact["revision"], "value": "V2.0", "decisionReason": "恢复后"})
+    assert revised.status_code == 200, revised.text
+
+
 def test_objects_poll_reports_role_change(ctx):
     document = _document(ctx)
     ctx.as_("alice")
@@ -515,7 +607,8 @@ def test_disable_sole_owner_and_add_second_owner_race_is_consistent(ctx):
         thread.join()
     assert results["add"] == 200, results
     assert results["disable"] in (200, 409), results
-    assert _active_owner_count(ctx.project) == 1
+    # 先加 bob 再停用：停用成功，只剩 bob 一位启用负责人；先停用：alice 是唯一负责人被 409 挡下，之后加 bob → 两位
+    assert _active_owner_count(ctx.project) == (1 if results["disable"] == 200 else 2)
     with connect() as connection:
         alice = connection.execute("select status from users where id = %s", (ctx.users["alice"],)).fetchone()[0]
         owner_id = connection.execute("select owner_id from projects where id = %s", (ctx.project,)).fetchone()[0]
