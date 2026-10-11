@@ -333,6 +333,15 @@ def read_styles(doc) -> dict[str, dict]:
             for key, style in whitelist_styles(doc).items()}
 
 
+def read_defined(doc) -> dict[str, dict]:
+    """样式自身定义的取值（不含继承），用于版本对比只列真正改过的“样式 · 属性”。"""
+    return {key: {prop: _own_value(style, prop) for prop in STYLE_PROPS} for key, style in whitelist_styles(doc).items()}
+
+
+def read_format(doc) -> dict:
+    return {"styles": read_styles(doc), "defined": read_defined(doc)}
+
+
 def _value_ok(prop: str, value) -> bool:
     if value is None:
         return False
@@ -964,6 +973,8 @@ def _rebind_headings(blocks: list[dict]) -> None:
         if block["kind"] == "heading":
             current = block["id"]
             block["headingId"] = None
+        elif block.get("unplaced"):
+            block["headingId"] = None
         elif block["kind"] == "guidance":
             if block.get("headingId") not in headings:
                 block["headingId"] = current
@@ -1045,10 +1056,16 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
         if op == "equal":
             pairs.update({b0 + offset: a0 + offset for offset in range(a1 - a0)})
         elif op == "replace":
-            for offset in range(min(a1 - a0, b1 - b0)):
-                old, new = old_keys[a0 + offset], new_keys[b0 + offset]
-                if old[0] == new[0] and SequenceMatcher(None, old[1], new[1], autojunk=False).ratio() >= 0.6:
-                    pairs[b0 + offset] = a0 + offset
+            # 改过的段落：在这一段里按顺序找同类、文字相似度 ≥0.6 的旧块（保持单调，不交叉配对）
+            pointer = a0
+            for j in range(b0, b1):
+                new = new_keys[j]
+                for i in range(pointer, a1):
+                    old = old_keys[i]
+                    if old[0] == new[0] and SequenceMatcher(None, old[1], new[1], autojunk=False).ratio() >= 0.6:
+                        pairs[j] = i
+                        pointer = i + 1
+                        break
     id_map: dict[str, str] = {}
     result = deepcopy(new_structure)
     old_children: dict[str, dict] = {}
