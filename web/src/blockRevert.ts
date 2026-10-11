@@ -3,7 +3,16 @@
  * 按空行把正文切成块，与上次保存的正文对齐；在有变化的片段里找文字与失败块一致的那一段，换回保存时的原文。
  * 找不到时返回 null（界面提示手动处理），绝不改动其他段落。
  */
-const normalize = (text: string) => text.replace(/\\(.)/g, "$1").replace(/[\s*_`#>|]+/g, "").replace(/^(\d+\.|[-+])/, "");
+// 设计师复验 3 C-2：表格 markdown 的分隔行（|---|、| :--- | ---: |、不带外侧竖线的 --- | ---）不是单元格文字，
+// 服务器的 blockText 只取单元格文字；单元格内换行写作 <br>，blockText 里没有它。规整前先去掉这两样，否则表格永远对不上。
+// 分隔行只认表头下面那一行（上一行是表格行、再上一行不是），单元格全是“-”的数据行照常保留。
+const TABLE_RULE = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t\r]*$/;
+function dropTableRules(text: string): string {
+  const lines = text.split("\n");
+  const isRow = (line: string | undefined) => line !== undefined && line.includes("|");
+  return lines.filter((line, index) => !(TABLE_RULE.test(line) && isRow(lines[index - 1]) && !isRow(lines[index - 2]))).join("\n");
+}
+const normalize = (text: string) => dropTableRules(text).replace(/<br\s*\/?>/gi, "").replace(/\\(.)/g, "$1").replace(/[\s*_`#>|]+/g, "").replace(/^(\d+\.|[-+])/, "");
 
 function blocks(markdown: string): string[] {
   return markdown.split(/\n{2,}/);

@@ -1637,5 +1637,93 @@ def s_two_tabs_first_409_closes(ctx: Run, page):
 SCENARIOS += [s_two_tabs_first_409_closes]
 
 
+# —— 设计师复验 3 C-2：合并单元格 422 →［撤销这一段的修改］→ 同一次保存里别处的修改照常保存 ——
+def str_doc(ctx: Run, name: str) -> str:
+    source = next((base.ROOT / "438C-2021全套模板").glob("*[[]STR[]]*.docx"))
+    zhang = ctx.data["zhang"]
+    upload = zhang.client.post("/files", files={"file": (source.name, source.read_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+                               data={"purpose": "attachment", "projectId": ctx.data["project"]["id"]},
+                               headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"schemec-str-{uuid.uuid4()}"})
+    assert upload.status_code == 201, upload.text
+    return zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
+                      json={"name": f"{name}-{time.strftime('%H%M%S')}", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
+
+
+STR_TABLE_START = "| 测试轮次 | 测试轮次 | 问题总计 | 问题类型 |"
+STR_OTHER = "本条应给出测试环境与操作环境的差异"
+STR_CAPTION = "表-X按问题类型统计"
+
+
+def str_table(markdown: str) -> str:
+    start = markdown.index(STR_TABLE_START)
+    end = markdown.find("\n\n", start)
+    return markdown[start:end if end >= 0 else len(markdown)]
+
+
+def merged_revert_round(ctx: Run, page, concurrent: bool) -> dict:
+    tag = "并发" if concurrent else "单人"
+    doc_id = str_doc(ctx, f"复验3合并单元格撤销-{tag}")
+    original = ctx.server(doc_id)["markdownContent"]
+    ctx.open(page, doc_id)
+    sent: list[dict] = []
+    page.on("response", lambda r: sent.append({"status": r.status, "body": r.request.post_data or ""})
+            if r.request.method == "PATCH" and r.url.endswith("/content") else None)
+    other_mark, caption_mark = f"【李工别处的修改{tag}】", "【李工改表题】"
+    base.type_after(page, STR_OTHER, other_mark)
+    if concurrent:
+        base.type_after(page, STR_CAPTION, caption_mark)  # 表题段落里另有修改（设计师 TB3-revert-caption）
+        ctx.zhang_edit(doc_id, "本条应对被测试软件的设计、操作或测试提供改进建议", "本条应对被测试软件的设计、操作或测试提供改进建议【张工改】")
+    cell = page.locator(".paper-content td", has_text="第一轮回归测试").first
+    cell.scroll_into_view_if_needed()
+    cell.click()
+    page.keyboard.press("End")
+    page.keyboard.type("李工填5")
+    page.keyboard.press("Control+s")
+    banner = page.get_by_test_id("save-blocked")
+    expect(banner).to_be_visible(timeout=30000)
+    expect(banner).to_contain_text("合并单元格")
+    rejected = [row for row in sent if row["status"] == 422]
+    assert rejected and other_mark in rejected[-1]["body"] and "李工填5" in rejected[-1]["body"], "前置条件：被拒的那次保存里要同时有别处的修改和合并单元格的修改"
+    base.shot(page, f"C2-合并单元格撤销-{tag}-1-被拒")
+    banner.get_by_test_id("revert-block").click()
+    expect(banner).to_have_count(0, timeout=30000)
+    base.wait_saved(page, 30000)
+    body = page.locator("body").inner_text()
+    assert "没能自动找到这一段" not in body, "撤销提示“没能自动找到这一段”"
+    expect(page.get_by_text("已撤销这一段的修改，其余修改已保存。")).to_be_visible(timeout=10000)
+    base.shot(page, f"C2-合并单元格撤销-{tag}-2-撤销后")
+    server = ctx.server(doc_id)["markdownContent"]
+    assert other_mark in server, "别处的修改没进正文"
+    assert "李工填5" not in server, "合并单元格里的修改没撤掉"
+    assert str_table(server) == str_table(original), "这张表没还原成原样"
+    if concurrent:
+        assert caption_mark in server and "【张工改】" in server, "表题的修改或张工的修改丢了"
+    assert not page.locator(".paper-content td", has_text="李工填5").count(), "编辑区里那一格没还原"
+    # 之后再改别处，自动保存照常通过
+    base.type_after(page, STR_OTHER, "（之后再改）")
+    expect(page.get_by_test_id("save-status")).not_to_contain_text("刚刚保存", timeout=10000)
+    base.wait_saved(page, 60000)
+    expect(banner).to_have_count(0)
+    assert "（之后再改）" in ctx.server(doc_id)["markdownContent"]
+    return {"tag": tag, "statuses": [row["status"] for row in sent]}
+
+
+@scenario("C-2 合并单元格被拒 撤销这一段 别处的修改照常保存")
+def s_merged_cell_revert(ctx: Run, page):
+    """设计师复验 3 C-2：STR“表-X按问题类型统计”的合并格里打字 + 别处一段修改 → 422 →［撤销这一段的修改］→ 保存 200，别处修改在正文里。
+    单人一轮；并发一轮（表题段落也改了，张工同时改了别处）。"""
+    out = [merged_revert_round(ctx, page, False)]
+    page.context.close()
+    page = ctx.page()
+    try:
+        out.append(merged_revert_round(ctx, page, True))
+    finally:
+        page.context.close()
+    return {"rounds": out}
+
+
+SCENARIOS += [s_merged_cell_revert]
+
+
 if __name__ == "__main__":
     sys.exit(main())
