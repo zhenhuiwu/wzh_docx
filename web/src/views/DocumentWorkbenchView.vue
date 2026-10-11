@@ -155,7 +155,8 @@ const readonly = ref(false);
 const readonlyReason = ref("");
 /** A05：只读成员被调整为可编辑时的提示（不自动切换，16 §2.10）。 */
 const permissionUpgrade = ref("");
-const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string; deletedText?: string } | null>(null);
+// gone：项目不存在或已无权访问（被移出）；fromPoll：轮询发现而不是点保存时遇到；unsaved=false：没有未保存的内容（20 L-2，21 S-4）
+const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string; deletedText?: string; gone?: boolean; fromPoll?: boolean; unsaved?: boolean } | null>(null);
 const revertingBlock = ref(false);
 const retrying = ref(false);
 const failures = ref(0);
@@ -362,6 +363,7 @@ const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCou
 const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0 || Object.keys(limitedMine.value).length > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
+const archivedNotice = computed(() => readonly.value && document.value?.permissions?.readonlyReason === "archived" ? readonlyText("archived", document.value.permissions.projectRole) : "");
 const capsule = computed(() => capsuleState({ readonly: readonly.value, blocked: Boolean(blocked.value) || storageFailed.value, offline: (offline.value || (!online.value && frozenUnsaved.value > 0)) && hasUnsaved.value,
   retrying: retrying.value && isDirty.value, saving: showSaving.value || revertingBlock.value, dirty: hasUnsaved.value }));
 const capsuleText = computed(() => capsuleLabel(capsule.value, { savedAt: savedAt.value, now: now.value, pending: pendingCount.value }));
@@ -1029,7 +1031,7 @@ async function checkOthersUpdated() {
     }
   } catch (error) {
     // A05（16 §2.10）：被移出项目后轮询直接 404 → 与保存遇到 404 相同的状态；其他失败不影响编辑，下次再查。
-    if (error instanceof ApiError && error.status === 404 && document.value === record) enterGone(markdownContent.value, error.code);
+    if (error instanceof ApiError && error.status === 404 && document.value === record) enterGone(markdownContent.value, error.code, true);
   } finally {
     checkingUpdates = false;
   }
@@ -1053,11 +1055,13 @@ function applyPolledPermissions(record: NonNullable<typeof document.value>, perm
 function reloadPage() { window.location.reload(); }
 const PROJECT_ROLE_LABEL: Record<string, string> = { owner: "负责人", editor: "编写人员" };
 /** 项目不存在或已无权访问（被移出项目）：进入只读，未保存的修改可以下载（16 §2.10，沿用 404 定稿文案）。 */
-function enterGone(content: string, code = "NOT_FOUND") {
+function enterGone(content: string, code = "NOT_FOUND", fromPoll = false) {
   readonly.value = true;
   retrying.value = false;
   readonlyReason.value = "项目不存在或你无权访问。";
-  blocked.value = { message: "项目不存在或你无权访问。未保存的修改可以下载。", content, code };
+  // 空闲时被移出（没有未保存内容）不提下载（20 L-2）
+  const unsaved = content !== savedContent.value;
+  blocked.value = { message: unsaved ? "项目不存在或你无权访问。未保存的修改可以下载。" : "项目不存在或你无权访问。", content, code, gone: true, fromPoll, unsaved };
 }
 /** T-M2：光标所在顶层块及前后各一块是否在服务器上被改（按对象 ID）。 */
 function caretTouched(objects: Array<{ id: string; deleted?: boolean }>): boolean {
@@ -3705,12 +3709,14 @@ onUnmounted(() => {
         <p v-if="refreshNoticeShown" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNoticeShown }}</span></p>
         <div v-if="blocked" class="wb-notice danger save-blocked" role="alert" data-testid="save-blocked">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
-          <span><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
+          <span v-if="blocked.fromPoll">{{ blocked.message }}</span>
+          <span v-else><strong>{{ readonly ? '无法保存' : '保存失败' }}</strong>{{ blocked.location ? `：${locationText(blocked.location)}。` : '：' }}{{ blocked.message }}</span>
           <span class="acts">
             <button v-if="blocked.location" type="button" class="ghost sm" @click="locateBlocked">定位</button>
             <button v-if="blocked.blockText && !readonly" type="button" class="ghost sm" data-testid="revert-block" :disabled="revertingBlock" @click="revertBlockedBlock">{{ revertingBlock ? '正在撤销…' : '撤销这一段的修改' }}</button>
             <button v-if="!readonly" type="button" class="ghost sm" @click="retryNow">重试保存</button>
-            <button type="button" class="subtle sm" @click="downloadMyChanges">下载我的修改</button>
+            <button v-if="blocked.unsaved !== false" type="button" class="subtle sm" @click="downloadMyChanges">下载我的修改</button>
+            <router-link v-if="blocked.gone" class="ghost sm" data-testid="gone-back" :to="{ name: 'projects' }">返回项目列表</router-link>
           </span>
         </div>
         <div v-else-if="storageFailed" class="wb-notice danger save-blocked" role="alert">
@@ -3727,6 +3733,8 @@ onUnmounted(() => {
           <span v-else>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
           <span class="acts"><button type="button" class="ghost sm" @click="openConflicts('mine')">查看冲突</button></span>
         </div>
+        <!-- 归档项目：页面级提示，不只在胶囊详情里（20 L-4） -->
+        <p v-if="archivedNotice && !blocked" class="wb-notice warning" role="status" data-testid="archived-notice"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg><span>{{ archivedNotice }}</span></p>
         <div v-if="permissionUpgrade" class="wb-notice info" role="status" data-testid="permission-upgrade">
           <span>{{ permissionUpgrade }}</span>
           <span class="acts"><button type="button" class="ghost sm" :disabled="isDirty" @click="reloadPage">刷新</button></span>
