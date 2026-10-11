@@ -1437,6 +1437,109 @@ def s_sink_bottom_visible(ctx: Run, page):
 SCENARIOS += [s_sink_duplicate_name, s_sink_bottom_visible]
 
 
+DUP_LIST = "- 接收模块\n- 处理模块\n- 显示模块"
+# 嵌套列表要用 Word 原生的多级列表（List Bullet 2）；markdown 写的缩进子项经空白 Word 往返后会被拍平
+NESTED_LIST = [("接收模块", 1), ("处理模块", 1), ("子项甲", 2), ("子项乙", 2), ("显示模块", 1)]
+
+
+def word_list_doc(ctx: Run, name: str, items: list[tuple[str, int]]) -> str:
+    from io import BytesIO
+
+    from docx import Document as WordDocument
+    word = WordDocument()
+    word.add_heading(f"{name}-{time.strftime('%H%M%S')}", 1)
+    for n in range(1, 5):
+        word.add_paragraph(f"第{n}段：原始内容 {n}。")
+    for text, level in items:
+        word.add_paragraph(text, style="List Bullet" if level == 1 else f"List Bullet {level}")
+    for n in range(5, 9):
+        word.add_paragraph(f"第{n}段：原始内容 {n}。")
+    buffer = BytesIO()
+    word.save(buffer)
+    zhang = ctx.data["zhang"]
+    upload = zhang.client.post("/files", files={"file": (f"{name}.docx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+                               data={"purpose": "attachment", "projectId": ctx.data["project"]["id"]},
+                               headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"schemec-{uuid.uuid4()}"})
+    assert upload.status_code == 201, upload.text
+    return zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
+                      json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
+
+
+def sink_list_conflict(ctx: Run, page, name: str, markdown, click: str, old: str, new: str, trigger: str) -> str:
+    """列表项冲突：李工在 click 那一项末尾打字 → 张工把 old 改成 new → 李工保存（Ctrl+S / 自动保存）→ 接着打字进冲突输入框。"""
+    if isinstance(markdown, list):
+        doc_id = word_list_doc(ctx, name, markdown)
+    else:
+        selfconf.PARAS = [f"第{n}段：原始内容 {n}。" for n in range(1, 9)]
+        doc_id = selfconf.make_doc(ctx.data, f"{name}-{time.strftime('%H%M%S')}", 0)
+        ctx.zhang_edit(doc_id, "第4段：原始内容 4。", "第4段：原始内容 4。\n\n" + markdown)
+    ctx.open(page, doc_id)
+    page.locator(".paper-content li").filter(has_text=re.compile(f"^{click}$")).first.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【我改的")
+    ctx.zhang_edit(doc_id, old, new)
+    if trigger == "manual":
+        page.keyboard.press("Control+s")
+    else:
+        page.wait_for_function("window.__patches.length > 0 && window.__patches.some(p => p.status === 409)", timeout=30000)
+    page.keyboard.type("，续写看位置】", delay=150)
+    expect(page.get_by_test_id("caret-sink")).to_be_visible(timeout=20000)
+    page.wait_for_timeout(800)
+    return doc_id
+
+
+def own_box(page, li) -> dict:
+    """li 自身文字（不含子列表）的矩形"""
+    return li.evaluate("""el => { const r = document.createRange(); r.setStart(el, 0);
+        const sub = [...el.childNodes].find(n => n.nodeType === 1 && /^(UL|OL)$/.test(n.tagName)); if (sub) r.setEndBefore(sub); else r.setEnd(el, el.childNodes.length);
+        const b = r.getBoundingClientRect(); return {x: b.left, y: b.top, width: b.width, height: b.height}; }""")
+
+
+@scenario("A1 同一列表里同名条目 冲突在第 2 项 输入框贴在第 2 项下")
+def s_sink_duplicate_same_list(ctx: Run, page):
+    """设计师复验 3 A1：张工把第 2 项“处理模块”改成与第 1 项同名的“接收模块”。输入框要在第 2 项下面，不能挂在第 1 项下盖住第 2 项。
+    Ctrl+S 与自动保存各一轮。"""
+    out = []
+    for trigger in ("manual", "auto"):
+        if trigger != "manual":
+            page.context.close()
+            page = ctx.page()
+        doc_id = sink_list_conflict(ctx, page, f"复验3同列表同名-{trigger}", DUP_LIST, "处理模块", "- 处理模块", "- 接收模块", trigger)
+        items = page.locator(".paper-content li").filter(has_text=re.compile(r"^接收模块$"))
+        expect(items).to_have_count(2, timeout=20000)
+        first, second = items.nth(0).bounding_box(), items.nth(1).bounding_box()
+        sink = page.get_by_test_id("caret-sink").bounding_box()
+        gap = sink["y"] - (second["y"] + second["height"])
+        covers = sink["y"] < second["y"] + second["height"] and sink["y"] + sink["height"] > second["y"]
+        assert -1 <= gap <= 24 and not covers, f"{trigger}：输入框没贴在第 2 项下（gap={gap:.1f}，盖住第 2 项={covers}；第 1 项 {first} 第 2 项 {second} 框 {sink}）"
+        typed = page.get_by_test_id("caret-sink").input_value()
+        assert "续写看位置" in typed or any("续写看位置" in ((item.get("mineLatest") or {}).get("markdown") or "") for item in ctx.items(doc_id)), "续写的字不见了"
+        out.append({"trigger": trigger, "gap": round(gap, 1)})
+    base.shot(page, "A1-同列表同名-输入框")
+    page.context.close()  # 第二轮自己开的页
+    return {"rounds": out}
+
+
+@scenario("S-A3 嵌套列表 子项冲突 输入框贴在子项下")
+def s_sink_nested_child(ctx: Run, page):
+    """设计师复验 S-A3：子项“子项甲”被替换时，输入框要贴在子项甲下、与它左对齐，而不是按父项“处理模块”落到子项乙之后。
+    与设计师复验 2 的 A-nested 同形：父项是列表第 2 项，冲突条目是整个父项（含子列表）。"""
+    sink_list_conflict(ctx, page, "复验3嵌套子项", NESTED_LIST, "子项甲", "子项甲", "子项甲（对方改）", "manual")
+    child = page.locator(".paper-content li").filter(has_text=re.compile(r"^子项甲（对方改）$"))
+    expect(child).to_have_count(1, timeout=20000)
+    c = child.bounding_box()
+    own = own_box(page, child)
+    sink = page.get_by_test_id("caret-sink").bounding_box()
+    gap = sink["y"] - (c["y"] + c["height"])
+    assert -1 <= gap <= 24, f"输入框没贴在子项下：gap={gap:.1f} 子项 {c} 框 {sink}"
+    assert abs(sink["x"] - own["x"]) <= 12, f"输入框没和子项左对齐：子项文字 {own} 框 {sink}"
+    base.shot(page, "S-A3-嵌套子项-输入框")
+    return {"gap": round(gap, 1), "dx": round(sink["x"] - own["x"], 1)}
+
+
+SCENARIOS += [s_sink_duplicate_same_list, s_sink_nested_child]
+
+
 @scenario("C 整篇 FORMAT 冲突 文案说正文保持当前版本 不写其他成员")
 def s_format_whole_copy(ctx: Run, page):
     """设计师复验 2 C：整篇 FORMAT 冲突（合并后 Word 写不回）不说“这一项已换成 X 的版本”，没有修改人时不写“其他成员”。

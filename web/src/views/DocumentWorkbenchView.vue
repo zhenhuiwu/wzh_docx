@@ -1212,7 +1212,26 @@ function captureCaret(root: HTMLElement): { index: number; offset: number }[] {
     before.setEnd(container, offset);
     positions.push({ index: blocks.indexOf(block), offset: (before.cloneContents().textContent || "").length });
   }
+  noteCaretMark(root, range);
   return positions;
+}
+/** 设计师复验 3 A1 / S-A3：重绘前记下光标的纸面坐标和它所在项（li / 单元格）在块里的序号。
+ * 重绘后选区已指向被换掉的节点，再取只会得到空矩形，所以冲突输入框定位只用这里记下的值。 */
+let caretMark: { top: number; left: number; ordinal: number | null; at: number } | null = null;
+const CARET_ITEMS = "li, td, th";
+function noteCaretMark(root: HTMLElement, range: Range) {
+  const paper = root.parentElement;
+  if (!paper) return;
+  let rect = range.getBoundingClientRect();
+  const element = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  if (!rect.width && !rect.height && !rect.top && !rect.left && element) rect = element.getBoundingClientRect();
+  const item = element?.closest<HTMLElement>(CARET_ITEMS) ?? null;
+  let block: HTMLElement | null = item;
+  while (block && block.parentElement !== root) block = block.parentElement;
+  const ordinal = item && block ? [block, ...block.querySelectorAll<HTMLElement>(CARET_ITEMS)].filter(el => el.matches(CARET_ITEMS)).indexOf(item) : -1;
+  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const base = paper.getBoundingClientRect();
+  caretMark = { top: (rect.bottom - base.top) / zoom + 4, left: (rect.left - base.left) / zoom, ordinal: ordinal >= 0 ? ordinal : null, at: Date.now() };
 }
 function restoreCaret(root: HTMLElement, positions: { index: number; offset: number }[]): boolean {
   if (positions.length !== 2) return false;
@@ -1383,26 +1402,37 @@ function restoreMappedCaret(root: HTMLElement, before: string[], caret: { index:
 }
 function leaveEditorCaret(root: HTMLElement) {
   const selection = window.getSelection();
-  const caretRect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+  // 复验 3 A1：用重绘前记下的光标（重绘后选区已空）
+  const mark = caretMark && Date.now() - caretMark.at < 30000 ? caretMark : null;
+  caretMark = null;
   selection?.removeAllRanges();
   if (window.document.activeElement === root || root.contains(window.document.activeElement)) {
     root.blur();
     caretLostAt = Date.now();
     typedAfterCaretLost = "";
     imeAfterCaretLost = false;
-    if (unfrozenConflict && Date.now() - unfrozenConflict.at < 30000) openCaretSink(root, unfrozenConflict, caretRect);
+    if (unfrozenConflict && Date.now() - unfrozenConflict.at < 30000) openCaretSink(root, unfrozenConflict, mark);
   }
 }
 /** 设计师必改 A：被换成对方版本的那一项（按对方版本的文字找 li/单元格/段落；找不到用冲突定位） */
-function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined, exactOnly = false): HTMLElement | null {
+function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined, exactOnly = false, ordinal: number | null = null): HTMLElement | null {
   if (!item) return null;
   const norm = (text: string) => text.replace(/[*_`~\\]/g, "").replace(/\s+/g, " ").trim();
-  const lines = (item.theirs?.markdown || "").split("\n").map(line => norm(line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\|/, "").replace(/\|$/, ""))).filter(Boolean);
+  const linesOf = (markdown: string | null | undefined) => (markdown || "").split("\n").map(line => norm(line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "").replace(/^\|/, "").replace(/\|$/, ""))).filter(Boolean);
+  // S-A3：对方版本里改动的那一行先匹配（嵌套列表时不先命中只是标题的父项）
+  const mineLines = new Set(linesOf(item.mine?.markdown));
+  const theirLines = linesOf(item.theirs?.markdown);
+  const lines = [...theirLines.filter(line => !mineLines.has(line)), ...theirLines.filter(line => mineLines.has(line))];
   const selector = "li, p, td, th, h1, h2, h3, h4, h5, h6";
   const candidates = [...root.querySelectorAll(selector)] as HTMLElement[];
   const own = (el: HTMLElement) => norm([...el.childNodes].filter(node => !(node instanceof HTMLElement && /^(UL|OL)$/.test(node.tagName))).map(node => node.textContent || "").join(""));
   // 设计师复验 2 A1：同名条目时先在冲突所在的块（列表 / 表格）里找；块里多个同名项取离换版前光标最近的一项；都找不到才退到全文
   const scope = findConflictBlock(item).block;
+  // 设计师复验 3 A1 / S-A3：按换版前光标所在项在块里的序号取（同一列表里同名项、嵌套子项都能对上）；文字与对方版本对不上时才退回按文字找
+  if (ordinal !== null && scope && root.contains(scope)) {
+    const byOrdinal = [scope, ...scope.querySelectorAll<HTMLElement>(CARET_ITEMS)].filter(el => el.matches(CARET_ITEMS))[ordinal];
+    if (byOrdinal && theirLines.includes(own(byOrdinal))) return byOrdinal;
+  }
   const pools: HTMLElement[][] = [];
   if (scope && root.contains(scope)) pools.push([scope, ...scope.querySelectorAll<HTMLElement>(selector)].filter(el => el.matches(selector)));
   pools.push(candidates);
@@ -1430,12 +1460,13 @@ function nearestToCaret(hits: HTMLElement[]): HTMLElement {
 let caretSinkAnchor: HTMLElement | null = null;
 let caretSinkItem: ConflictItem | undefined;
 let caretSinkFallback: { top: number; left: number } | null = null;
+let caretSinkOrdinal: number | null = null;
 /** 输入框放在该项正下方（左侧与文字对齐），挂在纸面里随正文滚动；下方放不下时放到上方 */
 function placeCaretSink() {
   const sink = caretSink, root = editor.value;
   const paper = root?.parentElement;
   if (!sink || !root || !paper) return;
-  if (!caretSinkAnchor || !caretSinkAnchor.isConnected || !root.contains(caretSinkAnchor)) caretSinkAnchor = caretSinkAnchorOf(root, caretSinkItem);
+  if (!caretSinkAnchor || !caretSinkAnchor.isConnected || !root.contains(caretSinkAnchor)) caretSinkAnchor = caretSinkAnchorOf(root, caretSinkItem, false, caretSinkOrdinal);
   const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
   const base = paper.getBoundingClientRect();
   let top: number, left: number;
@@ -1477,7 +1508,7 @@ function revealCaretSink() {
   if (box.bottom > view.bottom - 8) desk.scrollTop += box.bottom - view.bottom + 8;
   else if (box.top < view.top + 8) desk.scrollTop -= view.top + 8 - box.top;
 }
-function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string; item?: ConflictItem }, caretRect: DOMRect | null = null) {
+function openCaretSink(root: HTMLElement, target: { conflictId: string; itemIndex: number; mine: string; item?: ConflictItem }, mark: { top: number; left: number; ordinal: number | null } | null = null) {
   dropCaretSink();
   const paper = root.parentElement || root;
   const sink = window.document.createElement("textarea");
@@ -1494,9 +1525,8 @@ function openCaretSink(root: HTMLElement, target: { conflictId: string; itemInde
   });
   caretSinkItem = target.item;
   caretSinkAnchor = null;
-  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
-  const base = paper.getBoundingClientRect();
-  caretSinkFallback = caretRect && (caretRect.width || caretRect.height || caretRect.left) ? { top: (caretRect.bottom - base.top) / zoom + 4, left: (caretRect.left - base.left) / zoom } : null;
+  caretSinkFallback = mark ? { top: mark.top, left: mark.left } : null;
+  caretSinkOrdinal = mark?.ordinal ?? null;
   const changed = () => { if (caretSink === sink) { caretSinkText = caretSinkPrefix + sink.value; markSinkPending(); } };
   sink.addEventListener("input", () => {
     growCaretSink();
