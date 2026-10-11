@@ -83,3 +83,16 @@ describe("addedText（K1-M1 引用刚补的内容）", () => {
   it("中间补字", () => expect(addedText("甲乙丙", "甲乙XY丙")).toBe("XY"));
   it("没变", () => expect(addedText("甲乙", "甲乙")).toBe(""));
 });
+
+describe("整篇冲突（设计师复验 2 C）", () => {
+  it("FORMAT / 无对应段落的 STRUCTURE：没有修改人时写“正文当前版本”，有就写修改人；文案不说“已换成”", async () => {
+    const { theirsName, isWholeConflict, wholeConflictNote, WHOLE_THEIRS_NAME } = await import("./conflictModel");
+    expect(theirsName({ actor: null, theirs: {}, reason: "FORMAT", objectIds: [] } as never)).toBe(WHOLE_THEIRS_NAME);
+    expect(theirsName({ actor: null, theirs: { updatedBy: { id: "u2", name: "张工" } }, reason: "FORMAT" } as never)).toBe("张工");
+    expect(theirsName({ actor: null, theirs: {}, reason: "MODIFIED", objectIds: ["o1"] } as never)).toBe("其他成员");
+    expect(isWholeConflict({ reason: "STRUCTURE", objectIds: [] })).toBe(true);
+    expect(isWholeConflict({ reason: "STRUCTURE", objectIds: ["o1"] })).toBe(false);
+    expect(wholeConflictNote({ reason: "FORMAT" })).toBe("这次保存的内容合并后无法保持 Word 格式，正文保持当前版本；你这次的修改都在冲突副本里，可下载后手动处理。");
+    expect(wholeConflictNote({ reason: "FORMAT" })).not.toMatch(/其他成员|已换成/);
+  });
+});

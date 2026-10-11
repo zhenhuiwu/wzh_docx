@@ -1432,5 +1432,44 @@ def s_sink_bottom_visible(ctx: Run, page):
 SCENARIOS += [s_sink_duplicate_name, s_sink_bottom_visible]
 
 
+@scenario("C 整篇 FORMAT 冲突 文案说正文保持当前版本 不写其他成员")
+def s_format_whole_copy(ctx: Run, page):
+    """设计师复验 2 C：整篇 FORMAT 冲突（合并后 Word 写不回）不说“这一项已换成 X 的版本”，没有修改人时不写“其他成员”。
+    浏览器里造不出真实的合并单元格 FORMAT 冲突（服务器侧由 pytest test_merge_table_word 覆盖），这里把第一次保存的响应换成服务器同形的 409。"""
+    doc_id = ctx.doc(page, "方案C整篇格式冲突")
+    server = ctx.server(doc_id)
+    note = "这次保存的内容合并后无法保持 Word 格式，正文保持当前版本；你这次的修改都在冲突副本里，可下载后手动处理。"
+    fired = []
+
+    def fake(route):
+        if route.request.method != "PATCH" or fired:
+            return route.continue_()
+        fired.append(1)
+        mine = (route.request.post_data_json or {}).get("markdownContent", "")
+        item = {"conflictId": "00000000-0000-4000-8000-00000000c0de", "itemIndex": 0, "attempt": 1, "reason": "FORMAT", "opIndexes": [], "objectIds": [],
+                "location": {"headingPath": [], "ordinal": None, "kind": "other", "label": None}, "base": {"markdown": server["markdownContent"]},
+                "theirs": {"markdown": server["markdownContent"], "deleted": False, "revision": None, "updatedBy": None, "updatedAt": None},
+                "mine": {"markdown": mine}, "theirsRevisions": {}, "afterObjectId": None}
+        body = {"error": {"code": "OBJECT_CONFLICT", "message": "有 1 处内容已被他人修改，你的修改已保留，请选择处理方式。",
+                          "details": {"conflictId": item["conflictId"], "conflicts": [item], "appliableMarkdown": server["markdownContent"],
+                                      "appliableBaseRevision": server["revision"]}}, "requestId": "e2e"}
+        route.fulfill(status=409, content_type="application/json", body=json.dumps(body, ensure_ascii=False))
+
+    page.route("**/documents/*/content", fake)
+    page.locator(".paper-content p", has_text="第3段").first.click()
+    page.keyboard.press("End")
+    page.keyboard.type("【格式冲突】", delay=30)
+    expect(page.get_by_test_id("whole-conflict-note").or_(page.get_by_test_id("sink-note")).first).to_contain_text(note, timeout=30000)
+    page.wait_for_timeout(1500)
+    texts = page.locator("body").inner_text()
+    page.unroute("**/documents/*/content", fake)
+    assert "其他成员" not in texts, "整篇冲突文案里出现“其他成员”"
+    assert "已换成" not in texts, "整篇冲突文案说“已换成”"
+    return {"fired": len(fired)}
+
+
+SCENARIOS += [s_format_whole_copy]
+
+
 if __name__ == "__main__":
     sys.exit(main())

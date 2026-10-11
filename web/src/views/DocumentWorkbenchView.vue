@@ -8,7 +8,7 @@ import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
-import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, othersUpdatedText, SELF_THEIRS_NAME, theirsName } from "../conflictModel";
+import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { PROJECT_ROLE_TEXT, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
@@ -271,7 +271,7 @@ function showRefusedConflicts() {
   else openConflicts("mine");
 }
 // 审查 S2：自动保存遇到冲突时的常驻提示（面板不自动打开）
-const autoConflict = ref<{ count: number; name: string; frozen?: boolean } | null>(null);
+const autoConflict = ref<{ count: number; name: string; frozen?: boolean; whole?: string } | null>(null);
 // 界面验收 M6 / 审查 S3：他人更新
 const othersUpdated = ref<{ names: string[]; objects: number; here?: boolean; self?: boolean } | null>(null);
 const updatedHeadings = ref<Set<string>>(new Set());
@@ -1596,7 +1596,7 @@ async function flushCaretSink(): Promise<void> {
     const markdown = target.mine + typed;
     caretSinkSeq = nextSeq(caretSinkSeq);
     const quoted = all.length > 30 ? `${all.slice(0, 30)}…` : all;
-    const swapped = caretSinkItem?.theirs?.deleted ? "这一项在正文中已被删除" : `这一项已换成 ${caretSinkItem ? conflictName(caretSinkItem) : "其他成员"} 的版本`;
+    const swapped = caretSinkItem?.theirs?.deleted ? "这一项在正文中已被删除" : !caretSinkItem || isWholeConflict(caretSinkItem) ? "正文保持当前版本" : `这一项已换成 ${conflictName(caretSinkItem)} 的版本`;
     const text = looksLikePinyin(all, caretSinkIme)
       ? `冲突后接着输入的内容没有写进正文（${swapped}），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`
       : `冲突后接着输入的“${quoted}”没有写进正文（${swapped}），已并入冲突副本“我的版本”，可在冲突面板里处理。要继续写正文，请点击要写的位置。`;
@@ -2968,7 +2968,11 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       const loose = fromEditor ? conflicts.find(item => item.conflictId && !frozenKeys.includes(`${item.conflictId}:${item.itemIndex}`) && !item.mine?.deleted) : undefined;
       unfrozenConflict = loose ? { conflictId: loose.conflictId, itemIndex: loose.itemIndex, mine: loose.mine?.markdown || "", at: Date.now(), item: loose } : null;
       // 设计师必改 2：不能冻结的条目（列表项等）会换成对方的版本——从这一刻起就常驻说明，不等用户再打字
-      if (loose) {
+      if (loose && isWholeConflict(loose)) {
+        // 设计师复验 2 C：整篇冲突不说“这一项已换成 X 的版本”
+        sinkNote.value = { conflictId: loose.conflictId, text: wholeConflictNote(loose) };
+        pendingSwap = null;
+      } else if (loose) {
         const who = conflictName(loose);
         const tail = "你在这一项里写的内容（含之后接着写的）存为冲突副本“我的版本”，可在冲突面板里处理。";
         // 设计师 S1：换成对方版本要等重绘——先说“正在换成…”，编辑区里真换好了再说“已换成”；S6：对方删掉了这一项时不说“换成版本”
@@ -2981,7 +2985,7 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
         openConflicts("mine");
         // 主动保存遇到冲突：打开面板并定位到卡片，焦点留在编辑区
         if (conflicts[0]) scrollToCard(`${conflicts[0].conflictId}:${conflicts[0].itemIndex}`);
-      } else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : "其他成员", frozen: frozenKeys.length > 0 };
+      } else autoConflict.value = { count: Math.max(1, conflicts.length), name: conflicts[0] ? conflictName(conflicts[0]) : WHOLE_THEIRS_NAME, frozen: frozenKeys.length > 0, whole: conflicts.length > 0 && conflicts.every(isWholeConflict) ? wholeConflictNote(conflicts[0]) : "" };
       if (allFrozen) {
         syncValueFromEditor();
         scheduleDraftWrite();
@@ -3629,6 +3633,7 @@ onUnmounted(() => {
         <div v-if="autoConflict && !conflictOpen" class="wb-notice warning" role="status" data-testid="auto-conflict">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg>
           <span v-if="autoConflict.frozen">这一段和 {{ autoConflict.name }} 的修改冲突。你可以继续写，写的内容先存为冲突副本，不会丢失；处理后才写入正文。</span>
+          <span v-else-if="autoConflict.whole" data-testid="whole-conflict-note">{{ autoConflict.whole }}</span>
           <span v-else>有 {{ autoConflict.count }} 处修改与 {{ autoConflict.name }} 的修改冲突，已单独保存，不会丢失。</span>
           <span class="acts"><button type="button" class="ghost sm" @click="openConflicts('mine')">查看冲突</button></span>
         </div>
