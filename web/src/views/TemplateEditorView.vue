@@ -23,7 +23,7 @@ import { hasPermission, readSession } from "../session";
 import { rememberCrumb } from "../crumbs";
 import { restoreFocus } from "../dialogFocus";
 import { revisionConflictText, shortTime, type Capsule } from "../saveModel";
-import { EDITOR_KIND_LABELS, changesMarkdown, chapterIds, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
+import { EDITOR_KIND_LABELS, changesMarkdown, chapterIds, styleDisplayName, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
 
 const route = useRoute();
 const router = useRouter();
@@ -559,7 +559,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
         <label class="tool-label" for="tpl-style">段落样式</label>
         <select id="tpl-style" class="control style-select" data-testid="tpl-style-select" :value="styleValue" :disabled="styleLocked" :title="styleTitle" @change="setStyle">
           <option v-if="!selected" value="" disabled>先选择一段</option>
-          <option v-if="styleValue === 'keep'" value="keep" disabled>{{ selected?.styleName || '原有样式' }}（保留原样）</option>
+          <option v-if="styleValue === 'keep'" value="keep" disabled>{{ styleDisplayName(selected?.styleName) }}（保留原样）</option>
           <option v-if="styleValue === '表格正文'" value="表格正文" disabled>表格正文</option>
           <option v-if="styleValue === '编写指导'" value="编写指导" disabled>编写指导（不进 Word）</option>
           <option value="正文">正文</option>
@@ -696,20 +696,20 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
 
 <style scoped>
 .tpl-editor { display:flex; flex-direction:column; height:calc(100vh - var(--topbar-h)); min-height:0; overflow:hidden; background:var(--bg-surface); }
-.docbar { display:flex; flex:none; align-items:center; gap:var(--space-2); height:52px; padding:0 var(--space-4) 0 var(--space-2); border-bottom:1px solid var(--border-subtle); }
+.docbar { display:flex; flex:none; align-items:center; gap:var(--space-2); height:var(--docbar-h); padding:0 var(--space-4) 0 var(--space-2); border-bottom:1px solid var(--border-subtle); }
 .doctitle { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
 .doctitle h1 { overflow:hidden; max-width:calc(var(--space-7) * 10); margin:0; font-size:var(--text-lg); font-weight:var(--weight-semibold); text-overflow:ellipsis; white-space:nowrap; }
 .spacer { flex:1; }
 .icon-btn { width:var(--control-h); padding:0; }
-.toolbar { display:flex; flex:none; align-items:center; gap:var(--space-2); height:44px; padding:0 var(--space-4); border-bottom:1px solid var(--border-subtle); background:var(--bg-subtle); }
+.toolbar { display:flex; flex:none; align-items:center; gap:var(--space-2); height:var(--etool-h); padding:0 var(--space-4); border-bottom:1px solid var(--border-subtle); background:var(--bg-subtle); }
 .tool-label { color:var(--text-secondary); font-size:var(--text-xs); }
 .style-select { width:200px; }
 .sep { width:1px; height:20px; background:var(--border-subtle); }
 .notice { flex:none; display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
-.workspace { display:grid; flex:1; grid-template-columns:264px minmax(0, 1fr) var(--panel-w); min-height:0; }
+.workspace { display:grid; flex:1; grid-template-columns:var(--outline-w) minmax(0, 1fr) var(--panel-w); min-height:0; }
 .outline { min-height:0; overflow:auto; padding:var(--space-3) 0; border-right:1px solid var(--border-subtle); }
 .outline h2 { margin:0 0 var(--space-2); padding:0 var(--space-4); color:var(--text-tertiary); font-size:var(--text-xs); font-weight:var(--weight-medium); }
-.outline-item { display:flex; align-items:center; gap:var(--space-2); width:100%; min-height:32px; padding-right:var(--space-3); border:0; background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--text-sm); text-align:left; cursor:pointer; }
+.outline-item { display:flex; align-items:center; gap:var(--space-2); width:100%; min-height:var(--control-h); padding-right:var(--space-3); border:0; background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--text-sm); text-align:left; cursor:pointer; }
 .outline-item:hover { background:var(--bg-hover); }
 .outline-item.on { background:var(--brand-50); color:var(--brand-700); }
 .outline-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

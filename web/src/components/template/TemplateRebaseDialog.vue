@@ -86,7 +86,9 @@ async function merge() {
       const data = error.details as unknown as RebaseResult;
       apply(data);
       const left = data.conflicts.filter(item => !picks.value[keyOf(item)]).length;
-      warning.value = data.currentVersion.seq !== previousSeq ? `第 ${data.currentVersion.seq} 版刚刚发布，又出现了 ${left} 处需要选择。` : `还有 ${left} 处需要选择。`;
+      // 24 I-3：本地都已选择、服务端仍拒绝时不说“还有 0 处”
+      warning.value = data.currentVersion.seq !== previousSeq ? `第 ${data.currentVersion.seq} 版刚刚发布，又出现了 ${left || data.conflicts.length} 处需要选择。`
+        : left ? `还有 ${left} 处需要选择。` : "合并没有完成，请核对下面的选择后再点合并。";
     } else fail(error, false);
   } finally { merging.value = false; }
 }

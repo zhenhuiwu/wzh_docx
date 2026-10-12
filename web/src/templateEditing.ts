@@ -288,3 +288,17 @@ export function changesMarkdown(input: {
   if (!items.length) items.push("没有修改。");
   return [...lines, ...items, ""].join("\n");
 }
+
+const BUILTIN_STYLE_NAMES: Record<string, string> = {
+  "Normal Indent": "正文缩进", "Body Text": "正文文本", "Body Text Indent": "正文文本缩进", "Body Text First Indent": "正文首行缩进",
+  "List Paragraph": "列表段落", "Plain Text": "纯文本", "Title": "标题", "Subtitle": "副标题", "Caption": "题注",
+  "header": "页眉", "footer": "页脚", "Table Grid": "网格型", "Quote": "引用", "List Bullet": "项目符号列表", "List Number": "编号列表",
+};
+/** 25 S-12：“（保留原样）”前显示中文样式名；不认识的显示“原有样式（英文名）”。 */
+export function styleDisplayName(name: string | null | undefined): string {
+  if (!name) return "原有样式";
+  if (/[\u4e00-\u9fff]/.test(name)) return name;
+  const toc = /^toc (\d)$/i.exec(name);
+  if (toc) return `目录 ${toc[1]}`;
+  return BUILTIN_STYLE_NAMES[name] ?? `原有样式（${name}）`;
+}

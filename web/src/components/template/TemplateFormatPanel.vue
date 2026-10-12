@@ -134,7 +134,7 @@ onBeforeUnmount(() => timers.forEach(timer => window.clearTimeout(timer)));
 .format-panel { display:grid; align-content:start; }
 .lead { border-radius:0; }
 .style-block { border-bottom:1px solid var(--border-subtle); }
-.style-head { display:flex; align-items:center; gap:var(--space-2); width:100%; height:44px; padding:0 var(--space-4); border:0; background:transparent; color:var(--text-primary); font:inherit; font-size:var(--text-sm); font-weight:var(--weight-medium); text-align:left; cursor:pointer; }
+.style-head { display:flex; align-items:center; gap:var(--space-2); width:100%; height:var(--etool-h); padding:0 var(--space-4); border:0; background:transparent; color:var(--text-primary); font:inherit; font-size:var(--text-sm); font-weight:var(--weight-medium); text-align:left; cursor:pointer; }
 .style-head:hover { background:var(--bg-hover); }
 .style-head .chevron { margin-left:auto; color:var(--text-tertiary); }
 .props { display:grid; gap:var(--space-3); padding:0 var(--space-4) var(--space-4); }

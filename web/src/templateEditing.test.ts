@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EditorBlock } from "./api/templates";
-import { cellChanges, changesMarkdown, chapterIds, conflictFieldLabel, createBlock, deleteCheck, forSave, impactText, insertAfter, isCellLocked, moveBlock, moveChapter,
+import { cellChanges, changesMarkdown, styleDisplayName, chapterIds, conflictFieldLabel, createBlock, deleteCheck, forSave, impactText, insertAfter, isCellLocked, moveBlock, moveChapter,
   lockTag, newBlockId, publishImpactLine, rebindHeadings, removeBlocks, sizeLabel, summaryText, valueLabel } from "./templateEditing";
 
 function block(id: string, kind: string, level: number | null = null, extra: Partial<EditorBlock> = {}): EditorBlock {
@@ -123,5 +123,15 @@ describe("changesMarkdown（D-17 可读修改清单）", () => {
   it("没有修改时说明", () => {
     const base = [block("b1", "body", "x")];
     expect(changesMarkdown({ title: "T", baseLabel: "第 2 版", base, mine: base, baseStyles: {}, styles: {} })).toContain("没有修改。");
+  });
+});
+
+describe("styleDisplayName", () => {
+  it("常见内置样式显示中文名", () => {
+    expect(styleDisplayName("Normal Indent")).toBe("正文缩进");
+    expect(styleDisplayName("toc 2")).toBe("目录 2");
+    expect(styleDisplayName("表格文字")).toBe("表格文字");
+    expect(styleDisplayName("Fancy X")).toBe("原有样式（Fancy X）");
+    expect(styleDisplayName(null)).toBe("原有样式");
   });
 });

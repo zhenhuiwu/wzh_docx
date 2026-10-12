@@ -24,7 +24,7 @@ const canCompare = (item: TemplateVersionItem) => props.versions.items.length > 
         <div class="row-main">
           <span class="line1"><strong>第 {{ item.seq }} 版</strong><span v-if="item.status === 'published'" class="tag success">当前</span> · {{ formatDateTime(item.publishedAt) }}<template v-if="item.publishedBy"> · {{ item.publishedBy.name }}</template></span>
           <span class="note">{{ item.note }}</span>
-          <span v-if="item.restoredFrom" class="hint">恢复自第 {{ item.restoredFrom.seq }} 版</span>
+          <span v-if="item.restoredFrom && item.note !== `恢复自第 ${item.restoredFrom.seq} 版`" class="hint">恢复自第 {{ item.restoredFrom.seq }} 版</span>
         </div>
         <div class="ops">
           <button type="button" class="text sm" :disabled="busy" @click="emit('view', item)">查看</button>
