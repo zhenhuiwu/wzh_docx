@@ -3546,7 +3546,7 @@ async function saveMineOnly() {
       } catch (caught) {
         if (document.value === record) handleSaveError(caught, kept.markdown, "manual", markdownContent.value);
       }
-      noteAction(`你负责的 ${kept.conflicts.length} 段在你编辑期间也被他人修改过，已按冲突处理；不归你负责的修改已放入暂存。`, 10000);
+      noteAction(`你负责的部分有 ${kept.conflicts.length} 处在你编辑期间也被他人修改过，已按冲突处理，请在冲突面板选择保留哪一版。${kept.stashed.length ? `不归你负责的 ${kept.stashed.length} 段已放入暂存，可以复制。` : ""}`, 12000);
       return;
     }
     const result = await updateDocumentContent(record.id, data.documentRevision, kept.markdown, undefined, undefined,
@@ -3557,7 +3557,12 @@ async function saveMineOnly() {
     if (rejectedOpen.value) rejectedOpen.value = false;
     await acceptContent({ markdownContent: result.markdownContent ?? kept.markdown, revision: result.revision, status: result.status }, { reason: "正在载入保存后的内容…" });
     savedAt.value = Date.now();
-    noteAction(kept.stashed.length ? `已保存你负责部分的修改；其余 ${kept.stashed.length} 段已放入暂存，可以复制。` : "已保存你负责部分的修改。", 8000);
+    // 跟进：被拒的那次提交已在服务器上记成冲突（我负责的段别人也改了，“我的版本”存为冲突副本）——提示冲突，而不是普通的“已保存”
+    await refreshConflicts().catch(() => undefined);
+    const open = Math.max(mineConflicts.value, frozenOpen.value.filter(entry => !entry.resolved).length);
+    const stashNote = kept.stashed.length ? `不归你负责的 ${kept.stashed.length} 段已放入暂存，可以复制。` : "";
+    if (open) noteAction(`你负责的部分有 ${open} 处在你编辑期间也被他人修改过，已按冲突处理，请在冲突面板选择保留哪一版。${stashNote}`, 12000);
+    else noteAction(kept.stashed.length ? `已保存你负责部分的修改；其余 ${kept.stashed.length} 段已放入暂存，可以复制。` : "已保存你负责部分的修改。", 8000);
   } catch (caught) {
     noteAction(`没能保存：${messageOf(caught)}`, 8000);
   } finally { savingMine.value = false; }

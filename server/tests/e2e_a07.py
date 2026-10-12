@@ -608,22 +608,27 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             record = admin.call("GET", f"/documents/{did}")
             body = "\n\n".join(item["markdown"] for item in objects) + "\n"
             changed = body.replace("附录第一段：术语表。", "附录第一段：术语表。（负责人改）")
-            func.click(); page2.keyboard.press("End"); page2.keyboard.type("X刘")
-            appendix.click(); page2.keyboard.press("End"); page2.keyboard.type("Y刘")
             admin.call("PATCH", f"/documents/{did}/content", json={"expectedRevision": record["revision"], "markdownContent": changed,
                                                                  "allowMerge": True, "blockIds": [item["id"] for item in objects]})
             view = admin.call("GET", f"/documents/{did}/assignments")
             admin.call("PUT", f"/documents/{did}/assignments",
                        json={"objectIds": [heads["功能需求"]], "assigneeIds": [str(users["wangce"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            func.click(); page2.keyboard.press("End"); page2.keyboard.type("X刘")
+            expect(func).to_contain_text("X刘")
+            appendix.click(); page2.keyboard.press("End"); page2.keyboard.type("Y刘")
+            expect(appendix).to_contain_text("Y刘")
             page2.keyboard.press("Control+s")
             banner = page2.get_by_test_id("save-rejected-banner")
             expect(banner).to_be_visible(timeout=30000)
             banner.get_by_test_id("save-rejected-open").click()
             page2.get_by_test_id("save-rejected-save-mine").click()
             page2.wait_for_timeout(3000)
+            expect(page2.get_by_text(re.compile("你负责的部分有 1 处在你编辑期间也被他人修改过，已按冲突处理"))).to_be_visible(timeout=30000)
+            expect(page2.get_by_text("已保存你负责部分的修改")).to_have_count(0)
             saved = admin.call("GET", f"/documents/{did}")["markdownContent"]
             assert "（负责人改）" in saved, saved[-300:]                      # 负责人的并发修改没被覆盖
             assert "X刘" not in saved, saved[-300:]                           # 越权部分没保存
+            expect(page2.get_by_test_id("conflict-mark").first).to_be_visible()  # 冲突卡（我的版本“Y刘”在冲突副本里）
             shot(page2, "A07-09-只保存我负责的部分-冲突")
         g13()
 

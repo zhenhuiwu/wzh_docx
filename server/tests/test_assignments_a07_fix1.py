@@ -151,3 +151,26 @@ def test_document_instructions_owner_only_on_enforced(ctx):
     ctx.as_("owner")
     response = ctx.req("PATCH", f"/documents/{did}/writing-skill", {"expectedRevision": revision, "mode": "auto", "documentInstructions": "全篇用第三人称"})
     assert response.status_code == 200, response.text
+
+
+# ---------------------------------------------------------------- 29 复验：停用 / 启用负责人触发重取
+
+def test_disable_and_enable_bump_assignments_revision(ctx):
+    doc = ctx.as_("owner").create()
+    did = doc["id"]
+    ctx.assign(did, [ctx.heading(did, "功能需求")], ["wang"])
+    first = ctx.ok("GET", f"/documents/{did}/assignments")["assignmentsRevision"]
+    ctx.as_("admin")
+    wang = str(ctx.users["wang"])
+
+    def revision_of():
+        items = ctx.ok("GET", "/users?pageSize=50")["items"]
+        return next(item["revision"] for item in items if item["id"] == wang)
+    ctx.ok("POST", f"/users/{wang}/disable", {"reason": "测试", "expectedRevision": revision_of()})
+    view = ctx.ok("GET", f"/documents/{did}/assignments")
+    assert view["assignmentsRevision"] > first
+    explicit = next(item for item in view["explicit"] if item["assignees"][0]["id"] == wang)
+    assert explicit["assignees"][0]["userActive"] is False            # 面板据此显示“负责人已停用”
+    disabled = view["assignmentsRevision"]
+    ctx.ok("POST", f"/users/{wang}/enable", {"reason": "测试", "expectedRevision": revision_of()})
+    assert ctx.ok("GET", f"/documents/{did}/assignments")["assignmentsRevision"] > disabled
