@@ -74,7 +74,7 @@ def test_rollback_118_refuses_when_later_migration_recorded(tmp_path, monkeypatc
 
 
 def test_existing_documents_open_new_documents_enforced(tmp_path, monkeypatch):
-    """U-14：迁移时已有文档设为 open；之后新建的默认 enforced。"""
+    """U-14：迁移时已有文档设为 open；列默认 open（新建接口显式写 enforced，见 test_assignments_a07）。"""
     from app import config
     from app.db import migrate
 
@@ -94,6 +94,6 @@ def test_existing_documents_open_new_documents_enforced(tmp_path, monkeypatch):
             connection.execute("pragma foreign_keys=off")
             connection.execute("insert into documents(id, project_id, name, source_type, owner_id) values ('new','p','新文档','blank','u')")
             modes = dict(connection.execute("select id, assignment_mode from documents"))
-        assert modes == {"old": "open", "new": "enforced"}
+        assert modes == {"old": "open", "new": "open"}
     finally:
         config.get_settings.cache_clear()

@@ -34,6 +34,7 @@ from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
 from app.document_commit import _version_markdown, commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
+from app.document_assignments import store_rejected
 from app.document_access import (DocumentRow, Need, check_project, document_principal, ensure_project_writable, load_document, member_role,
                                  permissions_of)
 from app.models import format_timestamp
@@ -152,6 +153,8 @@ class DocumentContentPatchBody(BaseModel):
     # 增量审查 M1：显式基准正文（仅 allowMerge）。编辑区停在旧正文、又接着改了已保存过的段落时，客户端用
     # “与上次保存对应的编辑区文字”作基准，已保存过的内容就不会被当成对方的修改；expectedRevision 仍是客户端已知的最新修订。
     baseMarkdown: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
+    # A07 §4.1：与 markdownContent 拆出的顶层块一一对应的对象 ID（新块 null）；编写人员在 enforced 文档上必填
+    blockIds: list[str | None] | None = Field(default=None, max_length=20000)
 
 
 class DocumentExportBody(BaseModel):
@@ -667,16 +670,21 @@ def create_document(
             """
             INSERT INTO documents
             (id, project_id, name, source_type, template_document_id, original_docx_file_id,
-             format_template, markdown_content, outline, status, owner_id, revision, template_version_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0, %s)
+             format_template, markdown_content, outline, status, owner_id, revision, template_version_id, assignment_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0, %s, %s)
             """,
             [
                 doc_id, pid, name, body.sourceType, template_doc_id, original_file_id,
                 json.dumps(format_template), markdown_content, json.dumps(outline),
-                session.user_id, template_version_id
+                session.user_id, template_version_id, NEW_DOCUMENT_MODE
             ]
         )
         record_current_version(conn, doc_id, expected_revision=0, kind="created")
+        # A07 U-16 / §10.4：编写人员新建的文档整篇默认归创建者（@document）；负责人、管理员新建的不分配
+        if not admin and member_role(conn, pid, session.user_id) == "editor":
+            conn.execute(
+                """INSERT INTO document_object_assignments (document_id, object_id, assignee_id, source, assigned_by, assigned_at)
+                   VALUES (%s, '@document', %s, 'creator', %s, now())""", [doc_id, session.user_id, session.user_id])
         conn.commit()
 
         # 返回创建的文档
@@ -760,7 +768,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "templateDocumentName": row[15],
                 "templateName": None if group is None else group[0],
                 "template": template,
-                "permissions": permissions_of(row.project_role, row.admin, row.archived),
+                "permissions": _permissions_a07(conn, row, session.user_id),
             },
             "requestId": request.state.request_id,
         }
@@ -788,38 +796,80 @@ def update_document_content(
     with connect() as conn:
         # 检查文档和版本
         row = _document_row(conn, did, session.user_id, admin, "edit")
-        if body.allowMerge:
-            return _merge_content(request, conn, session, did, row, body)
-        rhash = request_hash({"base": body.expectedRevision, "markdown": body.markdownContent, "kind": "strict",
-                              "memory": body.memory.model_dump() if body.memory else None,
-                              "retract": body.retractMemoryRevision})
-        if body.clientSaveKey and replay(conn, did, session.user_id, body.clientSaveKey, rhash) is not None:
-            return _content_result(request, _document_row(conn, did, session.user_id, admin))
-
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
-
-        if body.memory is not None and _writing_skill(row) is not None:
-            raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
-
-        _check_word(conn, row, body.markdownContent)
-        _save_markdown(conn, did, body.markdownContent, row[12],
-                       kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit",
-                       client_save_key=body.clientSaveKey, request_hash=rhash if body.clientSaveKey else None)
-        if body.memory:
-            record_memory(conn, did, body.memory.instruction, scope=body.memory.scope,
-                          target=body.memory.target, revision=row[12] + 1)
-        if body.retractMemoryRevision is not None:
-            retract_memory(conn, did, body.retractMemoryRevision)
-        conn.commit()
-
-        # 返回更新后的文档
-        row = _document_row(conn, did, session.user_id, admin)
-
-        return _content_result(request, row)
+        block_ids = _checked_block_ids(conn, did, session.user_id, body)
+        try:
+            return _update_content(request, conn, session, did, row, body, block_ids)
+        except AppError as error:
+            if error.code == "SECTION_NOT_ASSIGNED":
+                store_rejected(conn, did, session.user_id, body.expectedRevision, body.markdownContent, block_ids, error)
+            raise
 
 
-def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody) -> dict[str, object]:
+# A07 U-14 / H-9：新建文档默认按分工编辑（已有文档迁移时为 open）
+NEW_DOCUMENT_MODE = "enforced"
+
+
+def _permissions_a07(conn, row, actor: UUID) -> dict:
+    """详情 permissions：A05 字段 + A07 assignmentMode / canAssign / editableHeadings / projectOwners（17 §4.6）。"""
+    from app.assignments_api import permissions_extra
+    return {**permissions_of(row.project_role, row.admin, row.archived), **permissions_extra(conn, row, actor)}
+
+
+def _checked_block_ids(conn, did: UUID, actor: UUID, body: DocumentContentPatchBody) -> list[str | None] | None:
+    """A07 §4.5.2 / §4.5.6：编写人员在 enforced 文档上整篇保存必须带 blockIds，且块数一致。"""
+    from app.document_assignments import actor_scope, restricted
+    from app.markdown_blocks import split
+
+    limited = restricted(*actor_scope(conn, did, actor))
+    if body.blockIds is None:
+        if limited:
+            raise AppError(422, "BLOCK_IDS_REQUIRED", "页面版本过旧，请刷新后再保存。你的内容已保留在本机。")
+        return None
+    if len(body.blockIds) != len(split(body.markdownContent)[1]):
+        if limited:
+            raise AppError(422, "VALIDATION_FAILED", "块标识与正文不一致，请刷新后再保存。",
+                           field_errors=[{"field": "blockIds", "message": "块标识的数量与正文的块数不一致。"}])
+        return None  # 负责人、管理员：忽略不一致的块标识，走服务端兜底配对
+    return list(body.blockIds)
+
+
+def _update_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody,
+                    block_ids: list[str | None] | None) -> dict[str, object]:
+    admin = _admin(session.roles)
+    if body.allowMerge:
+        return _merge_content(request, conn, session, did, row, body, block_ids)
+    rhash = request_hash({"base": body.expectedRevision, "markdown": body.markdownContent, "kind": "strict",
+                          "memory": body.memory.model_dump() if body.memory else None,
+                          "retract": body.retractMemoryRevision})
+    if body.clientSaveKey and replay(conn, did, session.user_id, body.clientSaveKey, rhash) is not None:
+        return _content_result(request, _document_row(conn, did, session.user_id, admin))
+
+    if row[12] != body.expectedRevision:
+        raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
+
+    if body.memory is not None and _writing_skill(row) is not None:
+        raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
+
+    _check_word(conn, row, body.markdownContent)
+    _save_markdown(conn, did, body.markdownContent, row[12],
+                   kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit",
+                   client_save_key=body.clientSaveKey, request_hash=rhash if body.clientSaveKey else None,
+                   identities=block_ids)
+    if body.memory:
+        record_memory(conn, did, body.memory.instruction, scope=body.memory.scope,
+                      target=body.memory.target, revision=row[12] + 1)
+    if body.retractMemoryRevision is not None:
+        retract_memory(conn, did, body.retractMemoryRevision)
+    conn.commit()
+
+    # 返回更新后的文档
+    row = _document_row(conn, did, session.user_id, admin)
+
+    return _content_result(request, row)
+
+
+def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody,
+                   block_ids: list[str | None] | None = None) -> dict[str, object]:
     """allowMerge：以 versions[expectedRevision] 为基线块级三方合并（01 §4.3、§5.2、§5.4）。"""
     if body.memory is not None and _writing_skill(row) is not None:
         raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
@@ -832,7 +882,7 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
 
     data = commit_whole(
         conn, document_id=did, actor=session.user_id, base_revision=body.expectedRevision, mine_md=body.markdownContent,
-        base_markdown=body.baseMarkdown,
+        base_markdown=body.baseMarkdown, block_ids=block_ids,
         kind="ai_selection" if memory else "edit", client_save_key=body.clientSaveKey,
         check_word=lambda markdown: _check_word(conn, _document_row(conn, did, session.user_id, admin, "edit"), markdown),
         extra={"memory": memory.model_dump() if memory else None}, after_write=after_write)

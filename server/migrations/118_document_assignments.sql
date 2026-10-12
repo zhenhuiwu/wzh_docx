@@ -14,10 +14,10 @@ CREATE TABLE document_object_assignments (
 CREATE INDEX idx_assign_assignee ON document_object_assignments(assignee_id);
 CREATE INDEX idx_assign_object ON document_object_assignments(document_id, object_id);
 
--- 分工模式：新文档 enforced；已有文档先 open（U-14 / H-9），由负责人开启
-ALTER TABLE documents ADD COLUMN assignment_mode TEXT NOT NULL DEFAULT 'enforced'
+-- 分工模式：已有文档 open（U-14 / H-9），由负责人开启；新建文档由 create_document 显式写 enforced。
+-- 列默认值取 open：不经新建接口直接写库的旧路径（导入脚本等）保持旧行为，不会让编写人员突然只读。
+ALTER TABLE documents ADD COLUMN assignment_mode TEXT NOT NULL DEFAULT 'open'
   CHECK (assignment_mode IN ('open','enforced'));
-UPDATE documents SET assignment_mode = 'open';
 ALTER TABLE documents ADD COLUMN assignments_revision INTEGER NOT NULL DEFAULT 0;
 
 -- 被拒提交保留（字不丢）：每人每文档最近 5 份、30 天；最新一份在本人处理前不因份数清理（17 §10.7）
