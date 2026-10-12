@@ -498,6 +498,8 @@ def test_backfill_binds_matching_documents_and_marks_legacy(api, tmp_path):
     assert report["backup"] and Path(report["backup"]).exists()
     again = backfill()
     assert again["templateDocuments"] == 0 and again["bound"] == 0
+    # 23 M-1：只剩 legacy 文档时重跑不再整库备份
+    assert again["backup"] is None and backfill()["backup"] is None
     with connect() as connection:
         rows = connection.execute("SELECT name, template_version_id FROM documents WHERE template_document_id=%s ORDER BY name", (td_id,)).fetchall()
         assert {row["name"]: row["template_version_id"] is not None for row in rows} == {"同结构": True, "旧结构": False, "无结构": False}
