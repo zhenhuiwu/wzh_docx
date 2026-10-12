@@ -50,3 +50,12 @@ export async function getAssignmentSummary(projectId: string): Promise<Assignmen
   if (!body?.data) throw new Error("分工汇总响应不完整。");
   return body.data;
 }
+/** A07 被拒保存（17 §4.6）：只能取/更新本人的；PUT 只能改最新一份（暂存同步）。 */
+export async function getRejectedSave(id: string, rid: string): Promise<{ markdown: string; createdAt?: string }> {
+  const body = await apiRequest<{ data: any }>(`/documents/${id}/rejected-saves/${rid}`);
+  if (!body?.data) throw new Error("被拒保存响应不完整。");
+  return body.data;
+}
+export async function putRejectedSave(id: string, rid: string, markdown: string, blockIds?: Array<string | null>): Promise<void> {
+  await apiRequest(`/documents/${id}/rejected-saves/${rid}`, { method: "PUT", json: { markdown, ...(blockIds ? { blockIds } : {}) } });
+}

@@ -43,7 +43,7 @@ defineExpose({ load, showPerson });
         <span v-if="doc.hasDocumentAssignment" class="tag neutral">整篇：{{ doc.documentOwners.map((p: any) => p.name).join('、') }}</span>
         <span v-if="doc.assignmentMode === 'open'" class="tag plain">不限制分工</span>
         <span class="num">{{ doc.sectionsAssigned }} / {{ doc.sectionsTotal }} 章</span>
-        <router-link v-if="doc.unassignedSections" class="text" data-testid="overview-assign-unassigned" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: { assign: '1' } }">未分配 {{ doc.unassignedSections }} 章</router-link>
+        <router-link v-if="doc.unassignedSections" class="text" data-testid="overview-assign-unassigned" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: { assign: '1', filter: 'unassigned' } }">未分配 {{ doc.unassignedSections }} 章</router-link>
         <router-link v-if="data?.canAssign ?? canAssign" class="text" data-testid="overview-assign-goto" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: { assign: '1' } }">去分配</router-link>
       </li>
       <li v-if="!docs.length" class="empty">还没有文档。</li>
@@ -53,7 +53,7 @@ defineExpose({ load, showPerson });
         <li v-for="person in people" :key="person.userId" data-testid="overview-assign-person-row" :data-user-id="person.userId" :class="{ focus: focusUser === person.userId }">
           <span class="name">{{ person.name }}<span v-if="!person.userActive" class="tag warning">已停用</span></span>
           <span class="num">{{ [person.sections ? `${person.sections} 章` : "", person.blocks ? `${person.blocks} 段` : "", `${person.documents} 篇`].filter(Boolean).join(" · ") }}</span>
-          <span class="items">{{ person.items.map((item: any) => `${item.name} · ${item.whole ? '整篇' : `${item.sections} 章`}`).join('；') }}</span>
+          <span class="items"><template v-for="(item, index) in person.items" :key="item.documentId || index"><template v-if="index">；</template><router-link v-if="item.documentId" class="text" data-testid="overview-assign-person-link" :to="{ name: 'document', params: { id: projectId, documentId: item.documentId }, query: { assign: '1', person: person.userId } }">{{ item.name }} · {{ item.whole ? '整篇' : `${item.sections} 章` }}</router-link><template v-else>{{ item.name }} · {{ item.whole ? '整篇' : `${item.sections} 章` }}</template></template></span>
         </li>
         <li v-if="!people.length" class="empty">还没有分工。</li>
       </ul>
