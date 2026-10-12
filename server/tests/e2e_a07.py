@@ -6,6 +6,9 @@ E2E_VIEWPORT（如 1366x768，默认 1920x1080）、E2E_SHOTS、E2E_OUT。admin/
 G3 保存过程中被改分工 → 409 SECTION_NOT_ASSIGNED 提示条、不自动重试、可下载；G4 接口：越权 409、缺 blockIds 422、负责人不受限；
 G5 编写人员新建的文档整篇归创建人；G6 编写人员不能恢复版本；G7 成员表“编写分工”列、点数字到概述按人视图；
 G8 S-5 降为只读前确认（取消不改、确认后分工清除）；G9 概述“编写分工”按文档/按人。
+修复第 1 轮（27/28/29）：G1 抽屉 400 宽、焦点移入、Esc 关闭还焦点、不遮正文、筛选、多人分配；G1b 模式切换确认；
+G2 只读样式/gutter/我的部分目录/首次提示、只读块输入进暂存并放到我的一处；G3 被拒横幅与面板（请联系、定位、下载、只保存我负责的部分）；
+G7/G9 概述链接带筛选；G10 3000 块文档编写人员保存不错位；G11 没有分工的编写人员只读，分到后提示。
 """
 
 from __future__ import annotations
@@ -173,6 +176,19 @@ def wait_saved(page: Page, timeout: int = 30000):
     expect(page.get_by_test_id("save-status")).to_contain_text(re.compile("刚刚保存|已保存"), timeout=timeout)
 
 
+def pick(panel, row_text: str, user_ids: list):
+    """多人分配：行内［分配］→ 勾选 → 确定（空列表 = 取消分配）。"""
+    row = panel.get_by_test_id("assign-heading").filter(has_text=row_text)
+    row.get_by_test_id("assign-edit").click()
+    box = row.get_by_test_id("assign-pick")
+    for item in box.locator("input[type=checkbox]").all():
+        if item.is_checked():
+            item.uncheck()
+    for user in user_ids:
+        box.locator(f'input[data-user-id="{user}"]').check()
+    box.get_by_test_id("assign-pick-ok").click()
+
+
 def heading_ids(api: "Api", did: str) -> dict[str, str]:
     objects = api.call("GET", f"/documents/{did}/objects")["objects"]
     return {item["markdown"].lstrip("# ").strip(): item["id"] for item in objects if item["kind"] == "heading"}
@@ -208,18 +224,69 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             page.get_by_test_id("assign-open").click()
             panel = page.get_by_test_id("assign-panel")
             expect(panel).to_be_visible()
+            # 29 抽屉：宽 400、焦点在面板里、不压在正文上
+            box, paper = panel.bounding_box(), page.locator(".paper").bounding_box()
+            assert box and 396 <= box["width"] <= 404, box
+            assert paper and paper["x"] + paper["width"] <= box["x"] + 1, (paper, box)
+            assert page.evaluate("() => !!document.activeElement?.closest('[data-testid=assign-panel]')")
             expect(panel.get_by_test_id("assign-summary")).to_contain_text("未分配章节 3 个")
             rows = panel.get_by_test_id("assign-heading")
             expect(rows).to_have_count(3)
-            rows.filter(has_text="概述").get_by_test_id("assign-select").select_option(str(users["lisi"]))
+            pick(panel, "概述", [users["lisi"]])
             expect(panel.get_by_test_id("assign-summary")).to_contain_text("未分配章节 2 个", timeout=15000)
-            rows.filter(has_text="功能需求").get_by_test_id("assign-select").select_option(str(users["wangce"]))
+            pick(panel, "功能需求", [users["wangce"]])
             expect(panel.get_by_test_id("assign-summary")).to_contain_text("未分配章节 1 个", timeout=15000)
-            expect(rows.filter(has_text="概述").get_by_test_id("assign-select")).to_have_value(str(users["lisi"]))
+            expect(rows.filter(has_text="概述").get_by_test_id("assign-who")).to_have_text("李四")
+            # 多人分配：附录给王测和刘洋，再取消
+            pick(panel, "附录", [users["wangce"], users["liuyang"]])
+            expect(rows.filter(has_text="附录").get_by_test_id("assign-who")).to_have_text("王测、刘洋", timeout=15000)
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            appendix = [item for item in view["explicit"] if {person["name"] for person in item["assignees"]} == {"王测", "刘洋"}]
+            assert len(appendix) == 1, view["explicit"]
+            pick(panel, "附录", [])
+            expect(rows.filter(has_text="附录").get_by_test_id("assign-who")).to_have_text("未分配", timeout=15000)
+            # 筛选［全部｜未分配｜某人▾］
+            panel.get_by_test_id("assign-filter-unassigned").click()
+            expect(rows).to_have_count(1)
+            expect(rows.first).to_contain_text("附录")
+            panel.get_by_test_id("assign-filter-person").select_option(str(users["wangce"]))
+            expect(rows).to_have_count(1)
+            expect(rows.first).to_contain_text("功能需求")
+            panel.get_by_test_id("assign-filter-all").click()
+            expect(rows).to_have_count(3)
             shot(page, "A07-01-分工面板")
             view = admin.call("GET", f"/documents/{did}/assignments")
-            assert {item["assignees"][0]["name"] for item in view["explicit"]} == {"李四", "王测"}, view["explicit"]
+            assert sorted(item["assignees"][0]["name"] for item in view["explicit"]) == ["李四", "王测"], view["explicit"]
+            # Esc 关闭，焦点回到“编写分工”按钮
+            panel.get_by_test_id("assign-close").focus()
+            page.keyboard.press("Escape")
+            expect(panel).to_have_count(0)
+            assert page.evaluate("() => document.activeElement?.getAttribute('data-testid')") == "assign-open"
         g1()
+
+        @step("G1b 切换分工模式先确认（16 §4.3），开放编辑时标签为“开放编辑”")
+        def g1b():
+            page.get_by_test_id("assign-open").click()
+            panel = page.get_by_test_id("assign-panel")
+            panel.get_by_test_id("assign-mode-toggle").click()
+            dialog = page.get_by_test_id("assign-mode-confirm")
+            expect(dialog).to_contain_text("改为开放编辑？")
+            dialog.get_by_role("button", name="取消").click()
+            expect(dialog).to_have_count(0)
+            assert admin.call("GET", f"/documents/{did}/assignments")["assignmentMode"] == "enforced"
+            panel.get_by_test_id("assign-mode-toggle").click()
+            page.get_by_test_id("assign-mode-confirm-ok").click()
+            expect(page.get_by_test_id("doc-assign-mode-chip")).to_have_text("开放编辑", timeout=15000)
+            panel.get_by_test_id("assign-mode-toggle").click()
+            dialog = page.get_by_test_id("assign-mode-confirm")
+            expect(dialog).to_contain_text("开启按分工编辑？")
+            expect(dialog.get_by_test_id("assign-mode-unassigned")).to_contain_text("还有 1 章未分配")
+            shot(page, "A07-01b-开启确认")
+            page.get_by_test_id("assign-mode-confirm-ok").click()
+            expect(page.get_by_test_id("doc-assign-mode-chip")).to_have_text("按分工编辑", timeout=15000)
+            assert admin.call("GET", f"/documents/{did}/assignments")["assignmentMode"] == "enforced"
+            page.get_by_test_id("assign-close").click()
+        g1b()
 
         @step("G2 编写人员只能改分给自己的章节：其余只读，点了有提示；自己的章节保存成功")
         def g2():
@@ -231,6 +298,18 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(free).to_have_attribute("data-editable", "false")
             expect(mine).not_to_have_attribute("data-editable", "false")
             expect(page2.locator(".paper-content")).to_have_attribute("contenteditable", "true", timeout=30000)
+            # 29 M-1：只读样式、gutter 姓名片 / 未分配、我的部分竖条、目录“我的部分”、首次提示
+            expect(theirs).to_have_attribute("data-assignee-label", "王测")
+            expect(free).to_have_attribute("data-assignee-label", "未分配")
+            expect(mine).to_have_attribute("data-mine", "")
+            assert theirs.evaluate("n => getComputedStyle(n).color") != mine.evaluate("n => getComputedStyle(n).color")
+            assert "王测" in theirs.evaluate("n => getComputedStyle(n, '::before').content")
+            expect(page2.get_by_test_id("mine-intro")).to_contain_text("你负责本文档的 1 处内容")
+            expect(page2.get_by_test_id("outline-filter-mine")).to_have_text("我的部分 1")
+            expect(page2.locator(".outline-item")).to_have_count(1)
+            page2.get_by_test_id("outline-filter-all").click()
+            expect(page2.locator(".outline-item")).to_have_count(3)
+            expect(page2.get_by_test_id("outline-lock")).to_have_count(2)
             mine.click()
             page2.keyboard.press("End")
             page2.keyboard.type("（李四补充）")
@@ -256,6 +335,23 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             page2.wait_for_timeout(1500)
             after = admin.call("GET", f"/documents/{did}")["markdownContent"]
             assert after == before, (before[:400], after[:400])
+            # 29 M-2：只读块里打的字进了暂存（16 §4.8 文案），可以放到我负责的一处
+            # （Playwright 输入中文走 insertText、不产生按键；这里用英文按键）
+            theirs.click()
+            page2.keyboard.type("ABC")
+            hint = page2.get_by_test_id("locked-hint")
+            expect(hint).to_contain_text("该段由 王测 负责，你不能修改。如需修改请联系项目负责人")
+            expect(hint.get_by_test_id("locked-stash")).to_contain_text("ABC")  # 前面输入的“越权”（insertText）也已暂存
+            expect(theirs).not_to_contain_text("ABC")
+            hint.get_by_test_id("locked-stash-place").click()
+            expect(para(page2, "概述第二段")).to_contain_text("ABC")
+            for _ in range(60):
+                if "ABC" in admin.call("GET", f"/documents/{did}")["markdownContent"]:
+                    break
+                page2.wait_for_timeout(500)
+            else:
+                raise AssertionError("暂存的字没有保存到我的段落")
+            wait_saved(page2)
         g2()
 
         @step("G2b 在自己段首按退格不会并入别人的段（前端拦下并提示）")
@@ -283,19 +379,30 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             before = admin.call("GET", f"/documents/{did}")["markdownContent"]
             page2.keyboard.type("（被拒）")
             page2.keyboard.press("Control+s")
-            banner = page2.get_by_test_id("save-blocked")
-            expect(banner).to_have_attribute("data-code", "SECTION_NOT_ASSIGNED", timeout=30000)
-            expect(banner).to_contain_text("不归你编写")
-            expect(banner.get_by_role("button", name="下载我的修改")).to_be_visible()
+            banner = page2.get_by_test_id("save-rejected-banner")
+            expect(banner).to_contain_text("这次修改没有保存：其中 1 处属于他人负责的部分。", timeout=30000)
             expect(banner.get_by_role("button", name="重试保存")).to_have_count(0)
-            shot(page2, "A07-03-保存被拒")
+            expect(page2.get_by_test_id("save-status")).to_contain_text("未保存")
             assert admin.call("GET", f"/documents/{did}")["markdownContent"] == before
             # 归属已刷新：概述也锁上了
             expect(para(page2, "概述第一段")).to_have_attribute("data-editable", "false", timeout=15000)
-            page2.once("dialog", lambda dialog: dialog.accept())
-            banner.get_by_test_id("save-rejected-reload").click()
-            expect(page2.get_by_test_id("save-blocked")).to_have_count(0, timeout=30000)
+            banner.get_by_test_id("save-rejected-open").click()
+            panel = page2.get_by_test_id("save-rejected-panel")
+            item = panel.get_by_test_id("save-rejected-item").first
+            expect(item).to_contain_text("修改了 王测 负责的内容")
+            expect(item).to_contain_text("请联系 王测")
+            item.click()
+            shot(page2, "A07-03-保存被拒")
+            with page2.expect_download() as info:
+                panel.get_by_test_id("save-rejected-download").click()
+            assert "（被拒）" in Path(info.value.path()).read_text(encoding="utf-8")
+            # 只保存我负责的部分：这里已没有我的部分 → 服务器内容不变，越权的字进暂存
+            panel.get_by_test_id("save-rejected-save-mine").click()
+            expect(banner).to_have_count(0, timeout=30000)
+            expect(page2.get_by_test_id("locked-stash-bar")).to_contain_text("（被拒）", timeout=15000)
             expect(para(page2, "概述第二段")).not_to_contain_text("（被拒）")
+            assert "（被拒）" not in admin.call("GET", f"/documents/{did}")["markdownContent"]
+            page2.get_by_test_id("locked-stash-bar").get_by_role("button", name="清除").click()
             # 还给李四
             view = admin.call("GET", f"/documents/{did}/assignments")
             admin.call("PUT", f"/documents/{did}/assignments",
@@ -325,8 +432,9 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             view = wangce.call("GET", f"/documents/{own['id']}/assignments")
             assert view["assignmentMode"] == "enforced"
             assert [(item["objectId"], item["assignees"][0]["name"]) for item in view["explicit"]] == [("@document", "王测")], view["explicit"]
-            open_doc(page2, pid, own["id"])
-            expect(para(page2, "王测写的测试范围")).to_have_attribute("data-assignee", "王测", timeout=15000)
+            page2.goto(f"{WEB}/projects/{pid}/documents/{own['id']}")
+            expect(para(page2, "王测写的测试范围")).to_have_attribute("data-assignee", "王测", timeout=60000)
+            expect(page2.get_by_test_id("no-assign-notice")).to_contain_text("还没有分配给你的部分")
             detail = lisi.call("GET", f"/documents/{own['id']}")
             assert detail["permissions"]["readonlyReason"] == "assignment", detail["permissions"]
         g5()
@@ -358,6 +466,10 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(person).to_contain_text("软件需求规格说明 · 1 章")
             expect(page.get_by_test_id("overview-assign-no-work")).to_contain_text("刘洋")
             shot(page, "A07-04-概述按人")
+            person.get_by_test_id("overview-assign-person-link").first.click()
+            expect(page.get_by_test_id("assign-filter-person")).to_have_value(str(users["lisi"]), timeout=60000)
+            expect(page.get_by_test_id("assign-heading")).to_have_count(1)
+            page.goto(f"{WEB}/projects/{pid}")
         g7()
 
         @step("G8 S-5：降为只读前确认（取消不改；确认后分工清除）")
@@ -387,10 +499,57 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             doc_row = section.locator(f'[data-testid=overview-assign-doc-row][data-document-id="{did}"]')
             expect(doc_row).to_contain_text("1 / 3 章", timeout=15000)
             expect(section.locator('[data-testid=overview-assign-doc-row]', has_text="测试计划")).to_contain_text("整篇：王测")
-            doc_row.get_by_test_id("overview-assign-goto").click()
+            doc_row.get_by_test_id("overview-assign-unassigned").click()
             expect(page.get_by_test_id("assign-panel")).to_be_visible(timeout=60000)
+            expect(page.get_by_test_id("assign-filter-unassigned")).to_have_attribute("aria-pressed", "true")
             shot(page, "A07-06-概述去分配")
         g9()
+
+        login(page2, f"liuyang{RUN}")
+        liuyang = Api(f"liuyang{RUN}")
+
+        @step("G10 3000 块的文档：编写人员改自己章节的末段，保存成功、不错位（27 M-1）")
+        def g10():
+            chapters = [(f"第{c}章", [f"第{c}章第{k}段内容。" for k in range(1, 100)]) for c in range(1, 31)]
+            big = upload_doc(admin, pid, "大文档", make_word(chapters))
+            heads = heading_ids(admin, big["id"])
+            view = admin.call("GET", f"/documents/{big['id']}/assignments")
+            admin.call("PUT", f"/documents/{big['id']}/assignments",
+                       json={"objectIds": [heads["第30章"]], "assigneeIds": [str(users["liuyang"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            assert len(admin.call("GET", f"/documents/{big['id']}/objects")["objects"]) >= 3000
+            open_doc(page2, pid, big["id"])
+            target = para(page2, "第30章第99段内容")
+            expect(target).to_have_attribute("data-mine", "", timeout=60000)
+            target.click()
+            page2.keyboard.press("End")
+            page2.keyboard.type("（刘洋）")
+            page2.keyboard.press("Control+s")
+            for _ in range(90):
+                if "第30章第99段内容。（刘洋）" in admin.call("GET", f"/documents/{big['id']}")["markdownContent"]:
+                    break
+                page2.wait_for_timeout(500)
+            else:
+                raise AssertionError("大文档保存没有生效")
+            expect(page2.get_by_test_id("save-rejected-banner")).to_have_count(0)
+            wait_saved(page2, 60000)
+        g10()
+
+        @step("G11 没有分工的编写人员整篇只读并提示；分到章节后提示并可编辑（29 M-6）")
+        def g11():
+            page2.goto(f"{WEB}/projects/{pid}/documents/{did}")
+            expect(page2.locator(".paper-content")).to_be_visible(timeout=60000)
+            expect(page2.get_by_test_id("no-assign-notice")).to_contain_text("这篇文档还没有分配给你的部分，目前只读", timeout=30000)
+            expect(page2.locator(".paper-content")).not_to_have_attribute("contenteditable", "true")
+            heads = heading_ids(admin, did)
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            admin.call("PUT", f"/documents/{did}/assignments",
+                       json={"objectIds": [heads["附录"]], "assigneeIds": [str(users["liuyang"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            expect(page2.get_by_test_id("assign-notice")).to_contain_text("新分配给你", timeout=90000)
+            expect(page2.get_by_test_id("no-assign-notice")).to_have_count(0)
+            expect(para(page2, "附录第一段")).to_have_attribute("data-mine", "")
+            shot(page2, "A07-07-分到章节")
+            assert liuyang.call("GET", f"/documents/{did}/assignments")["assignmentMode"] == "enforced"
+        g11()
 
         browser.close()
     failed = [item for item in results if not item[1]]

@@ -177,6 +177,7 @@ const savingMine = ref(false);
 const assignNotice = ref<{ tone: "info" | "warning"; text: string; locate?: boolean; saveMine?: boolean } | null>(null);
 const mineIntroOff = ref(false);
 const outlineFilter = ref<"all" | "mine" | null>(null);
+const noAssignNotice = ref("");
 let noAssignReadonly = false;
 const stashKey = () => `docwb.a07.stash.${document.value?.id ?? ""}`;
 function persistStash() { try { if (lockedStash.value) localStorage.setItem(stashKey(), lockedStash.value); else localStorage.removeItem(stashKey()); } catch { /* 存不了就只在本页 */ } }
@@ -238,8 +239,8 @@ function lockText(id: string) {
 function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<typeof assignInfo.value>) {
   const owner = next.projectOwner;
   const noneMine = next.restricted && next.order.length > 0 && next.editable.size === 0;
-  if (noneMine && !readonly.value) { noAssignReadonly = true; readonly.value = true; readonlyReason.value = noAssignmentText(owner); }
-  else if (!noneMine && noAssignReadonly) { noAssignReadonly = false; readonly.value = false; readonlyReason.value = ""; }
+  if (noneMine && !readonly.value) { noAssignReadonly = true; readonly.value = true; readonlyReason.value = noAssignmentText(owner); noAssignNotice.value = readonlyReason.value; }
+  else if (!noneMine && noAssignReadonly) { noAssignReadonly = false; readonly.value = false; readonlyReason.value = ""; noAssignNotice.value = ""; }
   if (!prev || prev.revision === next.revision) return;
   const who = owner ? `项目负责人 ${owner}` : "项目负责人";
   if (prev.mode !== next.mode) {
@@ -281,7 +282,9 @@ function placeStash() {
   if (!root || !text || readonly.value) return;
   const from = nodeOf(lockedBubble.value?.id);
   const mine = [...root.querySelectorAll<HTMLElement>("[data-mine]")];
-  const target = (from ? mine.find(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) : undefined) ?? mine[0];
+  // 只读块之后我负责的下一处；后面没有就放到它前面最近的一处
+  const target = (from ? mine.find(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ?? mine.filter(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING).pop() : undefined) ?? mine[0];
   if (!target) { noteAction("你还没有可以修改的部分，请先复制暂存的内容。", 6000); return; }
   root.focus({ preventScroll: true });
   const range = window.document.createRange();
@@ -328,14 +331,18 @@ function showLockedHint(node: Element) {
 }
 function hideLockedBubble() { if (lockedBubble.value) lockedBubble.value = null; }
 /** 29 M-2：只读块里按键（含删除、回车）被拦下并提示；可见字符记进暂存。窗口级捕获：光标在只读块里时焦点可能不在编辑区。 */
+/** 最近点中的只读块：浏览器不一定把光标放进 contenteditable=false 的块，按键时以它为准，直到点到别处。 */
+let lockedFocus: Element | null = null;
 function guardLockedKey(event: KeyboardEvent) {
   if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || !assignInfo.value?.locked.size) return;
   const root = editor.value;
   const anchor = window.getSelection()?.anchorNode;
-  if (!root || !anchor || !root.contains(anchor)) return;
+  const focused = lockedFocus && root?.contains(lockedFocus) ? lockedFocus : null;
+  if (!root || (!focused && (!anchor || !root.contains(anchor)))) return;
   const printable = event.key.length === 1;
-  if (!printable && !["Enter", "Backspace", "Delete", "Tab"].includes(event.key)) return;
-  const node = assignLockedNode(event.key === "Backspace" ? "deleteContentBackward" : event.key === "Delete" ? "deleteContentForward" : "insertText");
+  // 方向键等移动光标：不再以点中的只读块为准
+  if (!printable && !["Enter", "Backspace", "Delete", "Tab"].includes(event.key)) { if (!["Shift", "Control", "Alt", "Meta"].includes(event.key)) lockedFocus = null; return; }
+  const node = focused ?? assignLockedNode(event.key === "Backspace" ? "deleteContentBackward" : event.key === "Delete" ? "deleteContentForward" : "insertText");
   if (!node) return;
   event.preventDefault();
   event.stopPropagation();
@@ -351,7 +358,8 @@ function guardLockedComposition() {
 }
 function lockedMouseDown(event: MouseEvent) {
   const node = (event.target as Element | null)?.closest?.("[data-a07-lock]");
-  if (node && editor.value?.contains(node)) showLockedHint(node);
+  lockedFocus = node && editor.value?.contains(node) ? node : null;
+  if (lockedFocus) showLockedHint(lockedFocus);
 }
 /** 选区碰到只读块（或光标在只读块边上做删除）时不让改，并提示归属。服务器仍会校验。 */
 function assignLockedNode(inputType: string): Element | null {
@@ -380,7 +388,11 @@ function assignLockedNode(inputType: string): Element | null {
 }
 function guardLocked(event: InputEvent) {
   const node = assignLockedNode(event.inputType || "");
-  if (node) { event.preventDefault(); showLockedHint(node); }
+  if (node) {
+    event.preventDefault();
+    if (event.data && /^insert(Text|FromComposition|ReplacementText)$/.test(event.inputType)) { lockedStash.value += event.data; persistStash(); }
+    showLockedHint(node);
+  }
 }
 const blocked = ref<{ message: string; location?: LocationInfo; content: string; code: string; blockText?: string; deletedText?: string; gone?: boolean; fromPoll?: boolean; unsaved?: boolean } | null>(null);
 const revertingBlock = ref(false);
@@ -4083,6 +4095,7 @@ onUnmounted(() => {
           <span class="acts"><button type="button" class="ghost sm" @click="copyStash">复制</button><button type="button" class="ghost sm" :disabled="readonly || !mineStarts.length" @mousedown.prevent @click="placeStash">放到我的下一处</button><button type="button" class="ghost sm" @click="clearStash">清除</button></span></p>
         <p v-if="assignNotice" class="wb-notice" :class="assignNotice.tone" role="status" data-testid="assign-notice"><span>{{ assignNotice.text }}</span>
           <span class="acts"><button v-if="assignNotice.locate" type="button" class="ghost sm" @click="locateMine()">定位到第一处</button><button v-if="assignNotice.saveMine" type="button" class="ghost sm" :disabled="savingMine" @click="saveMineOnly">只保存我负责的部分</button><button type="button" class="ghost sm" @click="assignNotice = null">知道了</button></span></p>
+        <p v-if="noAssignNotice" class="wb-notice info" role="status" data-testid="no-assign-notice"><span>{{ noAssignNotice }}</span></p>
         <p v-if="mineIntro && !assignNotice" class="wb-notice info" role="status" data-testid="mine-intro"><span>{{ mineIntro }}</span>
           <span class="acts"><button type="button" class="ghost sm" data-testid="mine-locate" @click="locateMine()">定位到第一处</button><button type="button" class="ghost sm" @click="dismissMineIntro">知道了</button></span></p>
         <div v-if="blocked && blocked.code === 'SECTION_NOT_ASSIGNED'" class="wb-notice warning" role="alert" data-testid="save-rejected-banner">
@@ -4386,7 +4399,7 @@ onUnmounted(() => {
 /* 29 M-1：A07 只读块、gutter 归属、我的部分 */
 .paper-content :deep([data-a07-lock]) { color:var(--text-secondary); cursor:default; position:relative; border-radius:2px; }
 .paper-content :deep([data-a07-lock]:hover) { outline:1px dashed var(--border-default); outline-offset:2px; }
-.paper-content :deep([data-a07-lock])::before { content:attr(data-assignee-label); position:absolute; right:calc(100% + 12px); top:2px; max-width:72px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 6px; border-radius:8px; background:var(--bg-subtle); color:var(--text-tertiary); font-size:11px; line-height:16px; font-weight:400; font-style:normal; text-indent:0; pointer-events:none; }
+.paper-content :deep([data-a07-lock])::before { content:attr(data-assignee-label) / ""; position:absolute; right:calc(100% + 12px); top:2px; max-width:72px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 6px; border-radius:8px; background:var(--bg-subtle); color:var(--text-tertiary); font-size:11px; line-height:16px; font-weight:400; font-style:normal; text-indent:0; pointer-events:none; }
 .paper-content :deep([data-mine]) { position:relative; }
 .paper-content :deep([data-mine])::after { content:""; position:absolute; left:-14px; top:2px; bottom:2px; width:3px; border-radius:2px; background:var(--brand-500); pointer-events:none; }
 .paper-content :deep(.a07-hit) { outline:2px solid var(--warning-600); outline-offset:2px; }
