@@ -260,7 +260,7 @@ function saveFile(content: string, type: string, name: string) {
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
-/** D-17：下载可读的修改清单（.md，对照开始编辑时的版本）；同时附带草稿数据 .json 备查。 */
+/** D-17：下载可读的修改清单（.md，对照开始编辑时的版本）。 */
 async function downloadMine() {
   if (!structure.value) return;
   const name = documentName.value || "模板";
@@ -270,7 +270,11 @@ async function downloadMine() {
   catch { /* 取不到对照版本时只列当前内容 */ }
   saveFile(changesMarkdown({ title: name, baseLabel: reference ? `第 ${reference.seq} 版` : "当前版本", base, mine: structure.value.blocks,
     baseStyles: baseStyles.value, styles: styles.value, time: new Date().toLocaleString() }), "text/markdown;charset=utf-8", `${name}-我的修改.md`);
-  saveFile(JSON.stringify({ structure: forSave(structure.value), format: { styles: styles.value } }, null, 2), "application/json", `${name}-我的草稿.json`);
+}
+/** N-1：草稿数据 .json 单独下载（备查/交给开发恢复），“下载我的修改”只给可读的 .md。 */
+function downloadMineJson() {
+  if (!structure.value) return;
+  saveFile(JSON.stringify({ structure: forSave(structure.value), format: { styles: styles.value } }, null, 2), "application/json", `${documentName.value || "模板"}-我的草稿.json`);
 }
 
 // ---------------------------------------------------------------- 编辑操作
@@ -576,7 +580,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
         <span class="spacer"></span>
         <span v-if="!canManage" class="hint">你只能查看模板。</span>
       </div>
-      <p v-if="conflict" class="notice" role="alert" data-testid="tpl-conflict">{{ conflict }} <button type="button" class="text sm" @click="load()">刷新</button> <button type="button" class="text sm" data-testid="tpl-conflict-download" @click="downloadMine">下载我的修改</button></p>
+      <p v-if="conflict" class="notice" role="alert" data-testid="tpl-conflict">{{ conflict }} <button type="button" class="text sm" @click="load()">刷新</button> <button type="button" class="text sm" data-testid="tpl-conflict-download" @click="downloadMine">下载我的修改</button> <button type="button" class="text sm" data-testid="tpl-conflict-download-json" @click="downloadMineJson">下载草稿数据（.json）</button></p>
       <p v-else-if="saveError" class="notice" role="alert">{{ saveError }}</p>
       <div v-if="stale" class="notice warning stale" role="status" data-testid="tpl-stale">
         <span>{{ stale.publishedBy?.name || '其他人' }} 已发布第 {{ stale.seq }} 版。可以把你的草稿合并到最新版本后再发布。</span>

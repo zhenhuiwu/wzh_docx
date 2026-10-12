@@ -131,7 +131,8 @@ describe("styleDisplayName", () => {
     expect(styleDisplayName("Normal Indent")).toBe("正文缩进");
     expect(styleDisplayName("toc 2")).toBe("目录 2");
     expect(styleDisplayName("表格文字")).toBe("表格文字");
-    expect(styleDisplayName("Fancy X")).toBe("原有样式（Fancy X）");
+    expect(styleDisplayName("Fancy X")).toBe("原有样式 Fancy X");
+    expect(`${styleDisplayName("Fancy X")}（保留原样）`).not.toMatch(/）（/);
     expect(styleDisplayName(null)).toBe("原有样式");
   });
 });

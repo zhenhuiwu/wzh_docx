@@ -413,6 +413,12 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             edit_text(page, heads[1]["id"], heads[1]["text"] + "（管理员）")
             expect(page.get_by_test_id("tpl-conflict")).to_contain_text("修改了草稿", timeout=30000)
             expect(page.get_by_test_id("tpl-conflict-download")).to_be_visible()
+            with page.expect_download() as info:
+                page.get_by_test_id("tpl-conflict-download").click()
+            assert info.value.suggested_filename.endswith("-我的修改.md"), info.value.suggested_filename
+            with page.expect_download() as info:
+                page.get_by_test_id("tpl-conflict-download-json").click()
+            assert info.value.suggested_filename.endswith("-我的草稿.json"), info.value.suggested_filename
             shot(page, "A06-11-并发409")
             current = maint.call("GET", f"/template-documents/{td}/draft")["draft"]
             maint.call("DELETE", f"/template-documents/{td}/draft?expectedDraftRevision={current['draftRevision']}")
