@@ -594,6 +594,39 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             assert liuyang.call("GET", f"/documents/{did}/assignments")["assignmentMode"] == "enforced"
         g11()
 
+        @step("G13 只保存我负责的部分：负责人同时改了我负责的段 → 不覆盖，走冲突流程（28 复验 N-1，F5 conflict）")
+        def g13():
+            heads = heading_ids(admin, did)
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            admin.call("PUT", f"/documents/{did}/assignments",
+                       json={"objectIds": [heads["功能需求"]], "assigneeIds": [str(users["liuyang"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            open_doc(page2, pid, did)
+            func, appendix = para(page2, "功能需求第一段"), para(page2, "附录第一段")
+            expect(func).to_have_attribute("data-mine", "", timeout=30000)
+            # 先改负责人后改分工，刘洋的页面还不知道
+            objects = admin.call("GET", f"/documents/{did}/objects")["objects"]
+            record = admin.call("GET", f"/documents/{did}")
+            body = "\n\n".join(item["markdown"] for item in objects) + "\n"
+            changed = body.replace("附录第一段：术语表。", "附录第一段：术语表。（负责人改）")
+            func.click(); page2.keyboard.press("End"); page2.keyboard.type("X刘")
+            appendix.click(); page2.keyboard.press("End"); page2.keyboard.type("Y刘")
+            admin.call("PATCH", f"/documents/{did}/content", json={"expectedRevision": record["revision"], "markdownContent": changed,
+                                                                 "allowMerge": True, "blockIds": [item["id"] for item in objects]})
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            admin.call("PUT", f"/documents/{did}/assignments",
+                       json={"objectIds": [heads["功能需求"]], "assigneeIds": [str(users["wangce"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            page2.keyboard.press("Control+s")
+            banner = page2.get_by_test_id("save-rejected-banner")
+            expect(banner).to_be_visible(timeout=30000)
+            banner.get_by_test_id("save-rejected-open").click()
+            page2.get_by_test_id("save-rejected-save-mine").click()
+            page2.wait_for_timeout(3000)
+            saved = admin.call("GET", f"/documents/{did}")["markdownContent"]
+            assert "（负责人改）" in saved, saved[-300:]                      # 负责人的并发修改没被覆盖
+            assert "X刘" not in saved, saved[-300:]                           # 越权部分没保存
+            shot(page2, "A07-09-只保存我负责的部分-冲突")
+        g13()
+
         browser.close()
     failed = [item for item in results if not item[1]]
     print(f"\n{len(results) - len(failed)}/{len(results)} 通过（{VIEW}）")

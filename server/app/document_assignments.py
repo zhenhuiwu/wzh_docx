@@ -297,7 +297,8 @@ def enforce(connection, document_id, actor, before: list[Node], doc_revision: in
             event(connection, document_id, "assignment", "lost", gone, None, actor_id, doc_revision)
 
 
-def ai_precheck(connection, document_id, actor, heading_index: int | None, whole_document: bool) -> None:
+def ai_precheck(connection, document_id, actor, heading_index: int | None, whole_document: bool,
+                heading_text: str | None = None) -> None:
     """17 §4.5.4 / 27 M-3：受限编写人员在调模型之前检查范围，越权直接 409，不消耗 AI 额度。
     全文编写不对受限编写人员开放；章节编写要求该章标题归自己（章内例外仍由写入检查点把关）。"""
     if actor is None or not restricted(*actor_scope(connection, document_id, actor)):
@@ -311,15 +312,29 @@ def ai_precheck(connection, document_id, actor, heading_index: int | None, whole
     nodes = nodes_of(connection, document_id)
     owners = resolve(nodes, explicit_map(connection, document_id))
     headings = [(node, owner, path) for node, owner, path in zip(nodes, owners, heading_paths(nodes)) if node.kind == "heading"]
-    if heading_index >= len(headings):
+    picked = headings[heading_index] if heading_index < len(headings) else None
+    wanted = None if heading_text is None else _plain_heading("# " + heading_text)
+    if wanted is not None and (picked is None or _plain_heading(picked[0].body) != wanted):
+        # 两种取法对不上：按写作取到的标题文字找对象（同名取离序号最近的）；找不到就按受限处理，不放行
+        same = [(abs(i - heading_index), item) for i, item in enumerate(headings) if _plain_heading(item[0].body) == wanted]
+        picked = min(same, key=lambda pair: pair[0])[1] if same else None
+        if picked is None:
+            raise AppError(409, "SECTION_NOT_ASSIGNED", "所选范围包含他人负责的内容，请只选择你负责的部分。",
+                           details={"violations": [], "total": 0, "assignmentsRevision": revision, "reason": "ai_scope"})
+    if picked is None:
         return
-    node, owner, path = headings[heading_index]
+    node, owner, path = picked
     if str(actor) in owner.owners:
         return
     names = _names(connection, set(owner.owners))
     raise AppError(409, "SECTION_NOT_ASSIGNED", "所选范围包含他人负责的内容，请只选择你负责的部分。",
                    details={"violations": [_violation("modify", node, None, owner, path, names)], "total": 1,
                             "assignmentsRevision": revision, "reason": "ai_scope"})
+
+
+def _plain_heading(body: str) -> str:
+    import re
+    return re.sub(r"[ \t]+#+[ \t]*$", "", re.sub(r"^ {0,3}#{1,6}[ \t]*", "", body.strip())).strip()
 
 
 def selection_precheck(connection, document_id, actor, probe_markdown: str, block_ids: list[str]) -> None:

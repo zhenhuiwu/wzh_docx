@@ -3531,7 +3531,24 @@ async function saveMineOnly() {
     const data = await getAllObjects(record.id);
     const base = data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown }));
     const editableIds = new Set(data.objects.filter(item => item.editable !== false).map(item => item.id));
-    const kept = keepMineOnly(markdownContent.value, base, editableIds);
+    // 28 复验 N-1：三方合并（基准 = 我开始编辑时的服务器正文），我没改的块用最新，不覆盖别人的并发修改
+    const kept = keepMineOnly(markdownContent.value, base, editableIds, savedContent.value);
+    if (kept.conflicts.length) {
+      // 我和别人都改了我负责的同一段：按我的基准修订提交，由服务器走既有的冲突流程（409 OBJECT_CONFLICT → 冲突卡）
+      if (kept.stashed.length) addStash(kept.stashed.join("\n\n"), null, true);
+      pendingKey = null; blocked.value = null; rejected.value = null;
+      if (rejectedOpen.value) rejectedOpen.value = false;
+      try {
+        const merged = await updateDocumentContent(record.id, record.revision, kept.markdown, undefined, undefined,
+          { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds: assignBlockIds(kept.markdown, base) });
+        await acceptContent({ markdownContent: merged.markdownContent ?? kept.markdown, revision: merged.revision, status: merged.status }, { reason: "正在载入保存后的内容…" });
+        savedAt.value = Date.now();
+      } catch (caught) {
+        if (document.value === record) handleSaveError(caught, kept.markdown, "manual", markdownContent.value);
+      }
+      noteAction(`你负责的 ${kept.conflicts.length} 段在你编辑期间也被他人修改过，已按冲突处理；不归你负责的修改已放入暂存。`, 10000);
+      return;
+    }
     const result = await updateDocumentContent(record.id, data.documentRevision, kept.markdown, undefined, undefined,
       { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds: assignBlockIds(kept.markdown, base) });
     if (document.value !== record) return;

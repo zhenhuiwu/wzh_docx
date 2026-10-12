@@ -1127,7 +1127,9 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         raise AppError(422, "VALIDATION_FAILED", "本节正文超过 20000 字，请选中需要修改的部分。")
     with connect() as connection:  # A07：调模型之前先查分工范围（不扣额度）
         from app.document_assignments import ai_precheck
-        ai_precheck(connection, did, session.user_id, body.headingIndex, whole_document)
+        # 28 I-4：预检与写作用同一个标题（写作按正则取第 headingIndex 个标题，预检按它的文字核对对象）
+        ai_precheck(connection, did, session.user_id, body.headingIndex, whole_document,
+                    heading_text=str(heading.get("text", "")) if body.headingIndex is not None else None)
     settings = get_settings()
     require_ai("writing", settings)
     base_url, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()

@@ -35,4 +35,18 @@ describe("只保存我负责的部分", () => {
     const result = keepMineOnly("# 我的\n\n我的段\n\n# 别人的\n", base, editable);
     expect(result.markdown).toContain("别人的段");
   });
+  it("三方合并：我没改的块用最新、双方都改记冲突、过期未改的别人块不进暂存（28 复验 N-1 / L-3）", () => {
+    const base0 = "# 我的\n\n我的段\n\n# 别人的\n\n别人的段\n";
+    const latest = [
+      { id: "h1", kind: "heading", markdown: "# 我的" }, { id: "p1", kind: "paragraph", markdown: "我的段（负责人改）" },
+      { id: "h2", kind: "heading", markdown: "# 别人的" }, { id: "p2", kind: "paragraph", markdown: "别人的段（孙改）" },
+    ];
+    const untouched = keepMineOnly("# 我的\n\n我的段\n\n我新写的\n\n# 别人的\n\n别人的段\n", latest, editable, base0);
+    expect(untouched.markdown).toContain("我的段（负责人改）");
+    expect(untouched.markdown).toContain("别人的段（孙改）");
+    expect(untouched.stashed).toEqual([]);
+    expect(untouched.conflicts).toEqual([]);
+    const both = keepMineOnly("# 我的\n\n我的段（我改）\n\n# 别人的\n\n别人的段\n", latest, editable, base0);
+    expect(both.conflicts).toEqual(["p1"]);
+  });
 });
