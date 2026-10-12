@@ -297,6 +297,39 @@ def enforce(connection, document_id, actor, before: list[Node], doc_revision: in
             event(connection, document_id, "assignment", "lost", gone, None, actor_id, doc_revision)
 
 
+def ai_precheck(connection, document_id, actor, heading_index: int | None, whole_document: bool) -> None:
+    """17 §4.5.4 / 27 M-3：受限编写人员在调模型之前检查范围，越权直接 409，不消耗 AI 额度。
+    全文编写不对受限编写人员开放；章节编写要求该章标题归自己（章内例外仍由写入检查点把关）。"""
+    if actor is None or not restricted(*actor_scope(connection, document_id, actor)):
+        return
+    revision = assignments_revision(connection, document_id)
+    if whole_document:
+        raise AppError(409, "SECTION_NOT_ASSIGNED", "全文编写只有项目负责人可以使用。",
+                       details={"violations": [], "total": 0, "assignmentsRevision": revision, "reason": "document_scope"})
+    if heading_index is None:
+        return
+    nodes = nodes_of(connection, document_id)
+    owners = resolve(nodes, explicit_map(connection, document_id))
+    headings = [(node, owner, path) for node, owner, path in zip(nodes, owners, heading_paths(nodes)) if node.kind == "heading"]
+    if heading_index >= len(headings):
+        return
+    node, owner, path = headings[heading_index]
+    if str(actor) in owner.owners:
+        return
+    names = _names(connection, set(owner.owners))
+    raise AppError(409, "SECTION_NOT_ASSIGNED", "所选范围包含他人负责的内容，请只选择你负责的部分。",
+                   details={"violations": [_violation("modify", node, None, owner, path, names)], "total": 1,
+                            "assignmentsRevision": revision, "reason": "ai_scope"})
+
+
+def identities_drop_assignments(connection, document_id, before: list[Node], blocks, identities) -> bool:
+    """块标识会让有显式分配的对象消失，而它的正文原样出现在新正文里（说明是配错了 id，不是真删除）。"""
+    explicit = explicit_map(connection, document_id)
+    kept = {value for value in identities if value}
+    bodies = {block.body.strip() for block in blocks}
+    return any(node.id in explicit and node.id not in kept and node.body.strip() in bodies for node in before)
+
+
 def assignments_revision(connection, document_id) -> int:
     row = connection.execute("SELECT assignments_revision FROM documents WHERE id=%s", (str(document_id),)).fetchone()
     return 0 if row is None else int(row["assignments_revision"])

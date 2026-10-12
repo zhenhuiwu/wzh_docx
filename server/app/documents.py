@@ -1115,6 +1115,9 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         existing = body.selectedText
     if len(existing) > 20000:
         raise AppError(422, "VALIDATION_FAILED", "本节正文超过 20000 字，请选中需要修改的部分。")
+    with connect() as connection:  # A07：调模型之前先查分工范围（不扣额度）
+        from app.document_assignments import ai_precheck
+        ai_precheck(connection, did, session.user_id, body.headingIndex, whole_document)
     settings = get_settings()
     require_ai("writing", settings)
     base_url, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()

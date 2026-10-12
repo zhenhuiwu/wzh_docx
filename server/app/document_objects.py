@@ -289,7 +289,8 @@ def record_commit(connection, document_id: UUID, *, base_revision: int, markdown
             if assemble(prefix, blocks) == markdown:
                 from app import document_assignments as da
                 # A07：没有任何分配、操作人也不受限时不做检查（大文档写锁内不多读一遍对象）
-                guard = (actor is not None and da.restricted(*da.actor_scope(connection, document_id, actor))) or \
+                limited = actor is not None and da.restricted(*da.actor_scope(connection, document_id, actor))
+                guard = limited or \
                     connection.execute("SELECT 1 FROM document_object_assignments WHERE document_id=%s LIMIT 1",
                                        (str(document_id),)).fetchone() is not None
                 before = da.nodes_of(connection, document_id) if guard or identities is not None else []
@@ -302,10 +303,21 @@ def record_commit(connection, document_id: UUID, *, base_revision: int, markdown
                             moved = da._moved([n.id for n in before], [value for value in identities if value])
                     else:
                         identities = None
+                if identities is not None and guard and not limited and \
+                        da.identities_drop_assignments(connection, document_id, before, blocks, identities):
+                    # 27 M-1：负责人/管理员的块标识会让有分配的对象“消失”而正文仍在（客户端配错）→ 不信这些标识，改走服务端匹配
+                    identities, moved = None, None
                 changed = _sync(connection, document_id, blocks, revision, actor, change_id, identities, moved)
                 # A07 硬限制检查点（17 §4.5.2）：同一写事务内重读分配，越权整体回滚
                 if guard:
-                    da.enforce(connection, document_id, actor, before, revision)
+                    try:
+                        da.enforce(connection, document_id, actor, before, revision)
+                    except AppError as error:
+                        if error.code == "SECTION_NOT_ASSIGNED" and actor is not None:
+                            # 28 L-1 / 27 M-3：所有写入路径被拒都留存这次提交（错误处理里另起事务）
+                            error.rejected = {"document_id": str(document_id), "actor": str(actor), "base": base_revision,
+                                              "markdown": markdown, "block_ids": identities}
+                        raise
         if changed is not None:
             connection.execute(
                 "UPDATE documents SET objects_revision=%s, objects_prefix=COALESCE(%s, objects_prefix) WHERE id=%s",
