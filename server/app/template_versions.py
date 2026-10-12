@@ -502,6 +502,12 @@ def _reference(conn, draft: dict | None, current: dict) -> tuple[dict, UUID, dic
     return reference, word_file_id(current), current["format"]
 
 
+def _same_draft(latest: dict | None, draft: dict | None) -> None:
+    """事务内复核草稿 id（23 S-9，防 ABA：草稿被发布后又有人新建了同 revision 的草稿）。"""
+    if latest is not None and draft is not None and latest["id"] != draft["id"]:
+        raise AppError(409, "REVISION_CONFLICT", "草稿已被其他人替换，请刷新后再继续。", details=_conflict_details(latest))
+
+
 def _cas(draft: dict | None, expected: int) -> None:
     if draft is None and expected != 0:
         raise AppError(409, "REVISION_CONFLICT", "草稿已被放弃或发布，请刷新后再继续。", details={"currentRevision": 0})
@@ -568,6 +574,7 @@ def put_draft(request: Request, document_id: str, body: DraftBody) -> dict:
             if latest is None and draft is not None:
                 _cas(None, body.expectedDraftRevision)
             if latest is not None:
+                _same_draft(latest, draft)
                 _cas(latest, draft["revision"] if draft is not None else 0)
             if latest is None and body.parentVersionId is None and _td(conn, td_id)["current_version_id"] != current["id"]:
                 raise AppError(409, "REVISION_CONFLICT", "模板刚发布了新版本，请刷新后再编辑。", details={"currentRevision": 0})
@@ -782,6 +789,7 @@ def rebase(request: Request, document_id: str, body: RebaseBody) -> dict:
         format_ = {"styles": merged["styles"]}
         with write_transaction(conn):
             latest = _draft(conn, td_id)
+            _same_draft(latest, draft)
             _cas(latest, body.expectedDraftRevision)
             if _td(conn, td_id)["current_version_id"] != current["id"]:
                 raise AppError(409, "TEMPLATE_REBASE_CONFLICT", "又有新版本发布，请重新检查。", details=details)
