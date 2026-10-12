@@ -447,6 +447,8 @@ def test_negative_locks_limits_and_permissions(api):
         assert response.status_code == 422
         problem = response.json()["error"]["details"]["items"][0]
         assert problem["cell"] == [r, c] and problem["message"] in {reason["message"] for reason in partial["tableEditReasons"]}
+        # 24 L-2：不再顺带误报“表格不能在线删除”
+        assert all("删除" not in item["message"] for item in response.json()["error"]["details"]["items"])
     big = copy.deepcopy(base["structure"])
     big["blocks"] += [{"id": new_block_id(), "path": None, "kind": "body", "text": "x", "headingLevel": None} for _ in range(4001)]
     assert api.send("PUT", url, {"structure": big, "expectedDraftRevision": 0}).status_code == 413

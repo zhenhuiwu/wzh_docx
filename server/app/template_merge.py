@@ -224,6 +224,8 @@ def validate_draft(candidate, reference: dict, analysis: dict) -> list[dict]:
     for ref in reference["blocks"]:
         if ref.get("tableId") and ref.get("path"):
             reference_children.setdefault(ref["tableId"], []).append(ref)
+    # 已经因为别的原因报错的块不再当成“被删除”重复报（24 L-2）
+    errored = {problem.get("blockId") for problem in errors if problem.get("blockId")}
     result: list[dict] = []
     for block in top:
         result.append(block)
@@ -231,11 +233,13 @@ def validate_draft(candidate, reference: dict, analysis: dict) -> list[dict]:
             given = {child["id"]: child for child in children.get(block["id"], [])}
             for ref in reference_children.get(block["id"], []):
                 if ref["id"] not in given:
+                    if ref["id"] in errored:
+                        continue
                     errors.append(_error(ref["id"], "单元格段落随表格保留，不能单独删除。"))
                     continue
                 result.append(given[ref["id"]])
     for path, ref in by_path.items():
-        if ref.get("tableId") or path in present:
+        if ref.get("tableId") or path in present or ref["id"] in errored:
             continue
         info = analysis["blocks"].get(path) or {}
         if ref["isTable"]:
