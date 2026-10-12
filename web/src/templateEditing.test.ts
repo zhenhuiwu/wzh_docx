@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EditorBlock } from "./api/templates";
-import { cellChanges, chapterIds, conflictFieldLabel, createBlock, deleteCheck, forSave, impactText, insertAfter, isCellLocked, moveBlock, moveChapter,
+import { cellChanges, changesMarkdown, chapterIds, conflictFieldLabel, createBlock, deleteCheck, forSave, impactText, insertAfter, isCellLocked, moveBlock, moveChapter,
   lockTag, newBlockId, publishImpactLine, rebindHeadings, removeBlocks, sizeLabel, summaryText, valueLabel } from "./templateEditing";
 
 function block(id: string, kind: string, level: number | null = null, extra: Partial<EditorBlock> = {}): EditorBlock {
@@ -100,5 +100,28 @@ describe("A06 文案", () => {
   it("表格对比只列改过的格子", () => {
     expect(cellChanges([["a", "b"], ["c", "d"]], [["a", "b"], ["c", "X"]])).toEqual([{ label: "第 2 行第 2 列", before: "d", after: "X" }]);
     expect(cellChanges([["a"]], [["a"]])).toEqual([]);
+  });
+});
+
+describe("changesMarkdown（D-17 可读修改清单）", () => {
+  const block = (id: string, kind: string, text: string, extra: Record<string, unknown> = {}) =>
+    ({ id, kind, text, path: id, headingLevel: kind === "heading" ? 1 : null, headingId: null, tableId: null, ...extra }) as any;
+  it("按章节列出新增、删除、改字、样式与顺序", () => {
+    const base = [block("h1", "heading", "范围"), block("b1", "body", "旧正文"), block("b2", "body", "要删的"), block("h2", "heading", "引用文件")];
+    const mine = [block("h2", "heading", "引用文件"), block("h1", "heading", "范围"), block("b1", "body", "新正文"), block("n1", "body", "新增段", { path: null })];
+    const text = changesMarkdown({ title: "SRS", baseLabel: "第 1 版", base, mine, baseStyles: { 正文: { size: 10.5, spaceBefore: null } }, styles: { 正文: { size: 12, spaceBefore: null } } });
+    expect(text).toContain("# SRS · 我的修改");
+    expect(text).toContain("- 修改正文 【范围】");
+    expect(text).toContain("> 旧正文");
+    expect(text).toContain("> 新正文");
+    expect(text).toContain("- 新增正文 【范围】");
+    expect(text).toContain("- 删除正文 【范围】");
+    expect(text).toContain("调整了章节或段落的顺序");
+    expect(text).toContain("样式“正文”字号：五号（10.5 磅） → 小四（12 磅）");
+    expect(text).not.toContain("段前");
+  });
+  it("没有修改时说明", () => {
+    const base = [block("b1", "body", "x")];
+    expect(changesMarkdown({ title: "T", baseLabel: "第 2 版", base, mine: base, baseStyles: {}, styles: {} })).toContain("没有修改。");
   });
 });

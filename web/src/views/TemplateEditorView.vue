@@ -16,13 +16,14 @@ import TemplateUploadDialog from "../components/template/TemplateUploadDialog.vu
 import TemplateCompareDialog from "../components/template/TemplateCompareDialog.vue";
 import TemplateVersionViewDialog from "../components/template/TemplateVersionViewDialog.vue";
 import { ApiError } from "../api/client";
-import { discardTemplateDraft, getTemplateDraft, listTemplateVersions, restoreTemplateVersion, saveTemplateDraft,
+import { discardTemplateDraft, getTemplateDraft, getTemplateVersion, listTemplateVersions, restoreTemplateVersion, saveTemplateDraft,
   type DraftPayload, type EditorBlock, type EditorStructure, type StyleValues, type TemplateBlockKind, type TemplateVersionItem,
   type TemplateVersionList, type VersionRef } from "../api/templates";
 import { hasPermission, readSession } from "../session";
 import { rememberCrumb } from "../crumbs";
+import { restoreFocus } from "../dialogFocus";
 import { revisionConflictText, shortTime, type Capsule } from "../saveModel";
-import { EDITOR_KIND_LABELS, chapterIds, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
+import { EDITOR_KIND_LABELS, changesMarkdown, chapterIds, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
 
 const route = useRoute();
 const router = useRouter();
@@ -186,9 +187,13 @@ async function save(): Promise<boolean> {
   try {
     const result = await saveTemplateDraft(documentId.value, {
       structure: forSave(structure.value), format: { styles: styles.value }, expectedDraftRevision: draftRevision.value,
-      ...(hasDraft.value ? {} : { parentVersionId: parentVersion.value?.versionId ?? current.value?.versionId }),
+      // D-8 / 25 S-1：始终带上开始编辑时的版本。别人已发布或放弃了这份草稿时，服务端按它重建草稿，之后走“草稿过期 → 合并”。
+      // 来自上传 Word 的草稿块位置指向上传的文件，不能按版本重建，仍只在没有草稿时带。
+      ...(hasDraft.value && uploaded.value ? {} : { parentVersionId: parentVersion.value?.versionId ?? current.value?.versionId }),
     });
+    const rebuilt = hasDraft.value && draftRevision.value > 0 && result.draftRevision === 1;
     draftRevision.value = result.draftRevision;
+    if (rebuilt) void noticeRebuilt();
     updatedAt.value = result.updatedAt;
     if (!hasDraft.value) { hasDraft.value = true; parentVersion.value = parentVersion.value ?? current.value; }
     offline.value = false;
@@ -199,6 +204,7 @@ async function save(): Promise<boolean> {
   } catch (error) {
     if (error instanceof ApiError && error.code === "REVISION_CONFLICT") {
       conflict.value = `${revisionConflictText(error.details as any).replace("更新了该文档，请刷新后重试。", "修改了草稿，请刷新后再继续。").replace("该文档", "草稿")}你的修改可以下载。`;
+      void explainConflict();
     } else if (error instanceof ApiError && (error.status === 422 || error.status === 413)) {
       saveError.value = error.message;
       markErrors(((error.details as any)?.items ?? []) as { blockId: string | null; message: string }[]);
@@ -222,6 +228,23 @@ async function flush(): Promise<boolean> {
   return !dirty.value;
 }
 
+/** 保存冲突时查一次版本列表：如果期间有人发布了新版本，文案写明“{发布人} 已发布第 N 版”（25 S-1 最低形态）。 */
+async function explainConflict() {
+  const before = parentVersion.value?.versionId ?? current.value?.versionId;
+  await refreshVersions();
+  const latest = versions.value?.items.find(item => item.versionId === current.value?.versionId);
+  if (latest && latest.versionId !== before && conflict.value) {
+    conflict.value = `${latest.publishedBy?.name || "其他人"} 已发布第 ${latest.seq} 版，你打开的草稿已被发布或替换，请刷新后再继续。你的修改可以下载。`;
+  }
+}
+/** 草稿已被别人发布或放弃、服务端按开始编辑时的版本重建了草稿：如果已有更新的版本，显示过期提示条（合并 / 对比 / 放弃）。 */
+async function noticeRebuilt() {
+  await refreshVersions();
+  const latest = versions.value?.items.find(item => item.versionId === current.value?.versionId) ?? null;
+  if (latest && parentVersion.value && latest.versionId !== parentVersion.value.versionId) stale.value = latest;
+  else notice.value = { kind: "info", text: "原来的草稿已被放弃，已按你的修改重新保存为草稿。" };
+}
+
 function markErrors(items: { blockId: string | null; message: string }[]) {
   const next: Record<string, string> = {};
   for (const item of items) if (item.blockId) next[item.blockId] = item.message;
@@ -230,14 +253,24 @@ function markErrors(items: { blockId: string | null; message: string }[]) {
   if (first) locate(first);
 }
 
-function downloadMine() {
-  if (!structure.value) return;
-  const blob = new Blob([JSON.stringify({ structure: forSave(structure.value), format: { styles: styles.value } }, null, 2)], { type: "application/json" });
+function saveFile(content: string, type: string, name: string) {
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${documentName.value || "模板"}-我的草稿.json`;
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = name;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+/** D-17：下载可读的修改清单（.md，对照开始编辑时的版本）；同时附带草稿数据 .json 备查。 */
+async function downloadMine() {
+  if (!structure.value) return;
+  const name = documentName.value || "模板";
+  const reference = parentVersion.value ?? current.value;
+  let base: EditorBlock[] = [];
+  try { if (reference) base = (await getTemplateVersion(documentId.value, reference.versionId)).structure.blocks; }
+  catch { /* 取不到对照版本时只列当前内容 */ }
+  saveFile(changesMarkdown({ title: name, baseLabel: reference ? `第 ${reference.seq} 版` : "当前版本", base, mine: structure.value.blocks,
+    baseStyles: baseStyles.value, styles: styles.value, time: new Date().toLocaleString() }), "text/markdown;charset=utf-8", `${name}-我的修改.md`);
+  saveFile(JSON.stringify({ structure: forSave(structure.value), format: { styles: styles.value } }, null, 2), "application/json", `${name}-我的草稿.json`);
 }
 
 // ---------------------------------------------------------------- 编辑操作
@@ -303,7 +336,7 @@ function remove() {
     selectedId.value = topBlocks.value[Math.min(index, topBlocks.value.length - 1)]?.id ?? "";
   };
   if (block.kind === "heading" && ids.length > 1) {
-    confirmBox.value = { title: "删除整章", text: `删除“${block.text}”及其下 ${ids.length - 1} 块内容？发布前可以在版本面板对比或放弃草稿。`, action: "删除整章", danger: true, run };
+    confirmBox.value = { title: "删除整章", text: `删除“${block.text}”及其下 ${ids.length - 1} 块内容？发布前可以在版本面板对比，或点文档栏的“放弃草稿”。`, action: "删除整章", danger: true, run };
   } else run();
 }
 
@@ -419,7 +452,11 @@ async function merged(payload: DraftPayload & { seq: number }) {
 function discard() {
   const seq = stale.value?.seq ?? currentSeq.value;
   confirmBox.value = { title: "放弃草稿", text: `放弃草稿后，你的修改不能找回。之后基于第 ${seq} 版重新编辑。`, action: "放弃草稿", danger: true, run: async () => {
-    await discardTemplateDraft(documentId.value, draftRevision.value);
+    window.clearTimeout(saveTimer);
+    window.clearTimeout(retryTimer);
+    for (let tries = 0; saving.value && tries < 40; tries++) await new Promise(resolve => window.setTimeout(resolve, 100));
+    dirty.value = false;
+    if (hasDraft.value) await discardTemplateDraft(documentId.value, draftRevision.value);
     stale.value = null;
     notice.value = { kind: "info", text: `已放弃草稿，现在基于第 ${seq} 版编辑。` };
     await load(true);
@@ -469,7 +506,18 @@ async function runConfirm() {
   catch (error) { notice.value = { kind: "warning", text: messageOf(error) }; confirmBox.value = null; }
   finally { confirmBusy.value = false; }
 }
-watch(confirmBox, (value) => void nextTick(() => { if (value) confirmEl.value?.showModal(); }));
+// 25 M-4：确认框打开时记下焦点、默认聚焦“取消”（危险操作）或确认按钮，关闭后归还焦点
+let confirmOpener: Element | null = null;
+watch(confirmBox, (value, previous) => void nextTick(() => {
+  if (value && !previous) {
+    confirmOpener = document.activeElement;
+    confirmEl.value?.showModal();
+    confirmEl.value?.querySelector<HTMLElement>(value.danger ? "[data-confirm-cancel]" : "[data-testid=\"tpl-confirm-ok\"]")?.focus();
+  } else if (!value && previous) {
+    restoreFocus(confirmOpener, selectedId.value ? `[data-block-id="${selectedId.value}"]` : "[data-testid=\"tpl-editor\"] .docbar button");
+    confirmOpener = null;
+  }
+}));
 
 // ---------------------------------------------------------------- 离开
 
@@ -499,6 +547,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
           <h1 :title="documentName">{{ documentName }}</h1>
           <span class="tag plain">{{ templateName }}</span>
           <span class="tag" :class="hasDraft || dirty ? 'info' : 'plain'" data-testid="tpl-draft-label">{{ draftLabel }}</span>
+          <button v-if="canManage && (hasDraft || dirty) && !stale && !conflict" type="button" class="text sm" data-testid="tpl-discard-draft" :disabled="actionBusy" @click="discard">放弃草稿</button>
           <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save" @retry="save" @details="() => notice = { kind: 'warning', text: capsuleDetail }" />
         </div>
         <div class="spacer"></div>
@@ -638,7 +687,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
       <header class="dialog-head"><h2 id="tpl-confirm-title">{{ confirmBox.title }}</h2></header>
       <div class="dialog-body"><p class="dialog-text">{{ confirmBox.text }}</p></div>
       <footer class="dialog-actions">
-        <button type="button" class="ghost" :disabled="confirmBusy" @click="confirmBox = null">取消</button>
+        <button type="button" class="ghost" data-confirm-cancel :disabled="confirmBusy" @click="confirmBox = null">取消</button>
         <button type="button" :class="confirmBox.danger ? 'danger' : 'primary'" :disabled="confirmBusy" data-testid="tpl-confirm-ok" @click="runConfirm">{{ confirmBusy ? '正在处理…' : confirmBox.action }}</button>
       </footer>
     </dialog>

@@ -237,3 +237,54 @@ export function cellChanges(before: string[][] | undefined, after: string[][] | 
   }
   return result;
 }
+
+/**
+ * D-17 / 25 S-2：保存冲突时下载的“可读修改清单”（Markdown）：对照开始编辑时的版本，按章节列出新增、删除、改动（原文 → 改后）、
+ * 调整顺序和样式改动。只依赖块 ID（编辑器内块 ID 延续）。
+ */
+export function changesMarkdown(input: {
+  title: string; baseLabel: string; base: EditorBlock[]; mine: EditorBlock[];
+  baseStyles: Record<string, Record<string, any>>; styles: Record<string, Record<string, any>>; time?: string;
+}): string {
+  const top = (list: EditorBlock[]) => list.filter(block => !block.tableId && !block.unplaced);
+  const old = new Map(input.base.map(block => [block.id, block]));
+  const now = new Map(input.mine.map(block => [block.id, block]));
+  const label = (block: EditorBlock) => block.kind === "heading" ? `标题 ${block.headingLevel ?? 1}` : EDITOR_KIND_LABELS[block.kind] ?? block.kind;
+  const quote = (text: string) => (text || "（空）").split("\n").map(line => `> ${line}`).join("\n");
+  const chapterOf = (list: EditorBlock[], id: string) => {
+    const index = list.findIndex(block => block.id === id);
+    const heading = [...list.slice(0, index + 1)].reverse().find(block => block.kind === "heading" && !block.tableId);
+    return heading ? heading.text || "（空标题）" : "（文档开头）";
+  };
+  const lines: string[] = [`# ${input.title} · 我的修改`, "", `对照：${input.baseLabel}${input.time ? `　导出时间：${input.time}` : ""}`, ""];
+  const items: string[] = [];
+  for (const block of top(input.mine)) {
+    const before = old.get(block.id);
+    const where = `【${chapterOf(input.mine, block.id)}】`;
+    if (!before) { items.push(`- 新增${label(block)} ${where}`, quote(block.text), ""); continue; }
+    const parts: string[] = [];
+    if (before.kind !== block.kind || before.headingLevel !== block.headingLevel) parts.push(`类型：${label(before)} → ${label(block)}`);
+    if (before.isTable || block.isTable) {
+      for (const cell of cellChanges(before.cells, block.cells)) parts.push(`${cell.label}：“${cell.before}” → “${cell.after}”`);
+    } else if ((before.text ?? "") !== (block.text ?? "")) {
+      items.push(`- 修改${label(block)} ${where}`, "  原文：", quote(before.text), "  改后：", quote(block.text), "");
+    }
+    if (before.kind === "guidance" && before.headingId !== block.headingId) parts.push("所属章节已调整");
+    if (parts.length) items.push(`- ${label(block)} ${where}“${(block.text || "").slice(0, 30)}”：${parts.join("；")}`, "");
+  }
+  for (const block of top(input.base)) {
+    if (!now.has(block.id)) items.push(`- 删除${label(block)} 【${chapterOf(input.base, block.id)}】`, quote(block.text), "");
+  }
+  const keep = (list: EditorBlock[]) => top(list).filter(block => old.has(block.id) && now.has(block.id)).map(block => block.id);
+  if (keep(input.base).join() !== keep(input.mine).join()) items.push("- 调整了章节或段落的顺序", "");
+  for (const [style, props] of Object.entries(input.styles)) {
+    for (const [prop, value] of Object.entries(props ?? {})) {
+      const before = input.baseStyles[style]?.[prop] ?? null;
+      if (JSON.stringify(before) !== JSON.stringify(value ?? null)) {
+        items.push(`- 样式“${style}”${STYLE_PROP_LABELS[prop] ?? prop}：${valueLabel(prop, before)} → ${valueLabel(prop, value)}`);
+      }
+    }
+  }
+  if (!items.length) items.push("没有修改。");
+  return [...lines, ...items, ""].join("\n");
+}
