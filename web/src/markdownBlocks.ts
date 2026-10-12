@@ -100,10 +100,66 @@ export interface BaselineObject { id: string; kind: string; markdown: string }
 
 const norm = (text: string) => text.replace(/\r\n?/g, "\n").trim();
 
+/** 两段文字的相似度（二元组 Dice），用于把间隙里改过的块配回原对象。 */
+function similarity(x: string, y: string): number {
+  if (x === y) return 1;
+  if (x.length < 2 || y.length < 2) return 0;
+  const grams = new Map<string, number>();
+  for (let k = 0; k < x.length - 1; k++) { const g = x.slice(k, k + 2); grams.set(g, (grams.get(g) ?? 0) + 1); }
+  let hit = 0;
+  for (let k = 0; k < y.length - 1; k++) { const g = y.slice(k, k + 2); const c = grams.get(g) ?? 0; if (c > 0) { hit++; grams.set(g, c - 1); } }
+  return (2 * hit) / (x.length + y.length - 2);
+}
+
+/** 最长递增子序列（返回下标），用于 patience 锚点。 */
+function lis(values: number[]): number[] {
+  const tails: number[] = [], prev: number[] = new Array(values.length).fill(-1);
+  for (let k = 0; k < values.length; k++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (values[tails[mid]] < values[k]) lo = mid + 1; else hi = mid; }
+    if (lo > 0) prev[k] = tails[lo - 1];
+    tails[lo] = k;
+  }
+  const out: number[] = [];
+  for (let k = tails.length ? tails[tails.length - 1] : -1; k >= 0; k = prev[k]) out.push(k);
+  return out.reverse();
+}
+
+/** 正文完全相同的块配对：去掉首尾相同部分；小范围用动态规划 LCS；大范围用 patience（两边都唯一的块做锚点，分段递归）。
+ *  没有任何按位置的配对，所以大文档里一处插入不会让后面整体错位（27 M-1）。 */
+function matchEqual(a: string[], b: string[], a0: number, a1: number, b0: number, b1: number, out: Array<[number, number]>) {
+  const head: Array<[number, number]> = [];
+  while (a0 < a1 && b0 < b1 && a[a0] === b[b0]) head.push([a0++, b0++]);
+  const tail: Array<[number, number]> = [];
+  while (a1 > a0 && b1 > b0 && a[a1 - 1] === b[b1 - 1]) tail.unshift([--a1, --b1]);
+  out.push(...head);
+  const n = a1 - a0, m = b1 - b0;
+  if (n > 0 && m > 0) {
+    if (n * m <= 1_000_000) {
+      const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+      for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[a0 + i] === b[b0 + j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      for (let i = 0, j = 0; i < n && j < m;) {
+        if (a[a0 + i] === b[b0 + j]) { out.push([a0 + i, b0 + j]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
+      }
+    } else {
+      const countA = new Map<string, number>(), countB = new Map<string, number>(), posB = new Map<string, number>();
+      for (let i = a0; i < a1; i++) countA.set(a[i], (countA.get(a[i]) ?? 0) + 1);
+      for (let j = b0; j < b1; j++) { countB.set(b[j], (countB.get(b[j]) ?? 0) + 1); posB.set(b[j], j); }
+      const anchors: Array<[number, number]> = [];
+      for (let i = a0; i < a1; i++) if (countA.get(a[i]) === 1 && countB.get(a[i]) === 1) anchors.push([i, posB.get(a[i])!]);
+      const chosen = lis(anchors.map(pair => pair[1])).map(k => anchors[k]);
+      let pi = a0, pj = b0;
+      for (const [i, j] of chosen) { matchEqual(a, b, pi, i, pj, j, out); out.push([i, j]); pi = i + 1; pj = j + 1; }
+      if (chosen.length) matchEqual(a, b, pi, a1, pj, b1, out);
+    }
+  }
+  out.push(...tail);
+}
+
 /**
- * 给提交的每个块配上对象 ID（17 §4.5.2 blockIds）：先按正文完全相同做最长公共子序列配对（顺序不变），
- * 两个配对之间剩下的块按位置逐个配对同类对象（就地修改）；配不上的是新块（null）。
- * 同一 ID 只用一次。配错时服务端按“删除+新增”处理，规则仍成立（不会放宽限制）。
+ * 给提交的每个块配上对象 ID（17 §4.5.2 blockIds）：先按正文完全相同配对（顺序不变），
+ * 两个配对之间的间隙里，按顺序把相似（改过）的块配回同类对象；配不上的是新块（null）。同一 ID 只用一次。
+ * 配错时服务端按“删除+新增”处理，规则仍成立（不会放宽限制）；负责人配错时服务端改走文本匹配，不丢分工。
  */
 export function assignBlockIds(markdown: string, baseline: BaselineObject[]): Array<string | null> {
   const mine = splitBlocks(markdown);
@@ -112,28 +168,27 @@ export function assignBlockIds(markdown: string, baseline: BaselineObject[]): Ar
   const n = a.length, m = b.length;
   const ids: Array<string | null> = new Array(n).fill(null);
   if (!n || !m) return ids;
-  let pairs: Array<[number, number]> = [];
-  if (n * m <= 4_000_000) {
-    const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    for (let i = 0, j = 0; i < n && j < m;) {
-      if (a[i] === b[j]) { pairs.push([i, j]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
-    }
-  } else {
-    // 超大文档：只按前后相同的部分配对
-    let p = 0;
-    while (p < n && p < m && a[p] === b[p]) { pairs.push([p, p]); p++; }
-    const tail: Array<[number, number]> = [];
-    for (let i = n - 1, j = m - 1; i >= p && j >= p && a[i] === b[j]; i--, j--) tail.unshift([i, j]);
-    pairs = pairs.concat(tail);
-  }
+  const pairs: Array<[number, number]> = [];
+  matchEqual(a, b, 0, n, 0, m, pairs);
+  const compatible = (i: number, j: number) => mine[i].kind === baseline[j].kind || (mine[i].kind !== "heading" && baseline[j].kind !== "heading");
   const bounds: Array<[number, number]> = [[-1, -1], ...pairs, [n, m]];
   for (let k = 0; k < bounds.length - 1; k++) {
     const [i0, j0] = bounds[k];
     const [i1, j1] = bounds[k + 1];
     if (k > 0) ids[i0] = baseline[j0].id;
-    for (let i = i0 + 1, j = j0 + 1; i < i1 && j < j1; i++, j++) {
-      if (mine[i].kind === baseline[j].kind || (mine[i].kind !== "heading" && baseline[j].kind !== "heading")) ids[i] = baseline[j].id;
+    const gapA = i1 - i0 - 1, gapB = j1 - j0 - 1;
+    if (gapA <= 0 || gapB <= 0) continue;
+    if (gapA === gapB) {
+      // 等长间隙：就地修改
+      for (let d = 0; d < gapA; d++) if (compatible(i0 + 1 + d, j0 + 1 + d)) ids[i0 + 1 + d] = baseline[j0 + 1 + d].id;
+      continue;
+    }
+    // 不等长：按顺序找足够相似的块（大间隙只看前 200 个，避免平方开销）
+    let from = i0 + 1;
+    for (let j = j0 + 1; j < j1 && j < j0 + 1 + 200; j++) {
+      for (let i = from; i < i1 && i < from + 200; i++) {
+        if (compatible(i, j) && similarity(a[i], b[j]) >= 0.5) { ids[i] = baseline[j].id; from = i + 1; break; }
+      }
     }
   }
   const seen = new Set<string>();

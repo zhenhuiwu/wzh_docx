@@ -20,3 +20,23 @@ describe("assignBlockIds", () => {
   it("段落不配标题", () => expect(assignBlockIds("改\n\n甲\n\n乙\n", base)).toEqual([null, "p", "q"]));
   it("重复正文只用一次 ID", () => expect(assignBlockIds("甲\n\n甲\n", [{ id: "p", kind: "paragraph", markdown: "甲" }])).toEqual(["p", null]));
 });
+
+describe("assignBlockIds 大文档不错位（27 M-1）", () => {
+  const build = (count: number) => Array.from({ length: count }, (_v, k) => (k % 50 === 0 ? `# 第 ${k} 章` : `第 ${k} 段：正文内容 ${k}`));
+  for (const count of [2600, 3150, 6000]) {
+    it(`${count} 块：一处插入 + 远处改字`, () => {
+      const texts = build(count);
+      const base = texts.map((text, k) => ({ id: `o${k}`, kind: text.startsWith("#") ? "heading" : "paragraph", markdown: text }));
+      const mine = [...texts];
+      mine[count - 10] = `${mine[count - 10]}（改）`;
+      mine.splice(100, 0, "新插入的段落");
+      const ids = assignBlockIds(mine.join("\n\n") + "\n", base);
+      const expected = mine.map(text => (text === "新插入的段落" ? null : `o${texts.indexOf(text.replace("（改）", ""))}`));
+      expect(ids.filter((id, k) => id !== expected[k]).length).toBe(0);
+    });
+  }
+  it("间隙不等长时按相似度配对", () => {
+    const base = [{ id: "h", kind: "heading", markdown: "# 一" }, { id: "p", kind: "paragraph", markdown: "原来的一段很长的正文" }, { id: "z", kind: "heading", markdown: "# 二" }];
+    expect(assignBlockIds("# 一\n\n新段\n\n原来的一段很长的正文（改）\n\n# 二\n", base)).toEqual(["h", null, "p", "z"]);
+  });
+});
