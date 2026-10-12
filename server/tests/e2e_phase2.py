@@ -42,6 +42,15 @@ results: list[tuple[str, bool, str]] = []
 open_pages: list = []
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def step(name: str):
     def wrap(fn):
         def run(*args, **kwargs):
@@ -106,8 +115,8 @@ def seed() -> dict:
                                data={"purpose": "attachment", "projectId": project["id"]},
                                headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"e2e-upload-{RUN}"})
     assert upload.status_code == 201, upload.text
-    document = zhang.call("POST", f"/projects/{project['id']}/documents",
-                          json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})
+    document = open_mode(zhang, zhang.call("POST", f"/projects/{project['id']}/documents",
+                          json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))
     # 本机（Linux）没有 Microsoft Word：带目录域的 438C 模板导出需要 Word 刷新目录，会返回 503 WORD_UNAVAILABLE。
     # 另建一份不带目录的 Word 走界面导出下载；438C 文档的导出管线（edit_original_docx）在脚本内直接校验。
     from docx import Document as WordDocument
@@ -121,8 +130,8 @@ def seed() -> dict:
                                 data={"purpose": "attachment", "projectId": project["id"]},
                                 headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"e2e-upload2-{RUN}"})
     assert upload2.status_code == 201, upload2.text
-    plain_doc = zhang.call("POST", f"/projects/{project['id']}/documents",
-                           json={"name": "导出验收", "sourceType": "upload", "wordFileId": upload2.json()["data"]["id"]})
+    plain_doc = open_mode(zhang, zhang.call("POST", f"/projects/{project['id']}/documents",
+                           json={"name": "导出验收", "sourceType": "upload", "wordFileId": upload2.json()["data"]["id"]}))
     return {"users": users, "project": project, "document": document, "plain": plain_doc, "zhang": zhang, "source": source}
 
 

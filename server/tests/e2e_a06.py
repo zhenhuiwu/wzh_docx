@@ -45,6 +45,15 @@ results: list[tuple[str, bool, str]] = []
 open_pages: list[Page] = []
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def step(name: str):
     def wrap(fn):
         def run(*args, **kwargs):
@@ -113,7 +122,7 @@ def seed() -> dict:
     td = admin.call("POST", f"/templates/{group['id']}/documents", json={"name": "软件需求规格说明", "wordFileId": file_id, "importStructure": structure})
     project = admin.call("POST", "/projects", json={"name": f"综合保障信息系统 {RUN}", "ownerId": str(users["admin"]), "status": "active"},
                          headers={"Idempotency-Key": f"a06-{uuid.uuid4().hex}"})
-    old_doc = admin.call("POST", f"/projects/{project['id']}/documents", json={"name": "需求规格（第 1 版建）", "sourceType": "template", "templateDocumentId": td["id"]})
+    old_doc = open_mode(admin, admin.call("POST", f"/projects/{project['id']}/documents", json={"name": "需求规格（第 1 版建）", "sourceType": "template", "templateDocumentId": td["id"]}))
     # A05 起 PUT 只改已有成员，新增成员走 members:batch
     admin.call("POST", f"/projects/{project['id']}/members:batch",
                json={"userIds": [str(users['auditor'])], "role": "viewer",
@@ -319,7 +328,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
 
         @step("T6 A6-2/A6-7 新文档用第 2 版；老文档仍是第 1 版，工作台提示模板有新版本，不提供升级")
         def t6():
-            doc = admin.call("POST", f"/projects/{pid}/documents", json={"name": "需求规格（第 2 版建）", "sourceType": "template", "templateDocumentId": td})
+            doc = open_mode(admin, admin.call("POST", f"/projects/{pid}/documents", json={"name": "需求规格（第 2 版建）", "sourceType": "template", "templateDocumentId": td}))
             info = admin.call("GET", f"/documents/{doc['id']}")["template"]
             assert info["seq"] == 2 and not info["legacySnapshot"], info
             assert "新增章节（A06）" in admin.call("GET", f"/documents/{doc['id']}")["markdownContent"]
