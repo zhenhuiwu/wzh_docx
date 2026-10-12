@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** A06 发布新版本（16 §3.3/§3.4）：变更说明必填；摘要来自 diff(当前版本, draft) 与 format-impact；已有文档不受影响的提示。 */
 import { computed, nextTick, onMounted, ref } from "vue";
+import { useDialogFocus } from "../../dialogFocus";
 import { ApiError } from "../../api/client";
 import { diffTemplateVersions, publishTemplateVersion, templateFormatImpact, type ImpactItem, type TemplateVersionItem,
   type TemplateVersionList, type VersionDiff } from "../../api/templates";
@@ -62,7 +63,8 @@ async function submit() {
   } finally { submitting.value = false; }
 }
 
-onMounted(() => { void nextTick(() => dialog.value?.showModal()); void loadSummary(); });
+useDialogFocus(dialog, { initial: '#tpl-publish-note', fallback: '[data-testid="template-publish"]' });
+onMounted(() => { void loadSummary(); });
 </script>
 
 <template>

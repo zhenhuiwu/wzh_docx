@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** A06 上传新 Word 作为草稿（16 §3.3，L4 的替代路径）。已有草稿时先确认替换。 */
-import { nextTick, onMounted, ref } from "vue";
+import { ref } from "vue";
+import { useDialogFocus } from "../../dialogFocus";
 import { ApiError } from "../../api/client";
 import { uploadFile } from "../../api/files";
 import { uploadTemplateDraft, type DraftPayload } from "../../api/templates";
@@ -34,7 +35,7 @@ async function submit() {
     else formError.value = error instanceof Error ? error.message : "暂时不能连接服务。";
   } finally { submitting.value = false; }
 }
-onMounted(() => void nextTick(() => dialog.value?.showModal()));
+useDialogFocus(dialog, { initial: '[data-testid="tpl-upload-file"]', fallback: '[data-testid="template-upload"]' });
 </script>
 
 <template>

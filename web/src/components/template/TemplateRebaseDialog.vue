@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** A06 草稿合并到最新版本（16 §3.3，17 §3.5）：先 dryRun，逐处选择，全部选完才能合并；409 时保留已做的选择。 */
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useDialogFocus } from "../../dialogFocus";
 import { ApiError } from "../../api/client";
 import { rebaseTemplateDraft, type DraftPayload, type RebaseConflict, type RebaseResult } from "../../api/templates";
 import { EDITOR_KIND_LABELS, conflictFieldLabel, existsText, summaryText, valueLabel } from "../../templateEditing";
@@ -90,7 +91,8 @@ async function merge() {
   } finally { merging.value = false; }
 }
 
-onMounted(() => { void nextTick(() => dialog.value?.showModal()); void check(true); });
+useDialogFocus(dialog, { fallback: '[data-testid="tpl-stale-rebase"]' });
+onMounted(() => { void check(true); });
 </script>
 
 <template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** A06 查看某个版本（只读）：按块列出标题、正文、指导与表格。 */
-import { nextTick, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
+import { useDialogFocus } from "../../dialogFocus";
 import StatePanel from "../StatePanel.vue";
 import { getTemplateVersion, type EditorStructure } from "../../api/templates";
 import { EDITOR_KIND_LABELS } from "../../templateEditing";
@@ -16,7 +17,8 @@ async function load() {
   try { structure.value = (await getTemplateVersion(props.documentId, props.versionId)).structure; phase.value = "ready"; }
   catch (error) { phase.value = "error"; errorText.value = error instanceof Error ? error.message : "暂时不能连接服务。"; }
 }
-onMounted(() => { void nextTick(() => dialog.value?.showModal()); void load(); });
+useDialogFocus(dialog);
+onMounted(() => { void load(); });
 </script>
 
 <template>

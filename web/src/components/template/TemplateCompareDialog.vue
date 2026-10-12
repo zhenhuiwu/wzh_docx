@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** A06 版本对比（16 §3.3）：宽 1200；顶部摘要；左栏按类别过滤；格式变化列“样式 · 属性 · 旧值 → 新值”。 */
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useDialogFocus } from "../../dialogFocus";
 import StatePanel from "../StatePanel.vue";
 import { diffTemplateVersions, type DiffItem, type VersionDiff } from "../../api/templates";
 import { diffWords } from "../../textDiff";
@@ -39,7 +40,8 @@ async function load() {
   try { diff.value = await diffTemplateVersions(props.documentId, props.from, props.to); phase.value = "ready"; }
   catch (error) { phase.value = "error"; errorText.value = error instanceof Error ? error.message : "暂时不能连接服务。"; }
 }
-onMounted(() => { void nextTick(() => dialog.value?.showModal()); void load(); });
+useDialogFocus(dialog);
+onMounted(() => { void load(); });
 </script>
 
 <template>
