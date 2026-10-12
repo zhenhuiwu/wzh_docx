@@ -365,13 +365,50 @@ def validate_value(prop: str, value) -> bool:
     return prop in STYLE_PROPS and _value_ok(prop, value)
 
 
+# OOXML 子元素顺序（ECMA-376 CT_Style / CT_PPr / CT_RPr）。新建子元素时按此顺序插入（23 M-3）。
+_ORDER = {
+    "style": ("name", "aliases", "basedOn", "next", "link", "autoRedefine", "hidden", "uiPriority", "semiHidden",
+              "unhideWhenUsed", "qFormat", "locked", "personal", "personalCompose", "personalReply", "rsid",
+              "pPr", "rPr", "tblPr", "trPr", "tcPr", "tblStylePr"),
+    "pPr": ("pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr",
+            "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap", "overflowPunct",
+            "topLinePunct", "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind",
+            "contextualSpacing", "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
+            "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr", "sectPr", "pPrChange"),
+    "rPr": ("rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike", "dstrike", "outline", "shadow",
+            "emboss", "imprint", "noProof", "snapToGrid", "vanish", "webHidden", "color", "spacing", "w", "kern",
+            "position", "sz", "szCs", "highlight", "u", "effect", "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em",
+            "lang", "eastAsianLayout", "specVanish", "oMath", "rPrChange"),
+}
+_W = qn("w:pPr")[:-3]
+
+
+def _local(element) -> str | None:
+    tag = element.tag if isinstance(element.tag, str) else ""
+    return tag[len(_W):] if tag.startswith(_W) else None
+
+
+def insert_ordered(parent, child) -> None:
+    """按 schema 顺序把 child 插入 parent（parent 是 w:style / w:pPr / w:rPr）；未知父元素追加到末尾。"""
+    order = _ORDER.get(_local(parent) or "")
+    name = _local(child)
+    if not order or name not in order:
+        parent.append(child)
+        return
+    rank = order.index(name)
+    for index, existing in enumerate(parent):
+        other = _local(existing)
+        if other in order and order.index(other) > rank:
+            parent.insert(index, child)
+            return
+    parent.append(child)
+
+
 def _child(parent, tag: str, first: bool = False):
     node = parent.find(qn(tag))
     if node is None:
-        node = etree.SubElement(parent, qn(tag))
-        if first:
-            parent.remove(node)
-            parent.insert(0, node)
+        node = etree.Element(qn(tag))
+        insert_ordered(parent, node)
     return node
 
 
@@ -578,7 +615,8 @@ def _analysis(content: bytes) -> dict:
     by_path, tables = {}, {}
     names = {style.get(qn("w:styleId")): (style.find(qn("w:name")).get(qn("w:val")) if style.find(qn("w:name")) is not None else "")
              for style in doc.styles.element.iter(qn("w:style"))}
-    key_of = {id(style): key for key, style in whitelist_styles(doc).items()}
+    # 用 styleId 作键（25 M-1）：lxml 代理对象会被回收重建，id() 会被复用，不能当键
+    key_of = {style.get(qn("w:styleId")): key for key, style in whitelist_styles(doc).items()}
     by_id = _styles_by_id(doc)
     default = _default_paragraph_style(doc)
     for path, element, table_path in _elements(doc):
@@ -590,7 +628,7 @@ def _analysis(content: bytes) -> dict:
         style = by_id.get(style_id[0]) if style_id else default
         by_path[path] = {"textLock": text_lock(element), "deleteLock": delete_lock(element, refs) if table_path is None else "单元格段落随表格保留。",
                          "styleName": _normal_name(names.get(style.get(qn("w:styleId")), "") if style is not None else ""),
-                         "styleKey": key_of.get(id(style)) if style is not None else None,
+                         "styleKey": key_of.get(style.get(qn("w:styleId"))) if style is not None else None,
                          "text": Paragraph(element, doc).text.strip(),
                          "level": heading_level(Paragraph(element, doc)) if table_path is None else None}
     return {"blocks": by_path, "tables": tables, "styles": read_styles(doc)}
@@ -679,7 +717,8 @@ def _set_level(doc, element, level: int | None) -> None:
         properties = element.get_or_add_pPr()
         for item in properties.xpath("./w:outlineLvl"):
             properties.remove(item)
-        outline = etree.SubElement(properties, qn("w:outlineLvl"))
+        outline = etree.Element(qn("w:outlineLvl"))
+        insert_ordered(properties, outline)
         outline.set(qn("w:val"), str(level - 1 if level is not None else 9))
 
 
@@ -829,8 +868,39 @@ def apply_draft(base_path: str | Path, draft: dict, base_styles: dict, draft_sty
         return 0
     output = BytesIO()
     doc.save(output)
-    Path(out_path).write_bytes(output.getvalue())
+    Path(out_path).write_bytes(splice_unchanged(content, output.getvalue()))
     return ops
+
+
+def _same_xml(left: bytes, right: bytes) -> bool:
+    try:
+        parser = etree.XMLParser(resolve_entities=False, no_network=True)
+        return (etree.tostring(etree.fromstring(left, parser), method="c14n")
+                == etree.tostring(etree.fromstring(right, parser), method="c14n"))
+    except etree.XMLSyntaxError:
+        return False
+
+
+def splice_unchanged(original: bytes, saved: bytes) -> bytes:
+    """23 M-4：python-docx 整包重存会改动所有部件的序列化、丢掉目录条目。
+    这里以原 zip 为准：语义未变的部件原样复制原字节（含目录条目与条目顺序），只有真正变了的部件用新内容，新增部件追加在后。"""
+    out = BytesIO()
+    with ZipFile(BytesIO(original)) as old, ZipFile(BytesIO(saved)) as new, ZipFile(out, "w") as target:
+        fresh = {info.filename: info for info in new.infolist()}
+        for info in old.infolist():
+            if info.is_dir() or info.filename not in fresh:  # 目录条目、python-docx 丢掉的未引用部件：原样保留
+                target.writestr(info, old.read(info.filename))
+                continue
+            before, after = old.read(info.filename), new.read(info.filename)
+            if before == after or (info.filename.endswith((".xml", ".rels")) and _same_xml(before, after)):
+                target.writestr(info, before)
+            else:
+                target.writestr(info, after)
+        known = {info.filename for info in old.infolist()}
+        for name, info in fresh.items():
+            if name not in known:
+                target.writestr(info, new.read(name))
+    return out.getvalue()
 
 
 def _reorder(doc, order: list[str], element_of: dict) -> int:
@@ -1030,7 +1100,8 @@ def clean_version(path: str | Path, structure: dict) -> bytes:
                 properties = element.get_or_add_pPr()
                 for item in properties.xpath("./w:outlineLvl"):
                     properties.remove(item)
-                outline = etree.SubElement(properties, qn("w:outlineLvl"))
+                outline = etree.Element(qn("w:outlineLvl"))
+                insert_ordered(properties, outline)
                 outline.set(qn("w:val"), str(level - 1 if level is not None else 9))
     output = BytesIO()
     with ZipFile(path) as source, ZipFile(output, "w") as target:

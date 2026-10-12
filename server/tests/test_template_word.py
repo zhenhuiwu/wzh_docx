@@ -106,3 +106,93 @@ def test_real_template_round_trip(source: Path, tmp_path: Path) -> None:
     # 新建文档：清掉指导后仍是合法 Word
     Document(BytesIO(tw.clean_version(out, version)))
 
+
+
+# ---------------------------------------------------------------- 23 M-3 / M-4、25 M-1
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _order_violations(xml: bytes) -> int:
+    from lxml import etree
+    order = {_W + name: tw._ORDER[name] for name in ("style", "pPr", "rPr")}
+    count = 0
+    for element in etree.fromstring(xml).iter(*order):
+        sequence = order[element.tag]
+        ranks = [sequence.index(child.tag[len(_W):]) for child in element
+                 if isinstance(child.tag, str) and child.tag.startswith(_W) and child.tag[len(_W):] in sequence]
+        count += any(a > b for a, b in zip(ranks, ranks[1:]))
+    return count
+
+
+_PROP_VALUES = {"fontEastAsia": "黑体", "fontAscii": "Arial", "size": 15, "firstLineIndent": {"unit": "chars", "value": 2},
+                "leftIndent": {"unit": "chars", "value": 2}, "rightIndent": {"unit": "pt", "value": 6}, "lineSpacing": "1.5",
+                "spaceBefore": {"unit": "pt", "value": 6}, "spaceAfter": {"unit": "lines", "value": 0.5}}
+
+
+@pytest.mark.parametrize("source", TEMPLATES, ids=lambda p: p.name[:5])
+def test_style_edits_keep_schema_order_and_untouched_parts(source: Path, tmp_path: Path) -> None:
+    """每种样式属性（每个白名单样式）写出后 style/pPr/rPr 子元素仍按 schema 顺序；未改部件逐字节相同、目录条目不丢。"""
+    from zipfile import ZipFile
+    content = source.read_bytes()
+    structure = parse_template(content)
+    analysis = tw._analysis(content)
+    styles = copy.deepcopy(analysis["styles"])
+    for name in styles:
+        styles[name].update(_PROP_VALUES)
+    out = tmp_path / "out.docx"
+    assert tw.apply_draft(source, structure, analysis["styles"], styles, out) > 0
+    with ZipFile(source) as before, ZipFile(out) as after:
+        for part in ("word/styles.xml", "word/document.xml"):
+            assert _order_violations(after.read(part)) <= _order_violations(before.read(part)), part
+        assert [info.filename for info in after.infolist()] == [info.filename for info in before.infolist()]
+        changed = [name for name in before.namelist() if before.read(name) != after.read(name)]
+        assert set(changed) <= {"word/styles.xml", "word/document.xml"}, changed
+    written = tw.read_format(Document(out))["styles"]
+    for name in styles:
+        assert written[name]["size"] == 15 and written[name]["fontEastAsia"] == "黑体", name
+
+
+@pytest.mark.parametrize("source", TEMPLATES, ids=lambda p: p.name[:5])
+def test_text_edit_keeps_untouched_parts_byte_identical(source: Path, tmp_path: Path) -> None:
+    from zipfile import ZipFile
+    content = source.read_bytes()
+    structure = parse_template(content)
+    analysis = tw._analysis(content)
+    draft = copy.deepcopy(structure)
+    block = next((b for b in draft["blocks"] if not b["tableId"] and b["kind"] == "body"
+                  and not analysis["blocks"][b["path"]]["textLock"]), None)
+    if block is None:
+        pytest.skip("没有可改正文")
+    block["text"] += "（改）"
+    out = tmp_path / "out.docx"
+    assert tw.apply_draft(source, draft, analysis["styles"], analysis["styles"], out) > 0
+    with ZipFile(source) as before, ZipFile(out) as after:
+        assert [info.filename for info in after.infolist()] == [info.filename for info in before.infolist()]
+        changed = [name for name in before.namelist() if before.read(name) != after.read(name)]
+        assert changed == ["word/document.xml"]
+        assert _order_violations(after.read("word/document.xml")) <= _order_violations(before.read("word/document.xml"))
+
+
+@pytest.mark.parametrize("source", TEMPLATES, ids=lambda p: p.name[:5])
+def test_style_key_matches_paragraph_style(source: Path) -> None:
+    """25 M-1：Normal 段落的 styleKey 是“正文”，Heading n 是“标题 n”；非白名单样式为 None。多跑两次结果稳定。"""
+    content = source.read_bytes()
+    first = tw._analysis(content)["blocks"]
+    tw._cached_analysis.cache_clear() if hasattr(tw._cached_analysis, "cache_clear") else None
+    second = tw._analysis(content)["blocks"]
+    checked = 0
+    for path, info in first.items():
+        if "styleName" not in info:
+            continue
+        assert second[path]["styleKey"] == info["styleKey"]
+        name = info["styleName"]
+        if name == "Normal":
+            assert info["styleKey"] == "正文", (path, name)
+            checked += 1
+        elif name.startswith("Heading ") and name[8:].isdigit() and int(name[8:]) <= 6:
+            assert info["styleKey"] == f"标题 {name[8:]}", (path, name)
+            checked += 1
+        elif name in {"Normal Indent", "toc 1", "toc 2", "toc 3", "header", "footer"}:
+            assert info["styleKey"] is None, (path, name)
+    assert checked > 0
