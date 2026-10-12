@@ -114,8 +114,10 @@ def seed() -> dict:
     project = admin.call("POST", "/projects", json={"name": f"综合保障信息系统 {RUN}", "ownerId": str(users["admin"]), "status": "active"},
                          headers={"Idempotency-Key": f"a06-{uuid.uuid4().hex}"})
     old_doc = admin.call("POST", f"/projects/{project['id']}/documents", json={"name": "需求规格（第 1 版建）", "sourceType": "template", "templateDocumentId": td["id"]})
-    admin.call("PUT", f"/projects/{project['id']}/members/{users['auditor']}",
-               json={"role": "viewer", "expectedMembersRevision": admin.call("GET", f"/projects/{project['id']}/members")["membersRevision"]})
+    # A05 起 PUT 只改已有成员，新增成员走 members:batch
+    admin.call("POST", f"/projects/{project['id']}/members:batch",
+               json={"userIds": [str(users['auditor'])], "role": "viewer",
+                     "expectedMembersRevision": admin.call("GET", f"/projects/{project['id']}/members")["membersRevision"]})
     return {"users": users, "admin": admin, "group": group, "td": td, "project": project, "old_doc": old_doc}
 
 
