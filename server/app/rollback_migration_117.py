@@ -36,7 +36,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from app.rollback_migration_114 import _database_path, _in_use
+from app.rollback_migration_114 import _database_path, _in_use, refuse_if_later
 
 VERSION = "117_template_versions"
 TABLE = "template_document_versions"
@@ -137,6 +137,8 @@ def rollback(path: Path, apply: bool, force: bool = False) -> int:
         if not (state["recorded"] or state["table"] or state["indexes"] or state["columns"]):
             print("迁移 117 未执行过，不需要回滚。")
             return 0
+        if refuse_if_later(connection, 117):
+            return 2
         versions = edited = drafts = 0
         if state["table"]:
             versions = connection.execute(f"select count(*) from {TABLE} where status <> 'draft'").fetchone()[0]

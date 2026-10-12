@@ -101,3 +101,24 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
             assert row["version"] == 1 and str(row["source_file_id"]) == word_file_id
     finally:
         config.get_settings.cache_clear()
+
+
+def test_rollback_117_refuses_when_later_migration_recorded(tmp_path, monkeypatch, capsys):
+    """23 M-2：schema_migrations 里有比 117 更新的版本时拒绝回滚（退出码 2），列出这些版本，库不变。"""
+    from app import config
+    from app.db import migrate
+
+    path = tmp_path / "app.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    monkeypatch.setenv("FILE_DATA_DIR", str(tmp_path / "files"))
+    config.get_settings.cache_clear()
+    try:
+        migrate()
+        with sqlite3.connect(path) as connection:
+            connection.execute("insert into schema_migrations(version) values ('118_future')")
+        assert rollback(path, apply=True, force=True) == 2
+        assert "118_future" in capsys.readouterr().err
+        assert _recorded(path) == 1
+        assert not list(tmp_path.glob("app.db.before-rollback-117-*.db"))
+    finally:
+        config.get_settings.cache_clear()

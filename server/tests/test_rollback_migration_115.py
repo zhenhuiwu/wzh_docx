@@ -4,6 +4,7 @@ import sqlite3
 
 from app.rollback_migration_115 import TABLE, VERSION, rollback
 from app.rollback_migration_116 import rollback as rollback_116
+from app.rollback_migration_117 import rollback as rollback_117
 
 
 def _has_table(path):
@@ -25,7 +26,7 @@ def test_rollback_115_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, cap
     config.get_settings.cache_clear()
     try:
         migrate()
-        assert rollback_116(path, apply=True) == 0  # 倒序：先回滚 116
+        assert rollback_117(path, apply=True) == 0 and rollback_116(path, apply=True) == 0  # 倒序：先回滚 116
         assert _has_table(path) == 1 and _recorded(path) == 1
         assert rollback(path, apply=False) == 0
         assert _has_table(path) == 1 and _recorded(path) == 1
@@ -34,7 +35,7 @@ def test_rollback_115_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, cap
         assert list(tmp_path.glob("app.db.before-rollback-115-*.db"))
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["115_document_conflict_mine_snapshots.sql", "116_project_members_v2.sql"]
+        assert migrate() == ["115_document_conflict_mine_snapshots.sql", "116_project_members_v2.sql", "117_template_versions.sql"]
         assert _has_table(path) == 1 and _recorded(path) == 1
     finally:
         config.get_settings.cache_clear()
@@ -56,6 +57,8 @@ def test_rollback_115_refuses_while_116_present(tmp_path, monkeypatch, capsys):
     config.get_settings.cache_clear()
     try:
         migrate()
+        from app.rollback_migration_117 import rollback as _rollback_117
+        assert _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         before = _versions(path)
         for apply in (True, False):
             assert rollback(path, apply=apply) == 2
@@ -83,6 +86,8 @@ def test_main_exits_2_while_116_present(tmp_path, monkeypatch, capsys):
     config.get_settings.cache_clear()
     try:
         migrate()
+        from app.rollback_migration_117 import rollback as _rollback_117
+        assert _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         assert main(["--yes", "--service-stopped"]) == 2
         assert "rollback_migration_116" in capsys.readouterr().err
         assert _has_table(path) == 1 and _recorded(path) == 1

@@ -115,6 +115,8 @@ def test_rollback_116_refuses_while_a_newer_migration_is_recorded(tmp_path, monk
     config.get_settings.cache_clear()
     try:
         migrate()
+        from app.rollback_migration_117 import rollback as _rollback_117
+        assert _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         with sqlite3.connect(path) as connection:
             connection.execute("insert into schema_migrations(version) values ('117_future_probe')")
         assert rollback(path, apply=True) == 2
