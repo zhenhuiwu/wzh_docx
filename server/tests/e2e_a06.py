@@ -12,7 +12,7 @@ T3 改“正文”字号，300ms 防抖后显示影响段数，与 format-impact
 T5 对比第 1 版与第 2 版（A6-3）；T6 用新版本新建文档、老文档仍是第 1 版并提示有新版本（A6-2/A6-7）；T7 三态表格与目录锁（A6-8/9/10）；
 T8 上传新 Word 作为草稿，未落位指导处理完才能发布（A6-9）；T9 并发保存 409 提示条与下载（A6-6）；
 T10 草稿过期 → 合并到最新版本，冲突逐处选择后合并、再发布（A6-13）；T11 恢复第 1 版为草稿并发布（A6-4）；
-T12 项目创建者只读（A6-5）；T13 审计员 403（A6-12）。admin/admin123 登录、不改密（用户决定）。
+T12 项目创建者只读（A6-5）；T13 审计员 403（A6-12）；T14 修复轮（弹窗焦点、放弃草稿、草稿被别人发布后继续编辑走过期合并）。admin/admin123 登录、不改密（用户决定）。
 """
 
 from __future__ import annotations
@@ -514,6 +514,49 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(viewer.get_by_test_id("doc-template-tag")).to_contain_text("第 1 版", timeout=30000)
             viewer.context.close()
         t13()
+
+        @step("T14 修复轮：弹窗初始焦点与焦点归还（25 M-4）、常驻放弃草稿（M-3）、别人发布了我打开的草稿后继续编辑走过期合并（D-8）")
+        def t14():
+            focused = lambda: page.evaluate("() => { const e = document.activeElement; return e ? (e.id || e.dataset.testid || (e.hasAttribute('data-confirm-cancel') ? 'confirm-cancel' : e.tagName)) : '' }")
+            page.goto(editor_url)
+            expect(page.locator(".paper .blk").first).to_be_visible(timeout=30000)
+            page.get_by_test_id("template-upload").focus()
+            page.get_by_test_id("template-upload").click()
+            expect(page.get_by_test_id("tpl-upload-dialog")).to_be_visible()
+            page.wait_for_function("() => document.activeElement && document.activeElement.id === 'tpl-upload-file'", timeout=5000)
+            page.keyboard.press("Escape")
+            page.wait_for_function("() => document.activeElement && document.activeElement.dataset.testid === 'template-upload'", timeout=5000)
+            heads = [item for item in top(admin.call("GET", f"/template-documents/{td}/draft")["base"]["structure"]["blocks"])
+                     if item["kind"] == "heading" and not item["lock"]["text"]]
+            edit_text(page, heads[1]["id"], heads[1]["text"] + "（T14）")
+            saved(page)
+            page.get_by_test_id("template-publish").click()
+            page.wait_for_function("() => document.activeElement && document.activeElement.id === 'tpl-publish-note'", timeout=5000)
+            page.keyboard.press("Escape")
+            page.wait_for_function("() => document.activeElement && document.activeElement.dataset.testid === 'template-publish'", timeout=5000)
+            page.get_by_test_id("tpl-discard-draft").click()
+            expect(page.get_by_test_id("tpl-confirm")).to_be_visible()
+            assert focused() == "confirm-cancel", focused()
+            page.get_by_test_id("tpl-confirm-ok").click()
+            expect(page.get_by_test_id("tpl-notice")).to_contain_text("已放弃草稿", timeout=30000)
+            expect(page.get_by_test_id("tpl-draft-label")).to_contain_text("当前第 6 版")
+            assert admin.call("GET", f"/template-documents/{td}/draft")["draft"] is None
+            # D-8：我打开草稿后，维护甲把这份草稿发布了；我继续改 → 服务端按第 6 版重建草稿 → 过期提示（写明谁发布了第 7 版）
+            edit_text(page, heads[2]["id"], heads[2]["text"] + "（我先改）")
+            saved(page)
+            maint = Api(f"maint{RUN}")
+            current = maint.call("GET", f"/template-documents/{td}/draft")["draft"]
+            maint.call("POST", f"/template-documents/{td}/versions", json={"draftRevision": current["draftRevision"], "note": "维护甲发布了别人的草稿"})
+            edit_text(page, heads[3]["id"], heads[3]["text"] + "（我后改）")
+            expect(page.get_by_test_id("tpl-stale")).to_contain_text("已发布第 7 版", timeout=30000)
+            shot(page, "A06-17-草稿被发布后继续编辑")
+            rebuilt = admin.call("GET", f"/template-documents/{td}/draft")["draft"]
+            assert rebuilt["parentVersion"]["seq"] == 6, rebuilt["parentVersion"]
+            assert any(item["text"].endswith("（我后改）") for item in rebuilt["structure"]["blocks"])
+            page.get_by_test_id("tpl-stale-discard").click()
+            page.get_by_test_id("tpl-confirm-ok").click()
+            expect(page.get_by_test_id("tpl-notice")).to_contain_text("已放弃草稿", timeout=30000)
+        t14()
 
         browser.close()
     failed = [item for item in results if not item[1]]
