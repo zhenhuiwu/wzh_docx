@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from "vue-router";
 import { ApiError, isMissingResource } from "../api/client";
 import { getProject, updateProject, type ProjectOwnerSummary, type ProjectRecord } from "../api/projects";
 import ProjectMembersSection from "../components/ProjectMembersSection.vue";
+import ProjectAssignmentSummary from "../components/ProjectAssignmentSummary.vue";
 import { NO_ACTIVE_OWNER_TAG, activeOwners, ownersText } from "../memberModel";
 import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
@@ -29,6 +30,7 @@ const form = ref({ name: "", description: "", organization: "", department: "", 
 const savedForm = ref("");
 const frame = ref<InstanceType<typeof ProjectFrame> | null>(null);
 const membersSection = ref<InstanceType<typeof ProjectMembersSection> | null>(null);
+const assignSummary = ref<InstanceType<typeof ProjectAssignmentSummary> | null>(null);
 const dirty = computed(() => editing.value && JSON.stringify(form.value) !== savedForm.value);
 let projectRequest = 0;
 let documentRequest = 0;
@@ -274,7 +276,8 @@ onBeforeUnmount(() => {
           </dl>
         </template>
       </section>
-      <ProjectMembersSection ref="membersSection" :project-id="project.id" :project-name="project.name" :can-restore="Boolean(project.permissions?.canArchive)" @restore="frame?.openRestore()" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" />
+      <ProjectMembersSection ref="membersSection" :project-id="project.id" :project-name="project.name" :can-restore="Boolean(project.permissions?.canArchive)" @restore="frame?.openRestore()" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" @assignments="assignSummary?.showPerson($event)" />
+      <ProjectAssignmentSummary ref="assignSummary" :project-id="project.id" :can-assign="project.permissions?.projectRole === 'owner' || Boolean(project.permissions?.canArchive)" />
       <section class="overview-section documents-section" aria-labelledby="documents-title">
         <div class="section-head">
           <h2 id="documents-title" class="section-title">最近文档</h2>

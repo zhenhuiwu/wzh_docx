@@ -34,6 +34,11 @@ export interface DocumentPermissions {
   canResolveConflicts: boolean;
   canViewMemberConflicts: boolean;
   readonlyReason: "role" | "archived" | "assignment" | null;
+  /** A07：分工模式、分工修订号、能否分配。 */
+  assignmentMode?: "open" | "enforced";
+  assignmentsRevision?: number;
+  canAssign?: boolean;
+  projectOwners?: Array<{ id: string; name: string }>;
 }
 
 export interface Capability { available: boolean; reason: string | null }
@@ -113,7 +118,7 @@ export async function updateDocumentContent(
   markdownContent: string,
   memory?: WritingMemory,
   retractMemoryRevision?: number,
-  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean; baseMarkdown?: string } = {}
+  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean; baseMarkdown?: string; blockIds?: Array<string | null> } = {}
 ): Promise<ContentSaveResult> {
   const { keepalive, ...extra } = options;
   const body = await apiRequest<{ data: any }>(`/documents/${id}/content`, {
