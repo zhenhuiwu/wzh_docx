@@ -90,8 +90,6 @@ class Api:
         return self.call("POST", "/projects", json={"name": name, "ownerId": str(owner), "status": "active"},
                          headers={"Idempotency-Key": f"a07-{uuid.uuid4().hex}"})
 
-    def disable(self, user) -> httpx.Response:
-        return self.raw("POST", f"/users/{user}/disable", json={"expectedRevision": _user_revision(user), "reason": "A05 验收停用"})
 
 
 
@@ -388,7 +386,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             section.get_by_role("button", name="按文档").click()
             doc_row = section.locator(f'[data-testid=overview-assign-doc-row][data-document-id="{did}"]')
             expect(doc_row).to_contain_text("1 / 3 章", timeout=15000)
-            expect(section.locator(f'[data-testid=overview-assign-doc-row]', has_text="测试计划")).to_contain_text("整篇：王测")
+            expect(section.locator('[data-testid=overview-assign-doc-row]', has_text="测试计划")).to_contain_text("整篇：王测")
             doc_row.get_by_test_id("overview-assign-goto").click()
             expect(page.get_by_test_id("assign-panel")).to_be_visible(timeout=60000)
             shot(page, "A07-06-概述去分配")
