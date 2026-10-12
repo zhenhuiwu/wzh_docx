@@ -1,4 +1,5 @@
 """S4：迁移 111–113、惰性回填、重新对齐、down 脚本、结构守卫（01 §8.2 用例 5–11）。"""
+from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
 
 import shutil
 import sqlite3
@@ -52,7 +53,7 @@ def test_legacy_109_database_upgrades_and_backfills_lazily(tmp_path, monkeypatch
     assert migrate() == ["110_project_member_owner_backfill.sql", "111_document_objects.sql",
                          "112_document_changes.sql", "113_document_conflicts.sql", "114_document_objects_deleted_after.sql",
                          "115_document_conflict_mine_snapshots.sql", "116_project_members_v2.sql",
-                         "117_template_versions.sql"]
+                         "117_template_versions.sql", "118_document_assignments.sql"]
     with connect() as connection:
         assert connection.execute("SELECT role FROM project_members WHERE project_id=%s", (project,)).fetchone()["role"] == "owner"
         row = connection.execute("SELECT objects_revision, updated_by, revision FROM documents WHERE id=%s", (document,)).fetchone()
@@ -143,16 +144,16 @@ def test_down_script_restores_110_schema(tmp_path, monkeypatch):
         expected = _schema(connection)
     assert migrate() == ["111_document_objects.sql", "112_document_changes.sql", "113_document_conflicts.sql",
                          "114_document_objects_deleted_after.sql", "115_document_conflict_mine_snapshots.sql",
-                         "116_project_members_v2.sql", "117_template_versions.sql"]
+                         "116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql"]
     # 116/117 与 111–115 无关，按回滚顺序先单独回滚 117、116，再执行 113→111 的 down 脚本
     from app.rollback_migration_117 import rollback as rollback_117
-    assert rollback_117(db.database_path(), apply=True) == 0
+    assert _rb118(db.database_path(), apply=True) == 0 and rollback_117(db.database_path(), apply=True) == 0
     from app.rollback_migration_116 import rollback as rollback_116
     assert rollback_116(db.database_path(), apply=True) == 0
     with connect() as connection:
         connection._conn.executescript(DOWN.read_text(encoding="utf-8"))
         assert _schema(connection) == expected
-    assert len(migrate()) == 7
+    assert len(migrate()) == 8
 
 
 def test_down_script_keeps_legacy_document_tests_green(document_context):  # noqa: F811
