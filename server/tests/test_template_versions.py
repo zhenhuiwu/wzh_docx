@@ -295,6 +295,35 @@ def test_a06_edit_publish_new_doc_old_doc_diff_restore(api):
     assert api.get(f"/template-documents/{td_id}/versions/{v2['versionId']}/file?kind=edited").status_code == 200
 
 
+
+def test_restore_and_reset_write_back_unset_style_values(api):
+    """25 M-2：后加的样式定义（第 1 版里“未设置”）在恢复第 1 版时写回“未设置”；PUT 草稿 null 也能删掉定义。"""
+    td, _ = _template(api)
+    td_id = td["id"]
+    base = _base(api, td_id)
+    v1_id = base["parentVersion"]["versionId"]
+    defined = api.get(f"/template-documents/{td_id}/versions/{v1_id}").json()["data"]["format"]["defined"]["正文"]
+    prop = next(name for name in ("spaceBefore", "spaceAfter", "rightIndent", "leftIndent") if defined.get(name) is None)
+    styles = copy.deepcopy(base["format"]["styles"])
+    styles["正文"][prop] = {"unit": "pt", "value": 6}
+    assert api.send("PUT", f"/template-documents/{td_id}/draft", {"structure": base["structure"], "format": {"styles": styles},
+                                                                    "expectedDraftRevision": 0}).status_code == 200
+    v2 = api.send("POST", f"/template-documents/{td_id}/versions", {"draftRevision": 1, "note": "加段前"})
+    assert v2.status_code == 201, v2.text
+    v2_id = v2.json()["data"]["version"]["versionId"]
+    restored = api.send("POST", f"/template-documents/{td_id}/draft:restore", {"versionId": v1_id, "expectedDraftRevision": 0})
+    assert restored.status_code == 200, restored.text
+    draft = api.get(f"/template-documents/{td_id}/draft").json()["data"]
+    assert draft["draft"]["format"]["styles"]["正文"][prop] is None
+    v3 = api.send("POST", f"/template-documents/{td_id}/versions", {"draftRevision": restored.json()["data"]["draftRevision"], "note": "恢复自第 1 版"})
+    assert v3.status_code == 201, v3.text
+    v3_id = v3.json()["data"]["version"]["versionId"]
+    diff = api.get(f"/template-documents/{td_id}/versions/{v1_id}/diff/{v3_id}").json()["data"]
+    assert diff["summary"]["format"] == 0, diff.get("format")
+    # 格式面板“还原”：在第 2 版基础上直接 PUT null
+    assert api.get(f"/template-documents/{td_id}/versions/{v3_id}").json()["data"]["format"]["defined"]["正文"][prop] is None
+    assert api.get(f"/template-documents/{td_id}/versions/{v2_id}").json()["data"]["format"]["defined"]["正文"][prop] is not None
+
 def _edit_text(structure, block_id, suffix):
     draft = copy.deepcopy(structure)
     block = next(item for item in draft["blocks"] if item["id"] == block_id)

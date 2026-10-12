@@ -87,6 +87,9 @@ def validate_format(candidate, base_styles: dict) -> dict:
             if value == base_styles[key].get(prop):
                 result[key][prop] = value
                 continue
+            if value is None:  # “未设置”：删掉该样式自身对这一项的定义（25 M-2），改为继承
+                result[key][prop] = None
+                continue
             if not validate_value(prop, value):
                 problems.append(_error(None, f"“{key}”的{PROP_LABELS.get(prop, prop)}取值不正确。", style=key, prop=prop))
                 continue

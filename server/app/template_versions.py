@@ -696,14 +696,18 @@ def _validated(merged: dict, current: dict, analysis: dict) -> list[dict]:
 
 
 def _restore_styles(base: dict, current: dict, target: dict) -> dict:
-    """恢复只改“两版定义不同”的样式属性，取目标版本的有效值（不能把定义删掉，就写成同值）。"""
+    """恢复只改“两版定义不同”的样式属性：目标版本自身有定义的取它的有效值，目标版本没有定义的写 None（未设置，25 M-2）。"""
     result = deepcopy(base)
     current_defined, target_defined = current.get("defined"), target.get("defined")
     for key, props in result.items():
         for prop in tw.STYLE_PROPS:
             wanted = (target.get("styles", {}).get(key) or {}).get(prop)
             if current_defined is not None and target_defined is not None:
-                if (current_defined.get(key) or {}).get(prop) == (target_defined.get(key) or {}).get(prop):
+                mine, theirs = (current_defined.get(key) or {}).get(prop), (target_defined.get(key) or {}).get(prop)
+                if mine == theirs:
+                    continue
+                if theirs is None:
+                    props[prop] = None
                     continue
             if wanted is not None and wanted != props.get(prop) and tw.validate_value(prop, wanted):
                 props[prop] = wanted

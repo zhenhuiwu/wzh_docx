@@ -62,7 +62,8 @@ function setMeasure(style: string, prop: string, part: "unit" | "value", event: 
   set(style, prop, { unit: next.unit, value: Number(next.value) });
 }
 function spacingMode(style: string) {
-  const text = String(value(style, "lineSpacing") ?? "1");
+  if (value(style, "lineSpacing") == null) return "unset";
+  const text = String(value(style, "lineSpacing"));
   if (text.startsWith("exact:")) return "exact";
   if (text.startsWith("atLeast:")) return "atLeast";
   return ["1", "1.5", "2"].includes(text) ? text : "multiple";
@@ -79,7 +80,8 @@ function setSpacingNumber(style: string, event: Event) {
   if (!ok) { errors.value = { ...errors.value, [key(style, "lineSpacing")]: mode === "multiple" ? "倍数请填写 0–9.99。" : "磅值请填写 1–99，可带 .5。" }; return; }
   set(style, "lineSpacing", mode === "multiple" ? raw : `${mode}:${raw}`);
 }
-function reset(style: string, prop: string) { const base = props.baseStyles[style]?.[prop]; if (base != null) set(style, prop, base); }
+/** 还原为基准值；基准是“未设置”时写 null（服务端删掉该样式自身的定义，25 M-2）。 */
+function reset(style: string, prop: string) { set(style, prop, props.baseStyles[style]?.[prop] ?? null); }
 onBeforeUnmount(() => timers.forEach(timer => window.clearTimeout(timer)));
 </script>
 
@@ -101,9 +103,9 @@ onBeforeUnmount(() => timers.forEach(timer => window.clearTimeout(timer)));
           </select>
           <div v-else-if="prop === 'lineSpacing'" class="pair">
             <select :id="`fmt-${style}-${prop}`" class="control" :value="spacingMode(style)" :disabled="readonly" @change="setSpacingMode(style, $event)">
-              <option value="1">单倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option><option value="multiple">多倍</option><option value="exact">固定值</option><option value="atLeast">最小值</option>
+              <option v-if="spacingMode(style) === 'unset'" value="unset" disabled>未设置</option><option value="1">单倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option><option value="multiple">多倍</option><option value="exact">固定值</option><option value="atLeast">最小值</option>
             </select>
-            <template v-if="!['1', '1.5', '2'].includes(spacingMode(style))"><input class="control num" type="text" inputmode="decimal" :aria-label="`${style}${label}数值`" :value="spacingNumber(style)" :disabled="readonly" @change="setSpacingNumber(style, $event)" /><span class="unit">{{ spacingMode(style) === 'multiple' ? '倍' : '磅' }}</span></template>
+            <template v-if="!['1', '1.5', '2', 'unset'].includes(spacingMode(style))"><input class="control num" type="text" inputmode="decimal" :aria-label="`${style}${label}数值`" :value="spacingNumber(style)" :disabled="readonly" @change="setSpacingNumber(style, $event)" /><span class="unit">{{ spacingMode(style) === 'multiple' ? '倍' : '磅' }}</span></template>
           </div>
           <div v-else class="pair">
             <input :id="`fmt-${style}-${prop}`" class="control num" type="number" step="0.5" :value="measure(style, prop).value" :disabled="readonly" @change="setMeasure(style, prop, 'value', $event)" />

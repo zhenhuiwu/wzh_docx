@@ -412,7 +412,43 @@ def _child(parent, tag: str, first: bool = False):
     return node
 
 
+def _unset_style_value(style, prop: str) -> None:
+    """删掉样式自身对 prop 的定义（“未设置”，之后按 basedOn / 文档默认继承）；空元素一并去掉。"""
+    def prune(node):
+        while node is not None and node.tag in (qn("w:pPr"), qn("w:rPr"), qn("w:ind"), qn("w:spacing"), qn("w:rFonts")) \
+                and not node.attrib and len(node) == 0 and node.getparent() is not None:
+            parent = node.getparent()
+            parent.remove(node)
+            node = parent if parent is not style else None
+    if STYLE_PROPS[prop] == "char":
+        rpr = style.find(qn("w:rPr"))
+        if rpr is None:
+            return
+        if prop == "size":
+            for tag in ("w:sz", "w:szCs"):
+                for node in rpr.findall(qn(tag)):
+                    rpr.remove(node)
+            prune(rpr)
+            return
+        fonts = rpr.find(qn("w:rFonts"))
+        if fonts is not None:
+            names = ("eastAsia", "eastAsiaTheme") if prop == "fontEastAsia" else ("ascii", "hAnsi", "asciiTheme", "hAnsiTheme")
+            for name in names:
+                fonts.attrib.pop(qn("w:" + name), None)
+            prune(fonts)
+        return
+    tag, names = _DIRECT_ATTRS[prop]
+    node = style.find(qn("w:pPr") + "/" + qn("w:" + tag))
+    if node is not None:
+        for name in names:
+            node.attrib.pop(qn("w:" + name), None)
+        prune(node)
+
+
 def _set_style_value(doc, style, prop: str, value) -> None:
+    if value is None:
+        _unset_style_value(style, prop)
+        return
     if STYLE_PROPS[prop] == "char":
         rpr = _child(style, "w:rPr")
         if prop == "size":
@@ -576,7 +612,7 @@ def impact_on(doc, changes: list[dict], path_to_id: dict[str, str], limit: int =
         block_ids, direct_ids = ids(affected), ids(direct)
         items.append({"style": change["style"], "prop": prop, "before": effective_style_value(doc, style, prop),
                       "after": change.get("value"), "affectedParagraphs": len(affected),
-                      "directFormatParagraphs": len(direct), "willClear": len(direct),
+                      "directFormatParagraphs": len(direct), "willClear": 0 if change.get("value") is None else len(direct),
                       "blockIds": block_ids[:limit], "directBlockIds": direct_ids[:limit],
                       "truncated": len(block_ids) > limit or len(direct_ids) > limit})
     return items
@@ -594,6 +630,8 @@ def apply_style_changes(doc, changes: list[dict]) -> None:
         plan.append((style, change, [p for p in paragraphs if _affected(p, style, change["prop"], by_id, default)]))
     for style, change, affected in plan:
         _set_style_value(doc, style, change["prop"], change["value"])
+        if change["value"] is None:  # 还原为“未设置”只删样式定义，不动段落自带格式
+            continue
         for paragraph in affected:
             clear_direct(paragraph, change["prop"])
 
