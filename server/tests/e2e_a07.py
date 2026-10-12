@@ -304,7 +304,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(mine).to_have_attribute("data-mine", "")
             assert theirs.evaluate("n => getComputedStyle(n).color") != mine.evaluate("n => getComputedStyle(n).color")
             assert "王测" in theirs.evaluate("n => getComputedStyle(n, '::before').content")
-            expect(page2.get_by_test_id("mine-intro")).to_contain_text("你负责本文档的 1 处内容")
+            expect(page2.get_by_test_id("skill-settings-open")).to_be_disabled()   # 27 复验 N-3 / Q-5
+            expect(page2.get_by_test_id("mine-intro")).to_contain_text("你负责本文档的 1 章，其他部分只读。")
             expect(page2.get_by_test_id("outline-filter-mine")).to_have_text("我的部分 1")
             expect(page2.locator(".outline-item")).to_have_count(1)
             page2.get_by_test_id("outline-filter-all").click()
@@ -352,6 +353,19 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             else:
                 raise AssertionError("暂存的字没有保存到我的段落")
             wait_saved(page2)
+            assert "# 概述\n" in admin.call("GET", f"/documents/{did}")["markdownContent"], "暂存不能写进标题"
+            # 复验 N-2：同一章先点标题再点段落，每次都有提示；暂存只保留这次的输入
+            page2.locator(".paper-content h1", has_text="功能需求").first.click()
+            expect(hint).to_be_visible()
+            para(page2, "功能需求第二段").click()
+            expect(hint).to_be_visible()
+            page2.keyboard.type("XY")
+            expect(hint.get_by_test_id("locked-stash")).to_have_text(re.compile("刚才输入的“XY”已暂存"))
+            para(page2, "附录第一段").click()
+            expect(hint).to_contain_text("该段尚未分配")
+            page2.keyboard.type("Z")
+            expect(hint.get_by_test_id("locked-stash")).to_contain_text("刚才输入的“Z”已暂存")
+            hint.get_by_role("button", name="复制").click()
         g2()
 
         @step("G2b 在自己段首按退格不会并入别人的段（前端拦下并提示）")
@@ -504,6 +518,35 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page.get_by_test_id("assign-filter-unassigned")).to_have_attribute("aria-pressed", "true")
             shot(page, "A07-06-概述去分配")
         g9()
+
+        @step("G12 负责人操作失败要有提示（REVISION_CONFLICT）；负责人停用后行内“负责人已停用”与“需改派”筛选")
+        def g12():
+            open_doc(page, pid, did)
+            page.get_by_test_id("assign-open").click()
+            panel = page.get_by_test_id("assign-panel")
+            expect(panel.get_by_test_id("assign-heading")).to_have_count(3)
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            admin.call("PUT", f"/documents/{did}/assignment-mode", json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            panel.get_by_test_id("assign-mode-toggle").click()
+            page.get_by_test_id("assign-mode-confirm-ok").click()
+            expect(panel.get_by_test_id("assign-error")).to_contain_text("分工刚被 系统管理员 调整过，已显示最新，请确认后再切换。", timeout=15000)
+            view = admin.call("GET", f"/documents/{did}/assignments")
+            if view["assignmentMode"] != "enforced":
+                admin.call("PUT", f"/documents/{did}/assignment-mode", json={"mode": "enforced", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            account = next(item for item in admin.call("GET", "/users", params={"account": f"wangce{RUN}"})["items"] if item["id"] == str(users["wangce"]))
+            admin.call("POST", f"/users/{users['wangce']}/disable", json={"reason": "A07 验收", "expectedRevision": account["revision"]})
+            try:
+                open_doc(page, pid, did)
+                page.get_by_test_id("assign-open").click()
+                row = panel.get_by_test_id("assign-heading").filter(has_text="功能需求")
+                expect(row.get_by_test_id("assign-needs-reassign")).to_have_text("负责人已停用", timeout=15000)
+                panel.get_by_test_id("assign-filter-reassign").click()
+                expect(panel.get_by_test_id("assign-heading")).to_have_count(1)
+                shot(page, "A07-08-负责人已停用")
+            finally:
+                account = next(item for item in admin.call("GET", "/users", params={"account": f"wangce{RUN}"})["items"] if item["id"] == str(users["wangce"]))
+                admin.call("POST", f"/users/{users['wangce']}/enable", json={"reason": "A07 验收", "expectedRevision": account["revision"]})
+        g12()
 
         login(page2, f"liuyang{RUN}")
         liuyang = Api(f"liuyang{RUN}")

@@ -101,3 +101,53 @@ def test_derived_write_paths_store_rejected(ctx):
                        {"expectedRevision": revision, "afterIndex": other, "placement": "child", "title": "越权子标题"})
     assert response.status_code == 409 and response.json()["error"]["details"].get("rejectedSaveId"), response.text
     assert _counts(did)[4] == before + 2
+
+
+# ---------------------------------------------------------------- 27 复验 M-3 / N-3
+
+def _section_body(ctx, did, heading):
+    pairs = ctx.state(did)[2]
+    for index, (_i, block) in enumerate(pairs):
+        if block.kind == "heading" and heading in block.body:
+            return next(b.body for _j, b in pairs[index + 1:] if b.kind != "heading")
+    raise AssertionError(heading)
+
+
+def test_selection_ai_precheck_by_selected_blocks(ctx, monkeypatch):
+    calls = []
+    import app.documents as documents
+    from app.document_selection import selection_blocks
+    monkeypatch.setattr(documents, "require_ai", lambda *a, **k: calls.append("ai"))
+    doc = ctx.as_("owner").create()
+    did = doc["id"]
+    ctx.assign(did, [ctx.heading(did, "功能需求")], ["wang"])
+    ctx.as_("wang")
+    record = ctx.ok("GET", f"/documents/{did}")
+
+    def body(text, extra=None):
+        block = next(item for item in selection_blocks(record["markdownContent"]) if item["text"].strip() == text.strip())
+        word = block["text"][:2]
+        return {"expectedRevision": record["revision"], "scope": "selection", "selectedText": word,
+                "selection": {"blockId": block["blockId"], "start": 0, "end": len(word), "text": word}, **(extra or {})}
+    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "性能需求")))
+    assert response.status_code == 409 and response.json()["error"]["details"]["reason"] == "ai_scope", response.text
+    assert calls == []
+    other = next(i for i, b in ctx.state(did)[2] if b.kind != "heading" and b.body == _section_body(ctx, did, "性能需求"))
+    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求"), {"selectionBlockIds": [other]}))
+    assert response.status_code == 409, response.text                        # 前端报的选区块里有别人的
+    assert calls == []
+    ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求")))
+    assert calls == ["ai"]
+
+
+def test_document_instructions_owner_only_on_enforced(ctx):
+    doc = ctx.as_("owner").create()
+    did = doc["id"]
+    ctx.assign(did, [ctx.heading(did, "功能需求")], ["wang"])
+    ctx.as_("wang")
+    revision = ctx.ok("GET", f"/documents/{did}")["revision"]
+    response = ctx.req("PATCH", f"/documents/{did}/writing-skill", {"expectedRevision": revision, "mode": "auto", "documentInstructions": "全篇用第三人称"})
+    assert response.status_code == 403 and response.json()["error"]["details"]["reason"] == "assignment", response.text
+    ctx.as_("owner")
+    response = ctx.req("PATCH", f"/documents/{did}/writing-skill", {"expectedRevision": revision, "mode": "auto", "documentInstructions": "全篇用第三人称"})
+    assert response.status_code == 200, response.text

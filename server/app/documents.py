@@ -213,6 +213,7 @@ class SectionDraftBody(BaseModel):
     instruction: str = Field(default="", max_length=2000)
     scope: Literal["section", "selection", "document"] = "section"
     selection: DocumentSelectionBody | None = None
+    selectionBlockIds: list[str] | None = Field(default=None, max_length=5000)
 
 
 class SectionInsertBody(MergeOptions):
@@ -419,6 +420,11 @@ def set_document_skill(request: Request, document_id: str, body: DocumentSkillBo
                 snapshot = {"mode": body.mode}
             snapshot["documentInstructions"] = body.documentInstructions.strip()
             if snapshot != current:
+                # 27 复验 N-3 / 03 Q-5（待用户确认）：按分工编辑的文档上，整篇的编写规范与写作要求只有项目负责人和管理员能改
+                from app.document_assignments import actor_scope, restricted
+                if restricted(*actor_scope(conn, did, session.user_id)):
+                    raise AppError(403, "FORBIDDEN", "按分工编辑的文档，编写规范和整篇写作要求只有项目负责人可以修改。",
+                                   details={"reason": "assignment"})
                 ensure_document_objects(conn, did)
                 record_current_version(conn, did, expected_revision=row[12])
                 template = {**row[6], "writingSkill": snapshot}
@@ -1100,7 +1106,11 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
             raise AppError(422, "SELECTION_REQUIRED", "请重新选择正文并生成，选区必须包含具体段落和位置。")
         # Reject protected Word locations before spending a model call.
         with connect() as connection:
-            _check_word(connection, row, _replace_selection(row[7], body.selection, body.selection.text + "（编写位置检查）"))
+            probe = _replace_selection(row[7], body.selection, body.selection.text + "（编写位置检查）")
+            _check_word(connection, row, probe)
+            # 27 复验 M-3：选中文字的 AI 也在调用模型前按所选块的归属预检
+            from app.document_assignments import selection_precheck
+            selection_precheck(connection, did, session.user_id, probe, body.selectionBlockIds or [])
     if whole_document and (body.headingIndex is not None or body.selectedText is not None):
         raise AppError(422, "VALIDATION_FAILED", "全文编辑不能同时指定章节或选中文字。")
     if not whole_document and body.headingIndex is None and not (body.selectedText or "").strip():

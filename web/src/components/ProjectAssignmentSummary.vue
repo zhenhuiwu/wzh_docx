@@ -44,7 +44,7 @@ defineExpose({ load, showPerson });
         <span v-if="doc.assignmentMode === 'open'" class="tag plain">不限制分工</span>
         <span class="num">{{ doc.sectionsAssigned }} / {{ doc.sectionsTotal }} 章</span>
         <router-link v-if="doc.unassignedSections" class="text" data-testid="overview-assign-unassigned" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: { assign: '1', filter: 'unassigned' } }">未分配 {{ doc.unassignedSections }} 章</router-link>
-        <router-link v-if="data?.canAssign ?? canAssign" class="text" data-testid="overview-assign-goto" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: { assign: '1' } }">去分配</router-link>
+        <router-link v-if="data?.canAssign ?? canAssign" class="text" data-testid="overview-assign-goto" :to="{ name: 'document', params: { id: projectId, documentId: doc.documentId }, query: doc.unassignedSections ? { assign: '1', filter: 'unassigned' } : { assign: '1' } }">去分配</router-link>
       </li>
       <li v-if="!docs.length" class="empty">还没有文档。</li>
     </ul>

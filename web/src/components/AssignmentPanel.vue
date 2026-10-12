@@ -35,12 +35,16 @@ const headings = computed(() => props.objects.filter(item => item.kind === "head
     explicitIds: explicit?.assignees.map(person => person.id) ?? [],
     ownerIds: resolved?.owners.map(person => person.id) ?? [],
     inherited: !explicit && resolved?.owners.length ? resolved.owners.map(person => person.name).join("、") : "",
-    needsConfirm: Boolean(explicit?.needsConfirm) };
+    needsConfirm: Boolean(explicit?.needsConfirm),
+    // 16 §4.3：显式负责人里有已停用（或已不是编写成员）的 → 需改派
+    disabled: Boolean(explicit?.assignees.some(person => person.userActive === false || person.stillMember === false)) };
 }));
 const wholeOwner = computed(() => explicitOf(DOCUMENT_TARGET)?.assignees[0]?.id || "");
 const eligible = computed(() => people.value.filter(person => person.role === "owner" || person.role === "editor"));
 const canAssign = computed(() => Boolean(view.value?.canAssign));
+const reassignCount = computed(() => headings.value.filter(item => item.disabled).length);
 const shown = computed(() => headings.value.filter(item => filter.value === "unassigned" ? !item.ownerIds.length
+  : filter.value === "reassign" ? item.disabled
   : filter.value.startsWith("person:") ? item.ownerIds.includes(filter.value.slice(7)) : true));
 function choosePerson(id: string) { personFilter.value = id; filter.value = id ? `person:${id}` : "all"; }
 function openPick(target: string, current: string[]) { picking.value = target; pickIds.value = [...current]; }
@@ -55,7 +59,11 @@ const nameOf = (id: string) => people.value.find(person => person.id === id)?.na
 
 function failText(caught: unknown) {
   if (caught instanceof ApiError) {
-    if (caught.code === "REVISION_CONFLICT") return "分工刚被其他人调整过，已显示最新，请重新操作。";
+    if (caught.code === "REVISION_CONFLICT") {
+      const who = (caught.details?.lastActor as { name?: string } | null | undefined)?.name;
+      return `分工刚被${who ? ` ${who} ` : "其他人"}调整过，已显示最新，请确认后再切换。`;
+    }
+    if (caught.code === "PROJECT_ARCHIVED") return "项目已归档，不能修改分工。";
     return caught.message;
   }
   return caught instanceof Error ? caught.message : "操作失败。";
@@ -72,9 +80,12 @@ async function run(action: () => Promise<unknown>) {
   if (!view.value || busy.value) return;
   busy.value = true;
   error.value = "";
-  try { await action(); emit("changed"); } catch (caught) { error.value = failText(caught); }
+  let failed = "";
+  try { await action(); emit("changed"); } catch (caught) { failed = failText(caught); }
   busy.value = false;
   await load();
+  // 复验 N-3：load() 会清空错误，操作失败的提示放在重新读取之后
+  if (failed) error.value = failed;
 }
 const assign = (objectIds: string[], assignees: string[]) =>
   run(() => putAssignments(props.documentId, objectIds, assignees, view.value!.assignmentsRevision));
@@ -123,6 +134,7 @@ defineExpose({ load });
       <div class="assign-filter" role="group" aria-label="筛选">
         <button type="button" class="subtle sm" :class="{ on: filter === 'all' }" :aria-pressed="filter === 'all'" data-testid="assign-filter-all" @click="choosePerson('')">全部</button>
         <button type="button" class="subtle sm" :class="{ on: filter === 'unassigned' }" :aria-pressed="filter === 'unassigned'" data-testid="assign-filter-unassigned" @click="filter = 'unassigned'; personFilter = ''">未分配</button>
+        <button v-if="reassignCount" type="button" class="subtle sm" :class="{ on: filter === 'reassign' }" :aria-pressed="filter === 'reassign'" data-testid="assign-filter-reassign" @click="filter = 'reassign'; personFilter = ''">需改派 {{ reassignCount }}</button>
         <select class="control sm" :value="personFilter" aria-label="按人筛选" data-testid="assign-filter-person" @change="choosePerson(($event.target as HTMLSelectElement).value)">
           <option value="">某人…</option>
           <option v-for="person in eligible" :key="person.id" :value="person.id">{{ person.name }}</option>
@@ -140,6 +152,7 @@ defineExpose({ load });
           <input v-if="canAssign" v-model="selected" type="checkbox" :value="item.id" :aria-label="`选择 ${item.text}`" />
           <span class="assign-title" :title="item.text">{{ item.text }}</span>
           <span v-if="item.needsConfirm" class="tag warning">待确认</span>
+          <span v-if="item.disabled" class="tag warning" data-testid="assign-needs-reassign">负责人已停用</span>
           <span class="assign-who" data-testid="assign-who" :title="item.explicit || item.inherited">{{ item.explicit || (item.inherited ? `随上级（${item.inherited}）` : '未分配') }}</span>
           <button v-if="canAssign" type="button" class="ghost sm" :disabled="busy" :aria-label="`${item.text} 的编写人`" data-testid="assign-edit" @click="openPick(item.id, item.explicitIds)">分配</button>
           <div v-if="picking === item.id" class="assign-pick" data-testid="assign-pick" role="group" :aria-label="`${item.text} 的编写人`">

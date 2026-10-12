@@ -179,8 +179,31 @@ const mineIntroOff = ref(false);
 const outlineFilter = ref<"all" | "mine" | null>(null);
 const noAssignNotice = ref("");
 let noAssignReadonly = false;
-const stashKey = () => `docwb.a07.stash.${document.value?.id ?? ""}`;
-function persistStash() { try { if (lockedStash.value) localStorage.setItem(stashKey(), lockedStash.value); else localStorage.removeItem(stashKey()); } catch { /* 存不了就只在本页 */ } }
+// 复验 N-1：暂存按“用户 + 文档”存，只保留本次连续输入（来源块 + 时间），换块或停顿 20 秒后重新开始
+const stashKey = () => `docwb.a07.stash.${account()}.${document.value?.id ?? ""}`;
+let stashSource = "";
+let stashAt = 0;
+function persistStash() {
+  try {
+    if (lockedStash.value) localStorage.setItem(stashKey(), JSON.stringify({ text: lockedStash.value, source: stashSource, at: stashAt }));
+    else localStorage.removeItem(stashKey());
+  } catch { /* 存不了就只在本页 */ }
+}
+function addStash(text: string, node: Element | null, fresh = false) {
+  if (!text) return;
+  const source = node?.getAttribute("data-object-id") || "";
+  const now = Date.now();
+  lockedStash.value = !fresh && source === stashSource && now - stashAt < 20000 ? lockedStash.value + text : text;
+  stashSource = source; stashAt = now;
+  persistStash();
+}
+function readStash() {
+  try {
+    const raw = localStorage.getItem(stashKey());
+    const item = raw ? JSON.parse(raw) as { text?: string; source?: string; at?: number } : null;
+    lockedStash.value = item?.text || ""; stashSource = item?.source || ""; stashAt = item?.at || 0;
+  } catch { lockedStash.value = ""; }
+}
 let baselineObjects: BaselineObject[] = [];
 let ownershipSeq = 0;
 const assignMode = computed(() => document.value?.permissions?.assignmentMode ?? null);
@@ -188,8 +211,15 @@ const assignMode = computed(() => document.value?.permissions?.assignmentMode ??
 const assignRestricted = computed(() => (assignInfo.value?.mode ?? assignMode.value) === "enforced" && document.value?.permissions?.projectRole === "editor" && !document.value?.permissions?.canAssign);
 const canAssignDoc = computed(() => Boolean(document.value?.permissions?.canAssign));
 const mineStarts = computed(() => assignInfo.value ? mineRegions(assignInfo.value.order, assignInfo.value.editable) : []);
+/** 复验建议：提示条、目录、分工变化提示统一按章节计数（没有章节时按段）。 */
+function countText(ids: string[], headings: string[]) {
+  const set = new Set(headings);
+  const chapters = ids.filter(id => set.has(id)).length;
+  return chapters ? `${chapters} 章` : `${ids.length} 段`;
+}
+const mineCountText = computed(() => assignInfo.value ? countText([...assignInfo.value.editable].filter(id => assignInfo.value!.order.includes(id)), assignInfo.value.headings) : "");
 const mineIntro = computed(() => assignRestricted.value && !mineIntroOff.value && Boolean(assignInfo.value?.editable.size) && !noAssignReadonly
-  ? `你负责本文档的 ${mineStarts.value.length} 处内容，其他部分只读。` : "");
+  ? `你负责本文档的 ${mineCountText.value}，其他部分只读。` : "");
 let ownershipPending: Promise<void> | null = null;
 function refreshOwnership(record = document.value): Promise<void> {
   const task = loadOwnership(record);
@@ -216,7 +246,7 @@ async function loadOwnership(record = document.value) {
       else editableIds.add(item.id);
     }
     const prev = assignInfo.value;
-    if (!prev) { try { lockedStash.value = localStorage.getItem(stashKey()) || ""; mineIntroOff.value = localStorage.getItem(`${stashKey()}.intro`) === "1"; } catch { /* 无本机存储 */ } }
+    if (!prev) { try { readStash(); mineIntroOff.value = localStorage.getItem(`${stashKey()}.intro`) === "1"; } catch { /* 无本机存储 */ } }
     assignInfo.value = { revision: data.assignmentsRevision ?? record.permissions?.assignmentsRevision ?? 0, locked, restricted: false,
       order: data.objects.map(item => item.id), headings: data.objects.filter(item => item.kind === "heading").map(item => item.id),
       editable: editableIds, projectOwner: view?.projectOwners?.[0]?.name ?? prev?.projectOwner ?? "", mode: view?.assignmentMode ?? prev?.mode ?? assignMode.value };
@@ -224,7 +254,8 @@ async function loadOwnership(record = document.value) {
     if (record.permissions && view) record.permissions.assignmentMode = view.assignmentMode;
     applyLocks();
     noteOwnershipChange(prev, assignInfo.value);
-    if (!prev && assignInfo.value.restricted && editableIds.size && !route.hash) void nextTick(() => locateMine(false));
+    if (!prev && assignInfo.value.restricted && editableIds.size && !route.hash) void nextTick(() => locateMine(!localDraft.value));
+    if (!prev && assignInfo.value.restricted) settleDraftOwnership();
   } catch { /* 读不到归属时不锁，保存仍由服务器把关 */ }
 }
 /** 整篇保存附带的块标识：对象模型可用时总是带（编写人员在 enforced 文档上缺了会被 422）。 */
@@ -244,17 +275,19 @@ function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<ty
   if (!prev || prev.revision === next.revision) return;
   const who = owner ? `项目负责人 ${owner}` : "项目负责人";
   if (prev.mode !== next.mode) {
-    if (next.mode === "enforced" && next.restricted) assignNotice.value = { tone: "info", text: `${who} 开启了按分工编辑，你只能修改分配给你的部分（${mineRegions(next.order, next.editable).length} 处）。`, locate: next.editable.size > 0 };
+    if (next.mode === "enforced" && next.restricted) assignNotice.value = { tone: "info", text: `${who} 开启了按分工编辑，你只能修改分配给你的部分（${countText(next.order.filter(id => next.editable.has(id)), next.headings)}）。`, locate: next.editable.size > 0 };
     else if (next.mode === "open") assignNotice.value = { tone: "info", text: `${who} 改为开放编辑，你现在可以修改全部内容。` };
     if (next.mode === "enforced" && next.restricted && isDirty.value) assignNotice.value = { ...assignNotice.value!, tone: "warning", text: `${assignNotice.value!.text}你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
     return;
   }
   if (!next.restricted) return;
-  const gained = next.order.filter(id => next.editable.has(id) && prev.locked.has(id)).length;
-  const lost = next.order.filter(id => next.locked.has(id) && prev.editable.has(id)).length;
-  if (lost && isDirty.value) assignNotice.value = { tone: "warning", text: `分工已调整：有 ${lost} 处改由他人负责，你现在只能查看。你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
-  else if (lost) assignNotice.value = { tone: "info", text: `分工已调整：有 ${lost} 处改由他人负责，你现在只能查看。` };
-  else if (gained) assignNotice.value = { tone: "info", text: `分工已调整：新分配给你 ${gained} 处，现在可以修改。`, locate: true };
+  const gainedIds = next.order.filter(id => next.editable.has(id) && prev.locked.has(id));
+  const lostIds = next.order.filter(id => next.locked.has(id) && prev.editable.has(id));
+  const gained = gainedIds.length ? countText(gainedIds, next.headings) : "";
+  const lost = lostIds.length ? countText(lostIds, next.headings) : "";
+  if (lost && isDirty.value) assignNotice.value = { tone: "warning", text: `分工已调整：有 ${lost}改由他人负责，你现在只能查看。你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
+  else if (lost) assignNotice.value = { tone: "info", text: `分工已调整：有 ${lost}改由他人负责，你现在只能查看。` };
+  else if (gained) assignNotice.value = { tone: "info", text: `分工已调整：新分配给你 ${gained}，现在可以修改。`, locate: true };
 }
 function nodeOf(id: string | null | undefined): HTMLElement | null {
   return id ? editor.value?.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(id)}"]`) ?? null : null;
@@ -270,31 +303,71 @@ function locateMine(focus = true) {
   range.selectNodeContents(node); range.collapse(true);
   const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
 }
+/** 复验 N-4：本机草稿里不归我改的部分不能“恢复并保存”（必然被拒）：这些放进暂存，草稿只留我负责部分的修改；全部不归我时删掉草稿。 */
+function settleDraftOwnership() {
+  const record = document.value, info = assignInfo.value;
+  if (!record || !info || !baselineObjects.length) return;
+  const drafts = localDrafts.value.filter(draft => draft.wholeDocument);
+  for (const draft of drafts) {
+    if (!draft.markdown) continue;
+    const kept = keepMineOnly(draft.markdown, baselineObjects, info.editable);
+    if (!kept.stashed.length) continue;
+    addStash(kept.stashed.join("\n\n"), null, true);
+    const server = baselineObjects.map(item => item.markdown).join("\n\n") + "\n";
+    if (kept.markdown === server) {
+      removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
+      localDrafts.value = localDrafts.value.filter(item => item !== draft);
+    } else draft.markdown = kept.markdown;
+    noteAction("本机草稿里有不归你负责的修改，已放入暂存，可以复制。", 10000);
+  }
+  localDraft.value = localDrafts.value[0] ?? null;
+}
+/** 选区覆盖的对象 ID（选中文字的 AI 预检用）。 */
+function selectionObjectIds(): string[] {
+  const root = editor.value;
+  if (!root || !selectedRange) return [];
+  return [...root.querySelectorAll<HTMLElement>("[data-object-id]")].filter(node => selectedRange!.intersectsNode(node)).map(node => node.getAttribute("data-object-id") || "").filter(Boolean);
+}
 function dismissMineIntro() { mineIntroOff.value = true; try { localStorage.setItem(`${stashKey()}.intro`, "1"); } catch { /* 无本机存储 */ } }
 function copyStash() {
   const text = lockedStash.value;
-  void navigator.clipboard?.writeText(text).then(() => noteAction("已复制暂存的内容。", 4000), () => noteAction("复制失败，请手动选择复制。", 6000));
+  void navigator.clipboard?.writeText(text).then(() => { noteAction("已复制暂存的内容。", 4000); if (lockedStash.value === text) clearStash(); }, () => noteAction("复制失败，请手动选择复制。", 6000));
 }
-/** 把暂存的字放到当前只读块之后我负责的下一处（没有就第一处）的末尾。 */
+/** 复验 N-1：把暂存的字放到只读块之后我负责的下一处（后面没有就前面最近一处）：该处最后一个正文块的末尾；只有标题时新起一段。不写进标题。 */
 function placeStash() {
   const root = editor.value;
   const text = lockedStash.value;
   if (!root || !text || readonly.value) return;
-  const from = nodeOf(lockedBubble.value?.id);
-  const mine = [...root.querySelectorAll<HTMLElement>("[data-mine]")];
-  // 只读块之后我负责的下一处；后面没有就放到它前面最近的一处
-  const target = (from ? mine.find(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
+  const from = nodeOf(lockedBubble.value?.id || stashSource);
+  const all = [...root.querySelectorAll<HTMLElement>("[data-object-id]")].filter(node => !node.parentElement?.closest("[data-object-id]"));
+  const mine = all.filter(node => node.hasAttribute("data-mine"));
+  const start = (from ? mine.find(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
     ?? mine.filter(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING).pop() : undefined) ?? mine[0];
-  if (!target) { noteAction("你还没有可以修改的部分，请先复制暂存的内容。", 6000); return; }
+  if (!start) { noteAction("你还没有可以修改的部分，请先复制暂存的内容。", 6000); return; }
+  // 连续的一处：从 start 所在位置向两边扩展
+  let lo = all.indexOf(start), hi = lo;
+  while (lo > 0 && all[lo - 1].hasAttribute("data-mine")) lo -= 1;
+  while (hi < all.length - 1 && all[hi + 1].hasAttribute("data-mine")) hi += 1;
+  const region = all.slice(lo, hi + 1);
+  const isHeading = (node: Element) => /^H[1-6]$/.test(node.tagName);
+  const body = region.filter(node => !isHeading(node)).pop();
+  const anchor = body ?? region[region.length - 1];
+  let target: Element = anchor;
+  if (anchor.tagName === "UL" || anchor.tagName === "OL") target = anchor.lastElementChild ?? anchor;
   root.focus({ preventScroll: true });
   const range = window.document.createRange();
   range.selectNodeContents(target); range.collapse(false);
   const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+  if (!body) {
+    // 只有标题：在标题后新起一段正文
+    if (!window.document.execCommand("insertParagraph")) return;
+    if (/^H[1-6]$/.test((window.getSelection()?.anchorNode instanceof Element ? window.getSelection()!.anchorNode as Element : window.getSelection()?.anchorNode?.parentElement)?.closest("h1,h2,h3,h4,h5,h6")?.tagName || "")) window.document.execCommand("formatBlock", false, "p");
+  }
   if (!window.document.execCommand("insertText", false, text)) return;
-  target.scrollIntoView({ block: "center" });
-  lockedStash.value = ""; persistStash(); lockedBubble.value = null;
+  anchor.scrollIntoView({ block: "center" });
+  lockedStash.value = ""; stashSource = ""; persistStash(); lockedBubble.value = null;
 }
-function clearStash() { lockedStash.value = ""; persistStash(); }
+function clearStash() { lockedStash.value = ""; stashSource = ""; persistStash(); }
 /** 把不能修改的顶层块设为只读（列表按条目）。只动本函数加的标记，不碰服务端的 data-word-protected。 */
 function applyLocks() {
   const root = editor.value;
@@ -329,7 +402,15 @@ function showLockedHint(node: Element) {
   window.clearTimeout(lockedHintTimer);
   lockedHintTimer = window.setTimeout(() => { lockedBubble.value = null; }, lockedStash.value ? 12000 : 5000);
 }
-function hideLockedBubble() { if (lockedBubble.value) lockedBubble.value = null; }
+/** 复验 N-2：滚动时跟着块移动（点击引起的滚动不能把刚弹出的提示关掉）；块离开视口才收起。 */
+function hideLockedBubble() {
+  const bubble = lockedBubble.value;
+  if (!bubble) return;
+  const node = nodeOf(bubble.id);
+  const rect = node?.getBoundingClientRect();
+  if (!rect || rect.bottom < 0 || rect.top > window.innerHeight) { lockedBubble.value = null; return; }
+  lockedBubble.value = { ...bubble, top: Math.min(rect.bottom + 6, window.innerHeight - 120), left: Math.max(8, Math.min(rect.left, window.innerWidth - 380)) };
+}
 /** 29 M-2：只读块里按键（含删除、回车）被拦下并提示；可见字符记进暂存。窗口级捕获：光标在只读块里时焦点可能不在编辑区。 */
 /** 最近点中的只读块：浏览器不一定把光标放进 contenteditable=false 的块，按键时以它为准，直到点到别处。 */
 let lockedFocus: Element | null = null;
@@ -346,7 +427,7 @@ function guardLockedKey(event: KeyboardEvent) {
   if (!node) return;
   event.preventDefault();
   event.stopPropagation();
-  if (printable) { lockedStash.value += event.key; persistStash(); }
+  if (printable) addStash(event.key, node);
   showLockedHint(node);
 }
 function guardLockedComposition() {
@@ -390,7 +471,7 @@ function guardLocked(event: InputEvent) {
   const node = assignLockedNode(event.inputType || "");
   if (node) {
     event.preventDefault();
-    if (event.data && /^insert(Text|FromComposition|ReplacementText)$/.test(event.inputType)) { lockedStash.value += event.data; persistStash(); }
+    if (event.data && /^insert(Text|FromComposition|ReplacementText)$/.test(event.inputType)) addStash(event.data, node);
     showLockedHint(node);
   }
 }
@@ -2202,7 +2283,15 @@ function captureEditorTarget() {
   const parts = selectionParts(range);
   const text = parts?.text || range.toString();
   const insideHeading = index >= 0 && headings[index].contains(range.startContainer) && headings[index].contains(range.endContainer);
-  if (!range.collapsed && text.trim() && parts && text.length <= 8000) {
+  // 27 复验 M-3：选区碰到只读（他人负责 / 未分配）内容时不能用 AI 改写
+  const touchesLocked = !range.collapsed && [...editor.value.querySelectorAll("[data-a07-lock]")].some(node => range.intersectsNode(node));
+  if (touchesLocked && text.trim()) {
+    clearAiDraft();
+    selectedText.value = "";
+    selectedRange = null;
+    aiScope.value = "selection";
+    aiError.value = "所选范围包含他人负责的内容，请只选择你负责的部分。";
+  } else if (!range.collapsed && text.trim() && parts && text.length <= 8000) {
     if (!selectedRange || selectedRange.compareBoundaryPoints(Range.START_TO_START, range) !== 0 || selectedRange.compareBoundaryPoints(Range.END_TO_END, range) !== 0 || selectedText.value !== text) clearAiDraft();
     selectedText.value = text;
     selectedRange = range.cloneRange();
@@ -2341,7 +2430,7 @@ async function generateSection() {
         }
       }
       aiPreviewHtml.value = DOMPurify.sanitize(html, { FORBID_TAGS: [...(aiScope.value === "selection" ? ["img"] : []), "iframe", "form", "input", "button", "textarea"] });
-    }, controller.signal, aiScope.value, draftSelection);
+    }, controller.signal, aiScope.value, draftSelection, aiScope.value === "selection" ? selectionObjectIds() : undefined);
   } catch (error) {
     if (current() && !aiStopped.value) {
       aiComplete.value = false;
@@ -3446,7 +3535,7 @@ async function saveMineOnly() {
     const result = await updateDocumentContent(record.id, data.documentRevision, kept.markdown, undefined, undefined,
       { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds: assignBlockIds(kept.markdown, base) });
     if (document.value !== record) return;
-    if (kept.stashed.length) { lockedStash.value = [lockedStash.value, ...kept.stashed].filter(Boolean).join("\n\n"); persistStash(); }
+    if (kept.stashed.length) { addStash(kept.stashed.join("\n\n"), null, true); }
     pendingKey = null; blocked.value = null; rejected.value = null; assignNotice.value = null; retrying.value = false;
     if (rejectedOpen.value) rejectedOpen.value = false;
     await acceptContent({ markdownContent: result.markdownContent ?? kept.markdown, revision: result.revision, status: result.status }, { reason: "正在载入保存后的内容…" });
@@ -3578,7 +3667,7 @@ async function pasteContent(event: ClipboardEvent) {
   if (lockedNode) {
     event.preventDefault();
     const pasted = event.clipboardData.getData("text/plain");
-    if (pasted) { lockedStash.value += pasted; persistStash(); }
+    if (pasted) addStash(pasted, lockedNode);
     showLockedHint(lockedNode);
     return;
   }
@@ -4268,7 +4357,7 @@ onUnmounted(() => {
             <button type="button" class="subtle tool" title="编号列表" aria-label="编号列表" @mousedown.prevent @click="format('insertOrderedList')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10" /><path d="M4 5l1.5-1v5M3.5 14.5a1.5 1.5 0 1 1 2.5 1.2L3.5 19H6" /></svg></button>
             <span class="divider-v" aria-hidden="true"></span>
             <button type="button" class="subtle tool" :disabled="saving || addingHeading || aiLocked || Boolean(aiUnavailable('diagram'))" :title="aiUnavailable('diagram') || undefined" @mousedown.prevent @click="openDiagrams"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="7" height="6" rx="1" /><rect x="13.5" y="14" width="7" height="6" rx="1" /><path d="M7 10v4.5a2 2 0 0 0 2 2h4.5" /></svg>Visio 图表</button>
-            <button type="button" class="subtle tool" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @mousedown.prevent @click="openSkillSettings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>编写规范</button>
+            <button type="button" class="subtle tool" :disabled="readonly || !canStartAi || Boolean(aiDraft) || assignRestricted" :title="assignRestricted ? '按分工编辑的文档，编写规范和整篇写作要求只有项目负责人可以修改。' : undefined" data-testid="skill-settings-open" @mousedown.prevent @click="openSkillSettings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>编写规范</button>
             <span class="spacer"></span>
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
@@ -4291,6 +4380,7 @@ onUnmounted(() => {
               <button type="button" :class="{ on: aiScope === 'selection' }" :aria-pressed="aiScope === 'selection'" :disabled="aiLocked || !selectedText" @click="chooseAiScope('selection')">选中文字</button>
               <button v-if="!assignRestricted" type="button" :class="{ on: aiScope === 'document' }" :aria-pressed="aiScope === 'document'" :disabled="aiLocked" @click="chooseAiScope('document')">全文</button>
             </div>
+            <p v-if="assignRestricted" class="pnote" data-testid="ai-doc-scope-note">全文编写只有项目负责人可以使用。</p>
             <p v-if="!canGenerate" class="pnote">在目录中选择章节，或在正文中选中文字。</p>
             <p v-if="!canGenerate && aiError" class="form-error" role="alert">{{ aiError }}</p>
             <template v-if="canGenerate">

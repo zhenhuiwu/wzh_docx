@@ -322,6 +322,24 @@ def ai_precheck(connection, document_id, actor, heading_index: int | None, whole
                             "assignmentsRevision": revision, "reason": "ai_scope"})
 
 
+def selection_precheck(connection, document_id, actor, probe_markdown: str, block_ids: list[str]) -> None:
+    """27 复验 M-3：选区改写会动到的块（正文里被替换的块，加上前端报的选区块 ID）都要归受限编写人员本人。"""
+    if actor is None or not restricted(*actor_scope(connection, document_id, actor)):
+        return
+    from app.markdown_blocks import split
+    nodes = nodes_of(connection, document_id)
+    probe = {block.body.strip() for block in split(probe_markdown)[1]}
+    wanted = set(block_ids)
+    owners = resolve(nodes, explicit_map(connection, document_id))
+    for node, owner, path in zip(nodes, owners, heading_paths(nodes)):
+        if (node.body.strip() in probe and node.id not in wanted) or str(actor) in owner.owners:
+            continue
+        names = _names(connection, set(owner.owners))
+        raise AppError(409, "SECTION_NOT_ASSIGNED", "所选范围包含他人负责的内容，请只选择你负责的部分。",
+                       details={"violations": [_violation("modify", node, None, owner, path, names)], "total": 1,
+                                "assignmentsRevision": assignments_revision(connection, document_id), "reason": "ai_scope"})
+
+
 def identities_drop_assignments(connection, document_id, before: list[Node], blocks, identities) -> bool:
     """块标识会让有显式分配的对象消失，而它的正文原样出现在新正文里（说明是配错了 id，不是真删除）。"""
     explicit = explicit_map(connection, document_id)
