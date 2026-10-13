@@ -96,3 +96,11 @@ describe("整篇冲突（设计师复验 2 C）", () => {
     expect(wholeConflictNote({ reason: "FORMAT" })).not.toMatch(/其他成员|已换成/);
   });
 });
+
+import { draftStaleWarning } from "./conflictModel";
+describe("draftStaleWarning (P2-2)", () => {
+  it("no warning when revision unchanged", () => expect(draftStaleWarning(3, 3, null)).toBe(false));
+  it("no warning when only own close-save advanced revision", () => expect(draftStaleWarning(3, 4, [])).toBe(false));
+  it("no warning before the check returns", () => expect(draftStaleWarning(3, 4, null)).toBe(false));
+  it("warns when someone else changed it", () => expect(draftStaleWarning(3, 5, [{ id: "u2" }])).toBe(true));
+});

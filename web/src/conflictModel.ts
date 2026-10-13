@@ -140,3 +140,9 @@ export function conflictToggle(summary: ConflictSummary | null, local = 0): Conf
   if ((summary?.mineHandled || 0) > 0) return { label: "冲突", name: "冲突", count: 0, tone: "neutral", tab: "mine" };
   return null;
 }
+
+/** 复验 P2-2：恢复提示条只在“别人”在草稿之后改过文档时才警告；自己关页面时的保存（或无他人改动）不算。changedBy 为 null 表示还没查到。 */
+export function draftStaleWarning(draftRevision: number, documentRevision: number, changedBy: Array<{ id: string }> | null): boolean {
+  if (draftRevision === documentRevision) return false;
+  return changedBy !== null && changedBy.length > 0;
+}

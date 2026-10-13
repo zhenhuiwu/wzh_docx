@@ -19,7 +19,7 @@ import AiSectionEntry from "../components/ai/AiSectionEntry.vue";
 import AiLeaveDialog from "../components/ai/AiLeaveDialog.vue";
 import { aiEntryAllowed, leaveNavigation } from "../aiEntry";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
-import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
+import { draftStaleWarning, changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { readonlyBlockedText, readonlyText } from "../memberModel";
 import { type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
@@ -224,6 +224,15 @@ function typingRecently(): boolean {
 const undoingAi = ref(false);
 const aiUndo = ref<{ id: string; content: string; revision: number } | null>(null);
 const localDraft = ref<DraftV2 | null>(null);
+// 复验 P2-2：草稿之后服务器上是否有“别人”的修改（getObjectsSince 已排除自己）；null = 还没查到
+const draftOthersChanged = ref<Array<{ id: string }> | null>(null);
+watch(() => [localDraft.value?.docRevision, document.value?.revision, document.value?.id] as const, ([draftRev, docRev, id]) => {
+  draftOthersChanged.value = null;
+  if (draftRev == null || docRev == null || !id || draftRev === docRev) return;
+  void getObjectsSince(id, draftRev).then(since => {
+    if (localDraft.value?.docRevision === draftRev && document.value?.id === id) draftOthersChanged.value = since.changedBy;
+  }).catch(() => undefined);
+});
 const localDrafts = ref<DraftV2[]>([]);
 const draftBusy = ref(false);
 /** 最后一审建议 3：恢复的草稿还没存上服务器（保存在重试）。存上前草稿不删、恢复条保持“恢复中…”、编辑区保持锁定。 */
@@ -5147,7 +5156,7 @@ onUnmounted(() => {
         <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
           <div class="draft-row">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z" /><path d="M14 3v5h5" /><path d="M9 13h7M9 17h5" /></svg>
-            <span>{{ recoverySummary(localDraft) }}{{ localDraft.docRevision === document.revision ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}</span>
+            <span>{{ recoverySummary(localDraft) }}{{ !draftStaleWarning(localDraft.docRevision, document.revision, draftOthersChanged) ? '' : '服务器上的文档在这之后被修改过，恢复时会合并，改到同一段的会列为冲突。' }}</span>
             <label v-if="localDrafts.length > 1" class="draft-pick">本机共 {{ localDrafts.length }} 份
               <select class="control" :value="localDrafts.indexOf(localDraft)" :disabled="draftBusy" @change="chooseLocalDraft(Number(($event.target as HTMLSelectElement).value))">
                 <option v-for="(item, index) in localDrafts" :key="item.tabId" :value="index">{{ draftTime(item) }}（{{ item.changed || 1 }} 处）</option>
