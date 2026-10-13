@@ -77,3 +77,21 @@ def test_my_writing_lists_owned_or_assigned(bteam):
     assert did in [item["id"] for item in data["items"]]
     _as(client, "outsider")
     assert client.get("/api/v1/my-writing").json()["data"]["items"] == []
+
+
+def test_project_baseline_tags_documents(bteam):
+    client, did, users = bteam
+    with connect() as connection:
+        project = connection.execute("SELECT project_id FROM documents WHERE id=%s", (did,)).fetchone()["project_id"]
+    owner = _as(client, "owner")
+    created = client.post(f"/api/v1/projects/{project}/baselines", headers=owner, json={"name": "评审前", "documentIds": [did]})
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["documentCount"] == 1
+    editor = _as(client, "editor")
+    assert client.post(f"/api/v1/projects/{project}/baselines", headers=editor,
+                       json={"name": "x", "documentIds": [did]}).status_code == 403
+    doc = current(client, did)
+    assert save(client, did, doc["revision"], TEXT + "\n新增段。\n", editor).status_code == 200
+    detail = client.get(f"/api/v1/projects/{project}/baselines/1").json()["data"]
+    assert detail["documents"][0]["changed"] and detail["documents"][0]["sinceBaseline"]["paragraphsAdded"] == 1
+    assert client.get(f"/api/v1/projects/{project}/baselines").json()["data"]["total"] == 1

@@ -43,6 +43,22 @@ CREATE TABLE IF NOT EXISTS document_baseline_sections (
   PRIMARY KEY (baseline_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_document_baseline_sections_hash ON document_baseline_sections(hash);
+-- 项目基线（30 §3.5 的“基线”= git tag）：选若干文档，各记一个文档版本。
+CREATE TABLE IF NOT EXISTS project_baselines (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  author_id TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (project_id, seq)
+);
+CREATE TABLE IF NOT EXISTS project_baseline_items (
+  project_baseline_id TEXT NOT NULL REFERENCES project_baselines(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  document_baseline_id TEXT NOT NULL REFERENCES document_baselines(id),
+  PRIMARY KEY (project_baseline_id, document_id)
+);
 """
 
 

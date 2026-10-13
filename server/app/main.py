@@ -38,6 +38,7 @@ from app.users import router as users_router
 from app.workbench import router as workbench_router
 from app.document_baselines import router as document_baselines_router
 from app.my_writing import router as my_writing_router
+from app.project_baselines import router as project_baselines_router
 from app.writing_skills import router as writing_skills_router, seed_writing_skills
 from app.models import format_timestamp
 
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
     api.include_router(workbench_router)
     api.include_router(document_baselines_router)
     api.include_router(my_writing_router)
+    api.include_router(project_baselines_router)
     api.include_router(knowledge_router)
     api.include_router(files_router)
     api.include_router(test_management_router)
