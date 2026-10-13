@@ -94,6 +94,7 @@ export async function createDocument(
     sourceType: "template" | "upload";
     templateDocumentId?: string;
     wordFileId?: string;
+    upstreamDocumentIds?: string[];
   }
 ): Promise<DocumentRecord> {
   const body = await apiRequest<{ data: DocumentRecord }>(`/projects/${projectId}/documents`, {

@@ -1,5 +1,5 @@
 """三审：迁移 114 可单独回滚，回滚后重新迁移能再加回来。"""
-from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
+from tests.migration_chain import rollback_newer_than
 
 import sqlite3
 
@@ -16,7 +16,7 @@ def _migrate():
     migrate()
     from app.rollback_migration_114 import _database_path
 
-    assert _rb118(_database_path(), apply=True) == 0 and rollback_117(_database_path(), apply=True) == 0 and rollback_116(_database_path(), apply=True) == 0
+    assert rollback_newer_than(_database_path(), 117) == 0 and rollback_117(_database_path(), apply=True) == 0 and rollback_116(_database_path(), apply=True) == 0
     assert rollback_115(_database_path(), apply=True) == 0
 
 
@@ -187,7 +187,7 @@ def test_rollback_114_refuses_while_115_present(tmp_path, monkeypatch, capsys):
         from app.rollback_migration_116 import rollback as rollback_116
         from app.rollback_migration_117 import rollback as rollback_117
 
-        assert _rb118(path, apply=True) == 0 and rollback_117(path, apply=True) == 0 and rollback_116(path, apply=True) == 0
+        assert rollback_newer_than(path, 117) == 0 and rollback_117(path, apply=True) == 0 and rollback_116(path, apply=True) == 0
         assert rollback(path, apply=True) == 2
         assert "rollback_migration_115" in capsys.readouterr().err
         assert COLUMN in _columns(path) and _recorded(path) == 1
@@ -208,7 +208,7 @@ def test_rollback_114_refuses_while_115_or_116_present(tmp_path, monkeypatch, ca
     try:
         migrate()
         from app.rollback_migration_117 import rollback as _rollback_117
-        assert _rb118(path, apply=True) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
+        assert rollback_newer_than(path, 117) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         assert rollback(path, apply=True) == 2
         err = capsys.readouterr().err
         assert "rollback_migration_116" in err and "116 → 115 → 114" in err

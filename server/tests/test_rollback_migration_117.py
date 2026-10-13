@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.rollback_migration_117 import TABLE, VERSION, rollback
 from tests.test_document_objects_migration import _migrate_until
+from tests.migration_chain import files_after, rollback_newer_than
 from tests.test_rollback_migration_116 import _schema
 
 SRS = next((Path(__file__).resolve().parents[2] / "438C-2021全套模板").glob("*[[]SRS[]]*.docx"))
@@ -66,6 +67,7 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
             assert published.status_code == 201, published.text
         from app.rollback_migration_118 import rollback as rollback_118
         assert rollback(path, apply=True) == 2   # A07：118 还在，先回滚 118
+        assert rollback_newer_than(path, 118) == 0   # 比 118 新的先回滚
         assert rollback_118(path, apply=True) == 0
         assert _recorded(path) == 1
         assert rollback(path, apply=False) == 0
@@ -95,7 +97,7 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
         # 重新迁移：117 再建回来，第 1 版 = 写回的结构
-        assert migrate() == ["117_template_versions.sql", "118_document_assignments.sql"]
+        assert migrate() == files_after(116)
         from app.migrate_template_versions import backfill
         report = backfill(backup=False)
         assert report["published"] == 1

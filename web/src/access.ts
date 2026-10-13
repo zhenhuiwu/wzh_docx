@@ -11,6 +11,7 @@ export const ROUTE_PERMISSIONS: Record<string, string | null> = {
   projects: null, // 项目可见性按成员关系由服务端决定（phase2 S1）
   project: null,
   "project-documents": null,
+  "project-plan": null,
   document: null,
   knowledge: "knowledge.read",
   "knowledge-base": "knowledge.read",
