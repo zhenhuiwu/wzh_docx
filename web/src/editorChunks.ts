@@ -183,6 +183,28 @@ export class ChunkedBody {
     return undefined;
   }
 
+  /**
+   * 视口里“当前章节”：顶部参考线 line（clientY）以上最后一个标题的全文序号。
+   * 参考线落在占位块里时，取该段最后一个标题（没挂上的段也能算对）；整篇在第一个标题之前为 null。
+   */
+  headingAtLine(line: number): number | null {
+    let found: number | null = null;
+    for (const chunk of this.chunks) {
+      if (chunk.placeholder) {
+        if (chunk.placeholder.getBoundingClientRect().top > line) break;
+        if (chunk.headingCount) found = chunk.headingStart + chunk.headingCount - 1;
+        continue;
+      }
+      for (const node of chunk.nodes) {
+        const index = this.headingOrder.get(node);
+        if (index === undefined) continue;
+        if (node.getBoundingClientRect().top > line) return found;
+        found = index;
+      }
+    }
+    return found;
+  }
+
   /** 已挂载的标题元素及其全文序号 */
   mountedHeadings(): Array<{ element: HTMLElement; index: number }> {
     return this.chunks.flatMap(chunk => chunk.placeholder ? [] : chunk.nodes.flatMap(node => {

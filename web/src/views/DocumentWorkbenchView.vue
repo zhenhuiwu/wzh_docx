@@ -855,12 +855,16 @@ function trackViewHeading() {
     const root = editor.value, scroller = desk.value;
     if (!root || !scroller) return;
     const top = scroller.getBoundingClientRect().top + 96;
-    const list = chunks ? chunks.mountedHeadings() : [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].map((element, index) => ({ element, index }));
-    let found: number | null = null;
-    for (const item of list) {
-      if (item.element.getBoundingClientRect().top <= top) found = item.index;
-      else { if (found === null) found = Math.max(0, item.index - 1); break; }
+    let found: number | null;
+    if (chunks) found = chunks.headingAtLine(top);
+    else {
+      found = null;
+      for (const [index, element] of [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].entries()) {
+        if (element.getBoundingClientRect().top > top) break;
+        found = index;
+      }
     }
+    if (found === null && outline.value.length) found = 0;
     if (found !== null && found !== viewHeading.value) viewHeading.value = found;
   });
 }
@@ -933,6 +937,11 @@ const currentSection = computed(() => shownHeading.value === null ? "" : outline
 /** 状态栏的页数估算：A4 正文约每页 1500 字 */
 const pageEstimate = computed(() => Math.max(1, Math.ceil(totalChars.value / 1500)));
 watch(selectedHeading, () => { viewHeading.value = null; });
+/** 目录高亮跟着视口走：普通目录把高亮项滚进可见区（虚拟目录在组件里滚） */
+watch(shownHeading, index => {
+  if (index === null || outlineVirtual.value) return;
+  void nextTick(() => window.document.querySelector<HTMLElement>(`.olist [data-outline-index="${index}"]`)?.scrollIntoView({ block: "nearest" }));
+});
 // 重塑：右侧面板（原稿/版式预览时只保留版本记录）
 const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value || assignmentsOpen.value || referencesOpen.value || assignOpen.value || rejectedOpen.value)));
 const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
@@ -4994,9 +5003,9 @@ onUnmounted(() => {
           </div>
           <p v-if="outline.length === 0" class="oempty">暂无标题</p>
           <p v-else-if="!outlineShown.length" class="oempty">{{ outlineSearch.trim() ? '没有匹配的标题' : outlineMode === 'mine' ? '没有分给你的章节' : outlineMode === 'todo' ? '没有待编写的章节' : outlineMode === 'conflict' ? '没有冲突' : '没有匹配的标题' }}</p>
-          <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="selectedHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
+          <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="shownHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
           <div v-else class="olist">
-            <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: selectedHeading === entry.index, empty: entry.info?.empty }]" :aria-current="selectedHeading === entry.index ? 'true' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
+            <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: shownHeading === entry.index, empty: entry.info?.empty }]" :data-outline-index="entry.index" :aria-current="shownHeading === entry.index ? 'location' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
               <span class="otext">{{ entry.item.text }}</span>
               <svg v-if="!entry.mine" class="ico olock" data-testid="outline-lock" viewBox="0 0 24 24" role="img" aria-label="只读"><rect x="5" y="11" width="14" height="9" rx="1.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
               <i v-if="conflictHeadings.has(entry.item.text)" class="omark danger outline-dot conflict" role="img" title="本章节有冲突待处理" aria-label="有冲突"></i>
