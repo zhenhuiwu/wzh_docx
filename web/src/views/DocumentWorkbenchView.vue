@@ -13,6 +13,9 @@ import { getDocumentAssignments, type DocumentAssignmentsState } from "../api/do
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
+import AiStatusChip from "../components/ai/AiStatusChip.vue";
+import AiSectionEntry from "../components/ai/AiSectionEntry.vue";
+import AiLeaveDialog from "../components/ai/AiLeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
@@ -1700,6 +1703,22 @@ async function removeMemory() {
   } finally {
     memoryLoading.value = false;
   }
+}
+// Spec 30 §4.1: [AI 编写本节] beside the heading sends the same request as the panel.
+async function startSectionAi() {
+  chooseAiScope("section");
+  await nextTick();
+  if (canStartAi.value) await generateSection();
+}
+// P2-10: leaving with unresolved AI suggestions asks explicitly.
+const aiLeave = ref<{ target: string } | null>(null);
+function leaveDiscardingAi() {
+  const target = aiLeave.value?.target;
+  aiLeave.value = null;
+  clearAiDraft();
+  if (!target) return;
+  leaveBypass = true;
+  void router.push(target).finally(() => { leaveBypass = false; });
 }
 function chooseAiScope(scope: WritingMemory["scope"]) {
   if (aiLocked.value) return;
@@ -4377,6 +4396,10 @@ async function leaveDocument(to?: RouteLocationNormalized) {
     noteAction("操作仍在进行，请完成或停止后再离开文档。");
     return false;
   }
+  if (aiPendingSuggestions.value.length) {
+    aiLeave.value = { target: to?.fullPath || "" };
+    return false;
+  }
   if (aiDraft.value && !window.confirm("尚未采纳的 AI 草稿会丢失，是否离开？")) return false;
   window.clearTimeout(autoSaveTimer);
   if (hasUnsaved.value && !readonly.value) {
@@ -4661,6 +4684,7 @@ onUnmounted(() => {
           <span v-if="templateVersion?.legacy" class="tag plain" data-testid="doc-template-legacy" title="本文档创建于模板版本管理之前，使用当时的模板结构，不受之后的模板版本影响。">版本化之前</span>
           <span v-if="templateVersion?.newer" class="tag info" data-testid="doc-template-newer" :title="templateVersion.newer">模板有新版本</span>
           <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
+          <AiStatusChip :busy="aiBusy" :pending="aiPendingSuggestions.length" :error="aiError" :stopped="aiStopped" :progress="aiBusy ? aiProgressLabel : ''" :target="aiScope === 'section' ? aiTargetTitle : ''" />
           <span v-if="wholeSave" class="whole-tag" data-testid="whole-save" tabindex="0" aria-describedby="whole-save-tip">整篇保存<span id="whole-save-tip" class="tip" role="tooltip">这份文档暂时只能整篇保存。和他人同时编辑时，冲突按整段对比，不影响保存。</span></span>
         </div>
         <div class="spacer"></div>
@@ -5034,6 +5058,8 @@ onUnmounted(() => {
         <Teleport v-for="item in publicHosts" :key="item.key" :to="item.host">
           <PublicBlockEmbed :document-id="document?.id ?? ''" :reference="item.ref" :plan-link="{ name: 'project-plan', params: { id: route.params.id } }" @seen="loadPublicRefs" />
         </Teleport>
+        <AiSectionEntry v-if="mode === 'edit'" :editor="editor" :heading-index="selectedHeading" :version="editorVersion" :hidden="readonly || Boolean(aiPreviewHost) || aiBusy || Boolean(aiUnavailable('writing'))" :disabled="!canStartAi || aiLocked" @start="startSectionAi" />
+        <AiLeaveDialog v-if="aiLeave" :count="aiPendingSuggestions.length" @stay="aiLeave = null" @leave="leaveDiscardingAi" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 || (aiBusy && aiScope === 'section') }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
@@ -5328,20 +5354,10 @@ onUnmounted(() => {
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
 .ai-preview-body:empty { display:none; }
-.paper-content :deep(.ai-out) { opacity:0.45; pointer-events:none; user-select:none; }
 .ai-preview.reviewing { position:fixed; left:50%; bottom:var(--space-6); z-index:20; transform:translateX(-50%); width:auto; max-width:calc(100vw - 2 * var(--space-7)); padding:0 var(--space-3); border-radius:var(--radius-sheet); border:var(--border); background:var(--sheet); box-shadow:var(--shadow-3); }
 .ai-preview.reviewing .ai-preview-tools { position:static; background:transparent; border-bottom:0; }
 .ai-preview.reviewing .ai-preview-status { color:var(--ink); }
-.paper-content :deep(.ai-scope), .paper-content.ai-scoping > :deep(.ai-suggestion) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
-.paper-content :deep(.ai-scope-label) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding:var(--space-2) var(--space-3) 0; color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); user-select:none; }
-.paper-content :deep([data-ai-lock])::after { content:"🔒" attr(data-ai-lock); margin-left:var(--space-2); color:var(--text-tertiary); font-family:var(--font); font-size:var(--text-xs); font-weight:normal; vertical-align:middle; }
 .scope-box .scope-count { font-weight:normal; }
-.paper-content :deep(.ai-del) { text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
-.paper-content :deep(.ai-suggestion) { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
-.paper-content :deep(.ai-suggestion.current) { outline:2px solid var(--stamp); outline-offset:2px; }
-.paper-content :deep(.ai-ins) { flex:1; background:var(--ok-wash); }
-.paper-content :deep(.ai-suggestion-note) { flex:1; color:var(--fault); font-size:var(--text-sm); }
-.paper-content :deep(.ai-suggestion-actions) { display:flex; gap:var(--space-1); font-family:var(--font); }
 .ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--brand-600); }
 
 /* 底部状态栏 */
