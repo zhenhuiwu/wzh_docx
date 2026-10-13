@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.db import connect
+from app.db import connect, write_transaction
 from app.document_access import document_principal, ensure_project_writable, member_role
 from app.document_baselines import _current_sections, _public as version_public, _sections_of, create_baseline, diff_sections
 from app.errors import AppError
@@ -77,19 +77,23 @@ def create_project_baseline(request: Request, project_id: str, body: ProjectBase
         missing = [str(i) for i in ids if str(i) not in found]
         if missing:
             raise AppError(422, "VALIDATION_FAILED", "有文档不属于这个项目。", details={"documentIds": missing})
-        seq = connection.execute("SELECT coalesce(max(seq),0)+1 AS n FROM project_baselines WHERE project_id=%s",
-                                 (pid,)).fetchone()["n"]
-        bid = uuid4()
-        connection.execute("INSERT INTO project_baselines(id, project_id, seq, name, author_id) VALUES (%s,%s,%s,%s,%s)",
-                           (bid, pid, seq, body.name.strip(), actor.user_id))
-        for did in ids:
-            latest = connection.execute(
-                """SELECT b.id FROM document_baselines b JOIN documents d ON d.id=b.document_id
-                   WHERE b.document_id=%s AND b.revision=d.revision ORDER BY b.seq DESC LIMIT 1""", (did,)).fetchone()
-            version_id = latest["id"] if latest else create_baseline(
-                connection, did, actor.user_id, f"基线 B{seq} {body.name.strip()}")["id"]
-            connection.execute("INSERT INTO project_baseline_items VALUES (%s,%s,%s)", (bid, did, version_id))
-        connection.commit()
+        # 验收 40 P2-1：并发建立基线时序号会撞 UNIQUE(project_id, seq) → 500。
+        # 序号的读取与写入放进 BEGIN IMMEDIATE 写事务里（开始即持有写锁，并发请求排队），不会再撞号。
+        if connection.in_transaction:
+            connection.commit()
+        with write_transaction(connection):
+            seq = connection.execute("SELECT coalesce(max(seq),0)+1 AS n FROM project_baselines WHERE project_id=%s",
+                                     (pid,)).fetchone()["n"]
+            bid = uuid4()
+            connection.execute("INSERT INTO project_baselines(id, project_id, seq, name, author_id) VALUES (%s,%s,%s,%s,%s)",
+                               (bid, pid, seq, body.name.strip(), actor.user_id))
+            for did in ids:
+                latest = connection.execute(
+                    """SELECT b.id FROM document_baselines b JOIN documents d ON d.id=b.document_id
+                       WHERE b.document_id=%s AND b.revision=d.revision ORDER BY b.seq DESC LIMIT 1""", (did,)).fetchone()
+                version_id = latest["id"] if latest else create_baseline(
+                    connection, did, actor.user_id, f"基线 B{seq} {body.name.strip()}")["id"]
+                connection.execute("INSERT INTO project_baseline_items VALUES (%s,%s,%s)", (bid, did, version_id))
         row = connection.execute(f"{_SELECT} WHERE b.id=%s", (bid,)).fetchone()
     return {"data": _public(row), "requestId": request.state.request_id}
 
