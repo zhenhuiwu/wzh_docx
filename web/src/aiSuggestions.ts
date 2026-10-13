@@ -37,6 +37,11 @@ export function sectionBlocks(root: HTMLElement, headingIndex: number): { headin
   return { heading, blocks };
 }
 
+/** A Word heading kept as a paragraph (e.g. "1.1 标识"), marked by the server preview. */
+export function isWordHeading(node: Element): boolean {
+  return node.hasAttribute("data-word-heading");
+}
+
 function button(label: string, title: string, className: string, action: () => void): HTMLButtonElement {
   const element = document.createElement("button");
   element.type = "button";
@@ -68,7 +73,8 @@ export function renderSuggestions(root: HTMLElement, headingIndex: number, opera
   for (const op of operations) {
     const isHeading = headingId !== null && op.blockId === headingId;
     const target = isHeading ? heading : byId.get(op.blockId);
-    if (!target || (isHeading && op.op !== "insertAfter")) { dropped += 1; continue; }
+    // Real headings and Word heading paragraphs (data-word-heading) are locked: only insertAfter anchors.
+    if (!target || ((isHeading || isWordHeading(target)) && op.op !== "insertAfter")) { dropped += 1; continue; }
     const control = document.createElement("div");
     control.setAttribute("data-ai-preview", "");
     control.contentEditable = "false";
@@ -137,15 +143,17 @@ export function pending(suggestions: Suggestion[]): Suggestion[] {
 export function markScope(root: HTMLElement, headingIndex: number, denied: Set<string>, label: string): number {
   clearScope(root);
   const { heading, blocks } = sectionBlocks(root, headingIndex);
-  const scope = blocks.filter(block => !denied.has(block.getAttribute("data-object-id") || ""));
+  const scope = blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || ""));
   root.classList.add("ai-scoping");
   for (const node of root.querySelectorAll<HTMLElement>(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6")) {
     node.setAttribute("data-ai-lock", node === heading ? "标题已固定" : "");
   }
+  for (const node of blocks) if (isWordHeading(node)) node.setAttribute("data-ai-lock", "标题已固定");
   for (const block of scope) block.classList.add("ai-scope");
   // Everything outside the writing scope is faded and inert (spec 30 §4.2).
   for (const node of [...root.children] as HTMLElement[]) {
-    if (node !== heading && !node.hasAttribute("data-ai-preview") && !node.classList.contains("ai-scope")) node.classList.add("ai-out");
+    const lockedInSection = isWordHeading(node) && blocks.includes(node);
+    if (node !== heading && !lockedInSection && !node.hasAttribute("data-ai-preview") && !node.classList.contains("ai-scope")) node.classList.add("ai-out");
   }
   if (scope[0]) scope[0].classList.add("ai-scope-first");
   scope.at(-1)?.classList.add("ai-scope-last");
@@ -155,8 +163,9 @@ export function markScope(root: HTMLElement, headingIndex: number, denied: Set<s
   tag.contentEditable = "false";
   tag.className = "ai-scope-label";
   tag.textContent = label;
-  (scope[0] ?? heading)?.before(tag);
-  if (!scope[0] && heading) heading.after(tag);
+  // The label opens the scope right under the locked heading, above any suggestion anchored there.
+  if (heading) heading.after(tag);
+  else scope[0]?.before(tag);
   return scope.length;
 }
 
@@ -172,5 +181,5 @@ export function clearScope(root: HTMLElement): void {
 
 /** Number of section blocks the user may change (for the panel header). */
 export function scopeCount(root: HTMLElement, headingIndex: number, denied: Set<string>): number {
-  return sectionBlocks(root, headingIndex).blocks.filter(block => !denied.has(block.getAttribute("data-object-id") || "")).length;
+  return sectionBlocks(root, headingIndex).blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || "")).length;
 }

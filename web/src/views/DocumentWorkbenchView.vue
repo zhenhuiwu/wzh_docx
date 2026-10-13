@@ -4927,7 +4927,7 @@ onUnmounted(() => {
           </template>
         </DocumentAssignments>
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
-          <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
+          <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 || (aiBusy && aiScope === 'section') }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
               <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiPendingSuggestions.length ? `AI 建议 ${aiPendingSuggestions.length} 处待处理` : aiComplete && aiSuggestions.length === 0 && aiPreviewHtml === '' && aiScope === 'section' ? '本节无需修改' : aiComplete ? 'AI 草稿' : '生成未完成' }}<template v-if="!aiBusy && aiSuggestionDropped">，有 {{ aiSuggestionDropped }} 处超出范围，已忽略</template></span>
               <button v-if="aiBusy" type="button" class="ghost sm" @click="stopAi">停止</button>
