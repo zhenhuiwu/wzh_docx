@@ -141,7 +141,7 @@ export async function exportDocument(id: string, expectedRevision: number): Prom
 }
 
 export async function previewDocument(id: string): Promise<{ html: string; objectModel?: boolean; revision?: number }> {
-  const body = await apiRequest<{ data: { html: string; objectModel?: boolean; revision?: number } }>(`/documents/${id}/preview`);
+  const body = await apiRequest<{ data: { html: string; objectModel?: boolean; revision?: number } }>(`/documents/${id}/preview`, { timeoutMs: 120000 });
   if (!body?.data) throw new Error("预览响应不完整。");
   return body.data;
 }
