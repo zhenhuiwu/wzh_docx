@@ -1,4 +1,5 @@
 """A05：迁移 116 可单独回滚（先导出审计 CSV、整库备份），回滚后的结构与 115 状态一致，重新迁移能再建回来。"""
+from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
 
 import csv
 import sqlite3
@@ -52,9 +53,7 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
         assert _recorded(path) == 1
         # 回滚顺序 117 → 116（A06 的 117 在 116 之后）
         from app.rollback_migration_117 import rollback as rollback_117
-        from app.rollback_migration_118 import rollback as rollback_118
-        assert rollback_118(path, apply=True) == 0
-        assert rollback_117(path, apply=True) == 0
+        assert _rb118(path, apply=True) == 0 and rollback_117(path, apply=True) == 0
         assert rollback(path, apply=False) == 0  # 只检查
         assert _recorded(path) == 1 and _schema(path) != expected
         assert rollback(path, apply=True) == 0
@@ -118,9 +117,7 @@ def test_rollback_116_refuses_while_a_newer_migration_is_recorded(tmp_path, monk
     try:
         migrate()
         from app.rollback_migration_117 import rollback as _rollback_117
-        from app.rollback_migration_118 import rollback as rollback_118
-        assert rollback_118(path, apply=True) == 0
-        assert _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
+        assert _rb118(path, apply=True) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         with sqlite3.connect(path) as connection:
             connection.execute("insert into schema_migrations(version) values ('117_future_probe')")
         assert rollback(path, apply=True) == 2

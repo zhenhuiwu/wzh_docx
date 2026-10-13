@@ -118,7 +118,7 @@ defineExpose({ requestClose, showGuidance, isDirty, reload: () => { if (!isDirty
 <template>
   <aside class="assignments-panel" aria-label="分工与指导">
     <header class="assignments-head">
-      <h2>分工与指导</h2>
+      <h2>{{ state?.canManage ? "分工与指导" : "编写指导" }}</h2>
       <button type="button" class="subtle sm" :disabled="loading || saving" @click="requestClose">关闭</button>
     </header>
     <div class="assignments-body">
@@ -142,7 +142,7 @@ defineExpose({ requestClose, showGuidance, isDirty, reload: () => { if (!isDirty
           <p>{{ error }}</p>
           <button type="button" class="ghost sm" :disabled="saving" @click="load">{{ isDirty ? '放弃分工更改并重新读取' : '重新读取' }}</button>
         </div>
-        <div class="tabs assignment-tabs" aria-label="分工与指导功能">
+        <div v-if="state.canManage" class="tabs assignment-tabs" aria-label="分工与指导功能">
           <button type="button" :class="{ active: tab === 'assign' }" :aria-pressed="tab === 'assign'" @click="chooseTab('assign')">分配负责人</button>
           <button type="button" :class="{ active: tab === 'guidance' }" :aria-pressed="tab === 'guidance'" @click="chooseTab('guidance')">编写建议</button>
         </div>

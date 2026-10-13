@@ -16,7 +16,7 @@ import {
   ARCHIVED_MEMBERS_CONTACT_TEXT, ARCHIVED_MEMBERS_TEXT, DISABLED_ROW_TEXT, LAST_OWNER_TEXT, MAX_PICK, MEMBERS_INFO, ROLE_OPTIONS, ROLE_TONE,
   addButtonText, batchResultText, candidateNote, changeOutcomeText, classifyMemberError, contactNames, isLockedOwner,
   activeOwners, memberErrorText, membersConflictText, membersNote, noActiveOwnerText, pickError, retryableIds, recentChange, removeConfirmText, roleLabel, roleOptionDisabled,
-  type AssignableRole,
+  type AssignableRole, assignCountText, demoteConfirmText,
 } from "../memberModel";
 import { hasPermission, readSession } from "../session";
 import StatePanel from "./StatePanel.vue";
@@ -32,6 +32,8 @@ const emit = defineEmits<{
   (event: "gone"): void;
   /** 点了归档提示里的［恢复项目］：由页头统一弹恢复确认。 */
   (event: "restore"): void;
+  /** A07：点了“编写分工”数字，打开概述“编写分工”的按人视图并定位到此人。 */
+  (event: "assignments", userId: string): void;
 }>();
 
 const route = useRoute();
@@ -156,12 +158,33 @@ function onRoleChange(member: ProjectMember, event: Event) {
   const select = event.target as HTMLSelectElement;
   const role = select.value as AssignableRole;
   if (role === member.role) return;
+  const demote = demoteConfirmText(member, role);
+  if (demote && !member.isMe) {
+    demotePending.value = { member, role, select, ...demote };
+    void nextTick(() => demoteDialog.value?.showModal());
+    return;
+  }
   if (member.isMe && role !== "owner") {
     selfPending.value = { member, role, select };
     void nextTick(() => selfDialog.value?.showModal());
     return;
   }
   void changeRole(member, role, select);
+}
+
+const demoteDialog = ref<HTMLDialogElement | null>(null);
+const demotePending = ref<{ member: ProjectMember; role: AssignableRole; select: HTMLSelectElement; title: string; body: string } | null>(null);
+function cancelDemote() {
+  const pending = demotePending.value;
+  if (pending) pending.select.value = pending.member.role;
+  demotePending.value = null;
+  demoteDialog.value?.close();
+}
+function confirmDemote() {
+  const pending = demotePending.value;
+  demotePending.value = null;
+  demoteDialog.value?.close();
+  if (pending) void changeRole(pending.member, pending.role, pending.select);
 }
 
 function cancelSelf() {
@@ -476,10 +499,10 @@ defineExpose({ reload: () => load(true) });
         <div class="table-wrap members-table" :class="{ scroll: members.length > 20 }">
           <table>
             <thead>
-              <tr><th class="col-member">成员</th><th class="col-dept">所属部门</th><th class="col-role">项目权限</th><th class="col-status">账号状态</th><th class="col-recent">最近调整</th><th v-if="canManage" class="col-ops th-right">操作</th></tr>
+              <tr><th class="col-member">成员</th><th class="col-dept">所属部门</th><th class="col-role">项目权限</th><th class="col-assign">编写分工</th><th class="col-status">账号状态</th><th class="col-recent">最近调整</th><th v-if="canManage" class="col-ops th-right">操作</th></tr>
             </thead>
             <tbody>
-              <tr v-if="!filtered.length"><td :colspan="canManage ? 6 : 5" class="empty-row">没有找到成员。<button type="button" class="text" @click="query = ''">清除查找</button></td></tr>
+              <tr v-if="!filtered.length"><td :colspan="canManage ? 7 : 6" class="empty-row">没有找到成员。<button type="button" class="text" @click="query = ''">清除查找</button></td></tr>
               <tr v-for="member in filtered" :key="member.userId" data-testid="member-row" :data-user-id="member.userId" :class="{ off: member.userStatus !== 'active' }">
                 <td class="col-member">
                   <span class="person">
@@ -514,6 +537,12 @@ defineExpose({ reload: () => load(true) });
                       <span v-if="rowState[member.userId]" class="role-status" :class="rowState[member.userId].state" data-testid="member-role-status" role="alert">{{ rowState[member.userId].text }}</span>
                     </template>
                   </div>
+                </td>
+                <td class="col-assign">
+                  <button v-if="assignCountText(member.assignments).docs" type="button" class="text assign-count" data-testid="member-assign-count" :aria-label="`${member.name} 的编写分工：${assignCountText(member.assignments).main}，${assignCountText(member.assignments).docs}`" @click="emit('assignments', member.userId)">
+                    <span>{{ assignCountText(member.assignments).main }}</span><span class="assign-docs">{{ assignCountText(member.assignments).docs }}</span>
+                  </button>
+                  <span v-else class="assign-none" data-testid="member-assign-count">—</span>
                 </td>
                 <td class="col-status">
                   <span v-if="member.userStatus === 'active'" class="tag success">启用</span>
@@ -609,6 +638,16 @@ defineExpose({ reload: () => load(true) });
       </form>
     </dialog>
 
+    <dialog ref="demoteDialog" class="app-dialog confirm" data-testid="member-demote-dialog" aria-labelledby="member-demote-title" @cancel.prevent="cancelDemote">
+      <form v-if="demotePending" novalidate @submit.prevent="confirmDemote">
+        <div class="dialog-head"><h2 id="member-demote-title">{{ demotePending.title }}</h2><button type="button" class="subtle icon-close" aria-label="关闭" @click="cancelDemote"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
+        <div class="dialog-body"><p class="dialog-text">{{ demotePending.body }}</p></div>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" @click="cancelDemote">取消</button>
+          <button type="submit" class="primary danger" data-testid="member-demote-confirm">确认改为只读</button>
+        </div>
+      </form>
+    </dialog>
     <dialog ref="selfDialog" class="app-dialog confirm" data-testid="member-self-dialog" aria-labelledby="member-self-title" @cancel.prevent="cancelSelf">
       <form v-if="selfPending" novalidate @submit.prevent="confirmSelf">
         <div class="dialog-head"><h2 id="member-self-title">把自己改为{{ roleLabel(selfPending.role) }}？</h2><button type="button" class="subtle icon-close" aria-label="关闭" @click="cancelSelf"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></div>
@@ -637,8 +676,12 @@ defineExpose({ reload: () => load(true) });
 .members-table td { height:52px; vertical-align:middle; }
 .col-member { width:340px; }
 .col-dept { width:220px; }
-.col-role { width:420px; }
+.col-role { width:340px; }
 .col-status { width:140px; }
+.col-assign { width:160px; }
+.assign-count { display:flex; flex-direction:column; align-items:flex-start; gap:2px; padding:0; text-align:left; }
+.assign-docs { font-size:12px; color:var(--text-tertiary); }
+.assign-none { color:var(--text-tertiary); }
 .col-recent { width:240px; }
 .col-ops { width:120px; }
 .who { display:inline-flex; flex-direction:column; gap:2px; }

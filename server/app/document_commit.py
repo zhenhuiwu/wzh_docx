@@ -450,7 +450,8 @@ def _check_explicit_base(connection, document_id: UUID, base_revision: int, base
 def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: int, mine_md: str, kind: str,
                  client_save_key: str | None, check_word: Callable[[str], None], source: str = "content",
                  extra: dict | None = None, after_write: Callable | None = None,
-                 template_update: Callable[[dict], dict] | None = None, base_markdown: str | None = None) -> dict:
+                 template_update: Callable[[dict], dict] | None = None, base_markdown: str | None = None,
+                 block_ids: list[str | None] | None = None) -> dict:
     """allowMerge 的整篇提交；返回 {revision, merged, changeId, changedBy, markdownContent?, noop?}。
 
     base_markdown：客户端给出的显式基准正文（增量审查 M1），代替 versions[base_revision] 作三方合并的基线。
@@ -481,6 +482,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                 base_md = theirs
             merged_flag = revision != base_revision or (base_markdown is not None and base_markdown != theirs)
             frozen: list[tuple[str, int, str]] = []
+            result = None
             if merged_flag:
                 ensure_committed(connection, document_id)
                 others = connection.execute(
@@ -508,6 +510,7 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                     if not result.conflicts:
                         result.conflicts = []
                     items = build_items(connection, document_id, base_md, theirs, result, base_revision, actor)
+                    _precheck_conflicts(connection, document_id, actor, items)
                     if not items:
                         items = [_whole_item(0, "STRUCTURE", mine_md, theirs, base_md, _whole_by(connection, document_id, base_revision, actor))]
                     matches = _frozen_matches(connection, document_id, actor, items)
@@ -568,7 +571,8 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
                         raw = connection.execute("SELECT format_template FROM documents WHERE id=%s", (document_id,)).fetchone()[0]
                         template = template_update(dict(json.loads(raw) if isinstance(raw, str) else (raw or {})))
                     change_id = _save_markdown(connection, document_id, merged, revision, kind=kind, merged=merged_flag,
-                                               client_save_key=client_save_key, request_hash=rhash, format_template=template)
+                                               client_save_key=client_save_key, request_hash=rhash, format_template=template,
+                                               identities=_merge_identities(connection, document_id, block_ids, result))
                     if after_write is not None:
                         after_write(connection, revision + 1)
                     data = {"revision": revision + 1, "merged": merged_flag, "changeId": str(change_id),
@@ -591,6 +595,57 @@ def commit_whole(connection, *, document_id: UUID, actor: UUID, base_revision: i
             data["markdownContent"] = merged
             return data
     raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
+
+
+def _merge_identities(connection, document_id: UUID, block_ids: list[str | None] | None,
+                      result: MergeResult | None) -> list[str | None] | None:
+    """A07 §4.1：blockIds 与 merge3 的 Entry 来源对应——m 取客户端 ID，t 取当前对象 ID，n 为新块。"""
+    if block_ids is None:
+        return None
+    if result is None:
+        return list(block_ids)
+    ensure_document_objects(connection, document_id)
+    live_ids = [str(row["id"]) for row in live_objects(connection, document_id)]
+    identities: list[str | None] = []
+    for entry in result.entries:
+        if entry.source == "m":
+            identities.append(block_ids[entry.index] if entry.index < len(block_ids) else None)
+        elif entry.source == "t":
+            identities.append(live_ids[entry.index] if entry.index < len(live_ids) else None)
+        else:
+            identities.append(None)
+    return identities
+
+
+def _precheck_conflicts(connection, document_id: UUID, actor, items: list[dict]) -> None:
+    """A07 §4.5.4：编写人员的冲突段触及不归自己的块时整次拒绝，不生成冲突卡。"""
+    from app import document_assignments as da
+
+    if actor is None or not da.restricted(*da.actor_scope(connection, document_id, actor)):
+        return
+    nodes = da.nodes_of(connection, document_id)
+    owners = dict(zip((n.id for n in nodes), da.resolve(nodes, da.explicit_map(connection, document_id))))
+    by_id = {n.id: n for n in nodes}
+    paths = dict(zip((n.id for n in nodes), da.heading_paths(nodes)))
+    found = []
+    for item in items:
+        for object_id in item.get("objectIds") or []:
+            owner = owners.get(str(object_id))
+            if owner is not None and str(actor) not in owner.owners:
+                found.append((by_id[str(object_id)], owner))
+    if not found:
+        whole = [item for item in items if not item.get("objectIds")]
+        if not whole:
+            return
+        # 整篇结构冲突没有对象：按“我有没有不可编辑的块”保守判断
+        if all(str(actor) in owner.owners for owner in owners.values()):
+            return
+        raise AppError(409, "SECTION_NOT_ASSIGNED", da.MESSAGE.format(n=1), details={
+            "violations": [], "total": 1, "assignmentsRevision": da.assignments_revision(connection, document_id)})
+    names = da._names(connection, {value for _node, owner in found for value in owner.owners})
+    violations = [da._violation("modify", node, None, owner, paths[node.id], names) for node, owner in found[:da.MAX_VIOLATIONS]]
+    raise AppError(409, "SECTION_NOT_ASSIGNED", da.MESSAGE.format(n=len(found)), details={
+        "violations": violations, "total": len(found), "assignmentsRevision": da.assignments_revision(connection, document_id)})
 
 
 WORD_CODES = frozenset({"AI_FORMAT_INVALID", "WORD_BLOCK_PROTECTED"})

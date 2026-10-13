@@ -21,6 +21,15 @@ TEMPLATES = ("SDP", "STP", "IDD", "SRS", "SDD", "DBDD")
 ROUNDS = 3
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def upload(data: dict, tag: str) -> dict:
     zhang = data["zhang"]
     source = next((E.ROOT / "438C-2021全套模板").glob(f"*[[]{tag}[]]*.docx"))
@@ -28,8 +37,8 @@ def upload(data: dict, tag: str) -> dict:
                                  data={"purpose": "attachment", "projectId": data["project"]["id"]},
                                  headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"e2e-id-{tag}-{E.RUN}"})
     assert response.status_code == 201, response.text
-    return zhang.call("POST", f"/projects/{data['project']['id']}/documents",
-                      json={"name": f"标识号撤销-{tag}", "sourceType": "upload", "wordFileId": response.json()["data"]["id"]})
+    return open_mode(zhang, zhang.call("POST", f"/projects/{data['project']['id']}/documents",
+                      json={"name": f"标识号撤销-{tag}", "sourceType": "upload", "wordFileId": response.json()["data"]["id"]}))
 
 
 DELETE_IDENTIFIER = """() => {

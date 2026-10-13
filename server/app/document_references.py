@@ -73,10 +73,10 @@ def _source(connection, item, principal) -> dict:
             "latestRevision": source.revision, "content": content, "available": True}
 
 
-def _editable(connection, row) -> bool:
-    enabled = connection.execute("SELECT assignments_enabled FROM documents WHERE id=%s", (row.id,)).fetchone()
-    return bool(permissions_of(row.project_role, row.admin, row.archived)["canEdit"] and
-                (row.admin or row.project_role == "owner" or not enabled["assignments_enabled"]))
+def _editable(connection, row, principal) -> bool:
+    from app.document_assignments import actor_scope, restricted
+    limited = restricted(*actor_scope(connection, row.id, principal.user_id))
+    return bool(permissions_of(row.project_role, row.admin, row.archived)["canEdit"] and not limited)
 
 
 def _state(connection, row, principal) -> dict:
@@ -93,7 +93,7 @@ def _state(connection, row, principal) -> dict:
             items.append({**item, "name": "参考文档不可用", "available": False})
         else:
             items.append({key: value for key, value in source.items() if key != "content"})
-    return {"revision": row.revision, "items": items, "canEdit": _editable(connection, row)}
+    return {"revision": row.revision, "items": items, "canEdit": _editable(connection, row, principal)}
 
 
 def writing_references(connection, row, principal) -> list[dict]:

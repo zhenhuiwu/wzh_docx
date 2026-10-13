@@ -65,6 +65,7 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
             published = client.post(f"/api/v1/template-documents/{td['id']}/versions", json={"draftRevision": 1, "note": "第二版"}, headers=headers)
             assert published.status_code == 201, published.text
         from app.rollback_migration_118 import rollback as rollback_118
+        assert rollback(path, apply=True) == 2   # A07：118 还在，先回滚 118
         assert rollback_118(path, apply=True) == 0
         assert _recorded(path) == 1
         assert rollback(path, apply=False) == 0
@@ -117,9 +118,9 @@ def test_rollback_117_refuses_when_later_migration_recorded(tmp_path, monkeypatc
     try:
         migrate()
         with sqlite3.connect(path) as connection:
-            connection.execute("insert into schema_migrations(version) values ('118_future')")
+            connection.execute("insert into schema_migrations(version) values ('119_future')")
         assert rollback(path, apply=True, force=True) == 2
-        assert "118_future" in capsys.readouterr().err
+        assert "119_future" in capsys.readouterr().err
         assert _recorded(path) == 1
         assert not list(tmp_path.glob("app.db.before-rollback-117-*.db"))
     finally:
