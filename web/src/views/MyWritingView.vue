@@ -6,12 +6,13 @@ import { listMyWriting, type MyWritingItem } from "../api/baselines";
 import { documentStatusLabel } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime } from "../format";
+import { refreshMyWritingAccess } from "../myWritingAccess";
 
 const PAGE = 50;
 const items = ref<MyWritingItem[]>([]);
 const total = ref(0);
 const hasMore = ref(false);
-const phase = ref<"loading" | "ready" | "error">("loading");
+const phase = ref<"loading" | "ready" | "error" | "denied">("loading");
 const loadingMore = ref(false);
 const errorText = ref("");
 const query = ref("");
@@ -28,7 +29,10 @@ async function load(append = false) {
     if (!append) phase.value = "error";
   } finally { loadingMore.value = false; }
 }
-onMounted(() => void load());
+onMounted(async () => {
+  if ((await refreshMyWritingAccess()) === false) { phase.value = "denied"; return; }
+  void load();
+});
 
 const visible = computed(() => items.value.filter((item) =>
   filter.value === "all" || (filter.value === "assigned" ? item.assignedBlockCount > 0 : item.myRole === "owner")));
@@ -65,7 +69,8 @@ const summary = computed(() => {
             :class="filter === option[0] ? 'primary' : 'ghost'" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</button>
         </div>
       </form>
-      <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取你负责的文档…" />
+      <StatePanel v-if="phase === 'denied'" kind="denied" title="只读成员没有「我的编写」" text="你在项目里是只读或评审角色，可以从项目进入文档查看。" />
+      <StatePanel v-else-if="phase === 'loading'" kind="loading" text="正在读取你负责的文档…" />
       <StatePanel v-else-if="phase === 'error'" kind="error" title="没能加载" :text="errorText"><button type="button" class="ghost" @click="load()">重试</button></StatePanel>
       <StatePanel v-else-if="!visible.length" kind="empty" :title="query ? '没有匹配的文档' : '目前没有分配给你的部分。'" :text="query ? '' : '负责人分配后会出现在这里。'" />
       <div v-else class="groups">

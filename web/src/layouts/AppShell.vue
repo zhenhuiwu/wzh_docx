@@ -9,6 +9,7 @@ import { getProject } from "../api/projects";
 import { objectCrumb, projectCrumb, rememberProject } from "../crumbs";
 import { flashMessage } from "../flash";
 import { NAV_ITEMS, navVisible } from "../access";
+import { myWritingVisible, refreshMyWritingAccess } from "../myWritingAccess";
 
 const route = useRoute();
 const router = useRouter();
@@ -159,6 +160,7 @@ function onDocumentClick(event: MouseEvent) {
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && menuOpen.value) closeMenu();
 }
+onMounted(() => void refreshMyWritingAccess());
 onMounted(() => { document.addEventListener("click", onDocumentClick); document.addEventListener("keydown", onKeydown); });
 onBeforeUnmount(() => { document.removeEventListener("click", onDocumentClick); document.removeEventListener("keydown", onKeydown); });
 
@@ -214,7 +216,7 @@ async function logout() {
     <div class="body">
       <aside class="sidenav">
         <nav class="menu" aria-label="主导航">
-          <NavItem :to="{ name: 'my-writing' }" :current="route.name === 'my-writing'" label="我的编写">
+          <NavItem v-if="myWritingVisible" :to="{ name: 'my-writing' }" :current="route.name === 'my-writing'" label="我的编写">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4" /></svg>
             <span class="nav-label">我的编写</span>
           </NavItem>
