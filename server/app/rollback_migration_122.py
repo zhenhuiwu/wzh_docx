@@ -47,7 +47,7 @@ def rollback(path: Path, apply: bool, force: bool = False) -> int:
             if apply:
                 return 3
         if not apply:
-            print(f"只做了检查。确认已停服务后加 --yes 执行回滚。")
+            print("只做了检查。确认已停服务后加 --yes 执行回滚。")
             return 0
         backup = path.with_name(f"{path.name}.before-rollback-{NUMBER}-{datetime.now():%Y%m%d-%H%M%S}.db")
         target_db = sqlite3.connect(backup)
