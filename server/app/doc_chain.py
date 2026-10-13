@@ -1,7 +1,7 @@
 """内置文档模板与文档依赖链（30 §3.1、§3.6）。
 
-本轮不新增迁移：依赖关系由内置目录（代码）给出，项目内按文档名称或来源模板名称匹配。
-项目级可编辑的上游关系（30 Q-1）需要新表，待 A07 合入、迁移编号确定后再做。
+内置目录（代码）给出阶段、章节与公共框架；模板上游存 template_document_upstreams（可编辑），
+项目内文档上游存 document_upstreams（Q-1：模板预填，负责人可增删）。
 """
 
 from __future__ import annotations
@@ -401,9 +401,10 @@ def seed_from_upstreams(conn, project_id, upstream_ids: list[str], markdown: str
             if not source:
                 continue
             gap = block.gap_after or "\n\n"
-            note = type(block)("paragraph", f"> 来源：《{row['name']}》{title.split(' ', 1)[-1]}（创建时复制的初稿，可修改，不随上游更新）", gap, None)
+            note = type(block)("paragraph", f"（来源：《{row['name']}》{title.split(' ', 1)[-1]}，创建时复制的初稿，可修改，不随上游更新）", gap, None)
             copies = [type(b)(b.kind, b.body, b.gap_after or gap, b.heading_level) for b in source]
             out.extend([note, *copies])
+            index = body_end  # 本章只有提示语：被初稿替换
             copied.append({"chapter": title, "upstreamDocumentId": str(row["id"]), "blocks": len(source)})
             break
     if not copied:
