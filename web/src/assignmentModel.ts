@@ -65,11 +65,35 @@ export function mineRegions(order: string[], editable: Set<string>): string[] {
  * 27 复验 M-4：结果必须按开始编辑时的修订号提交（allowMerge），由服务端三方合并——别人并发改了我没改的块会被并入，
  * 双方都改了同一块报冲突。这里不再拿服务器最新正文做文字配对（重复文字会配错 ID，造成静默覆盖）。
  */
+/**
+ * 28 L-4：没有真实块 ID 时的配对——按编辑距离对齐（相同文字 0，原位改写 1，增删各 1.5），
+ * 原位改写比“删一段再加一段”便宜，重复文字（多段“无。”）不会错位。返回每个块对应的底稿 ID（新块为 null）。
+ */
+export function alignByEdits(blocks: Array<{ kind: string; body: string }>, baseline: BaselineObject[]): Array<string | null> {
+  const n = blocks.length, m = baseline.length;
+  const cost: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = 1; i <= n; i += 1) cost[i][0] = i * 1.5;
+  for (let j = 1; j <= m; j += 1) cost[0][j] = j * 1.5;
+  const sub = (i: number, j: number) => blocks[i].body.trim() === baseline[j].markdown.trim() ? 0 : blocks[i].kind === baseline[j].kind ? 1 : 2.5;
+  for (let i = 1; i <= n; i += 1) {
+    for (let j = 1; j <= m; j += 1) cost[i][j] = Math.min(cost[i - 1][j - 1] + sub(i - 1, j - 1), cost[i - 1][j] + 1.5, cost[i][j - 1] + 1.5);
+  }
+  const ids: Array<string | null> = new Array(n).fill(null);
+  let i = n, j = m;
+  while (i > 0 && j > 0) {
+    if (cost[i][j] === cost[i - 1][j - 1] + sub(i - 1, j - 1)) { if (sub(i - 1, j - 1) < 2.5) ids[i - 1] = baseline[j - 1].id; i -= 1; j -= 1; }
+    else if (cost[i][j] === cost[i - 1][j] + 1.5) i -= 1;
+    else j -= 1;
+  }
+  return ids;
+}
+
 export function keepMineOnly(markdown: string, baseline: BaselineObject[], editable: Set<string>, mineIds?: Array<string | null>): { markdown: string; stashed: string[]; blockIds: Array<string | null> } {
   const blocks = splitBlocks(markdown);
   // mineIds：编辑区里每块真实的对象 ID（优先）；没有时退回文字配对（本机草稿等）
   const known = new Set(baseline.map(item => item.id));
-  const ids = mineIds && mineIds.length === blocks.length ? mineIds.map(id => id && known.has(id) ? id : null) : assignBlockIds(markdown, baseline);
+  const byIds = !!mineIds && mineIds.length === blocks.length;
+  const ids = byIds ? mineIds!.map(id => id && known.has(id) ? id : null) : blocks.length * baseline.length <= 4_000_000 ? alignByEdits(blocks, baseline) : assignBlockIds(markdown, baseline);
   const mineById = new Map<string, string>();
   const following = new Map<string, string[]>();
   const leading: string[] = [];
@@ -90,6 +114,8 @@ export function keepMineOnly(markdown: string, baseline: BaselineObject[], edita
     const mine = mineById.get(item.id);
     if (editable.has(item.id)) {
       if (mine !== undefined) emit(mine, item.id);
+      // 28 L-4：没有真实 ID（文字配对）时，配不上的可编辑块按底稿保留，不当作“我删了”——宁可不删，也不静默删掉没动过的段
+      else if (!byIds) emit(item.markdown, item.id);
     } else {
       emit(item.markdown, item.id);
       if (mine !== undefined && mine.trim() !== item.markdown.trim()) stashed.push(mine);

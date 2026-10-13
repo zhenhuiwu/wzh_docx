@@ -67,4 +67,16 @@ describe("只保存我负责的部分", () => {
     expect(added.markdown).toBe("# 章\n\n甲。\n\n乙。\n");
     expect(added.stashed).toEqual(["新增。"]);
   });
+  it("没有真实 ID（文字配对）：重复“无。”按位置对齐，不删没动过的段（28 L-4）", () => {
+    const base = ["# 章", "段0原文。", "段1原文。", "无。", "无。", "段4原文。", "无。", "段6原文。", "无。", "段8原文。"]
+      .map((markdown, index) => ({ id: `o${index}`, kind: index ? "paragraph" : "heading", markdown }));
+    const mine = ["# 章", "段0原文。", "段1原文。", "无（我改）。", "无。", "段4原文。", "无（我改）。", "段6原文。", "无（我改）。", "段8原文（我改）。"];
+    const result = keepMineOnly(mine.join("\n\n") + "\n", base, new Set(["o4", "o6", "o8"]));
+    expect(result.markdown.trim().split("\n\n")).toEqual(["# 章", "段0原文。", "段1原文。", "无。", "无。", "段4原文。", "无（我改）。", "段6原文。", "无（我改）。", "段8原文。"]);
+    expect(result.blockIds).toEqual(base.map(item => item.id));
+    expect(result.stashed).toEqual(["无（我改）。", "段8原文（我改）。"]);
+    // 我自己负责、没配上的段：文字配对下按底稿保留，不当作删除
+    const dropped = keepMineOnly("# 章\n\n段0原文。\n", base.slice(0, 3), new Set(["o2"]));
+    expect(dropped.markdown).toBe("# 章\n\n段0原文。\n\n段1原文。\n");
+  });
 });
