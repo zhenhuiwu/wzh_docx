@@ -337,21 +337,43 @@ def _plain_heading(body: str) -> str:
     return re.sub(r"[ \t]+#+[ \t]*$", "", re.sub(r"^ {0,3}#{1,6}[ \t]*", "", body.strip())).strip()
 
 
-def selection_precheck(connection, document_id, actor, probe_markdown: str, block_ids: list[str]) -> None:
-    """27 复验 M-3：选区改写会动到的块（正文里被替换的块，加上前端报的选区块 ID）都要归受限编写人员本人。"""
+def _plain_text(text: str) -> str:
+    import re
+    return re.sub(r"[\s*_`~#>|\\\[\]()!-]+", "", text)
+
+
+def selection_precheck(connection, document_id, actor, probe_markdown: str, block_ids: list[str] | None,
+                       selection_text: str = "") -> None:
+    """27 复验 M-3 / 28 M-1''：受限编写人员的选区改写按选区块 ID 定位对象（不按文字找，重复文字不能绕过）：
+    必须带 selectionBlockIds（缺 → 422），ID 都得是当前正文里的对象，选中的文字得落在这些块里，且这些块都归本人；
+    正文里被替换的块（探针）也要归本人。"""
     if actor is None or not restricted(*actor_scope(connection, document_id, actor)):
         return
+    if not block_ids:
+        raise AppError(422, "VALIDATION_FAILED", "请重新选择正文并生成（缺少所选段落的标识）。",
+                       field_errors=[{"field": "selectionBlockIds", "message": "受限编写人员的选区编写必须带所选块的标识。"}])
     from app.markdown_blocks import split
     nodes = nodes_of(connection, document_id)
-    probe = {block.body.strip() for block in split(probe_markdown)[1]}
-    wanted = set(block_ids)
+    by_id = {node.id: index for index, node in enumerate(nodes)}
+    if any(value not in by_id for value in block_ids):
+        raise AppError(422, "SELECTION_INVALID", "所选段落已变化，请重新选择正文并生成。")
+    picked = sorted({by_id[value] for value in block_ids})
+    wanted_text = _plain_text(selection_text)
+    if wanted_text and wanted_text not in _plain_text("".join(nodes[index].body for index in picked)):
+        raise AppError(422, "SELECTION_INVALID", "所选文字与所选段落对不上，请重新选择正文并生成。")
+    probe_blocks = split(probe_markdown)[1]
+    probe = {block.body.strip() for block in probe_blocks}
     owners = resolve(nodes, explicit_map(connection, document_id))
-    for node, owner, path in zip(nodes, owners, heading_paths(nodes)):
-        if (node.body.strip() in probe and node.id not in wanted) or str(actor) in owner.owners:
+    paths = heading_paths(nodes)
+    for index, (node, owner) in enumerate(zip(nodes, owners)):
+        # 被替换的块按位置找（块数不变时逐块比对，重复文字也能分清）；块数变了退回按文字找
+        changed = (probe_blocks[index].body.strip() != node.body.strip()) if len(probe_blocks) == len(nodes) else node.body.strip() not in probe
+        touched = index in picked or changed
+        if not touched or str(actor) in owner.owners:
             continue
         names = _names(connection, set(owner.owners))
         raise AppError(409, "SECTION_NOT_ASSIGNED", "所选范围包含他人负责的内容，请只选择你负责的部分。",
-                       details={"violations": [_violation("modify", node, None, owner, path, names)], "total": 1,
+                       details={"violations": [_violation("modify", node, None, owner, paths[index], names)], "total": 1,
                                 "assignmentsRevision": assignments_revision(connection, document_id), "reason": "ai_scope"})
 
 

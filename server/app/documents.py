@@ -1110,7 +1110,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
             _check_word(connection, row, probe)
             # 27 复验 M-3：选中文字的 AI 也在调用模型前按所选块的归属预检
             from app.document_assignments import selection_precheck
-            selection_precheck(connection, did, session.user_id, probe, body.selectionBlockIds or [])
+            selection_precheck(connection, did, session.user_id, probe, body.selectionBlockIds, body.selection.text)
     if whole_document and (body.headingIndex is not None or body.selectedText is not None):
         raise AppError(422, "VALIDATION_FAILED", "全文编辑不能同时指定章节或选中文字。")
     if not whole_document and body.headingIndex is None and not (body.selectedText or "").strip():

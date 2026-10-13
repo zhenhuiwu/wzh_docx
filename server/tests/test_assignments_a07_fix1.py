@@ -129,14 +129,15 @@ def test_selection_ai_precheck_by_selected_blocks(ctx, monkeypatch):
         word = block["text"][:2]
         return {"expectedRevision": record["revision"], "scope": "selection", "selectedText": word,
                 "selection": {"blockId": block["blockId"], "start": 0, "end": len(word), "text": word}, **(extra or {})}
-    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "性能需求")))
+    other = next(i for i, b in ctx.state(did)[2] if b.kind != "heading" and b.body == _section_body(ctx, did, "性能需求"))
+    mine = next(i for i, b in ctx.state(did)[2] if b.kind != "heading" and b.body == _section_body(ctx, did, "功能需求"))
+    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "性能需求"), {"selectionBlockIds": [other]}))
     assert response.status_code == 409 and response.json()["error"]["details"]["reason"] == "ai_scope", response.text
     assert calls == []
-    other = next(i for i, b in ctx.state(did)[2] if b.kind != "heading" and b.body == _section_body(ctx, did, "性能需求"))
-    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求"), {"selectionBlockIds": [other]}))
+    response = ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求"), {"selectionBlockIds": [mine, other]}))
     assert response.status_code == 409, response.text                        # 前端报的选区块里有别人的
     assert calls == []
-    ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求")))
+    ctx.req("POST", f"/documents/{did}/sections/draft", body(_section_body(ctx, did, "功能需求"), {"selectionBlockIds": [mine]}))
     assert calls == ["ai"]
 
 
