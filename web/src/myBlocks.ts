@@ -50,7 +50,7 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
       if (objects[i].kind === "heading") continue;
       if (mine(objects[i])) return null;
       // 模板占位（“（在此编写本章内容。）”）不算上下文，继续往外找
-      if (isTemplateFiller(objects[i].markdown) || !objects[i].markdown.trim()) continue;
+      if (isContextFiller(objects[i].markdown) || !objects[i].markdown.trim()) continue;
       found = sectionOf[i];
       return objects[i].markdown;
     }
@@ -109,8 +109,16 @@ export function isPlaceholderText(markdown: string): boolean {
 export function isFrameworkNote(markdown: string): boolean {
   return /^[（(]公共框架[：:][^\n]*[）)]$/.test(markdown.trim());
 }
+/** 复验 P2-2：模板的来源说明（“（来源：《软件需求规格说明》范围，创建时复制的初稿…）”）也不当上下文。 */
+export function isSourceNote(markdown: string): boolean {
+  return /^[（(]来源[：:][^\n]*[）)]$/.test(markdown.trim());
+}
 export function isTemplateFiller(markdown: string): boolean {
   return isPlaceholderText(markdown) || isFrameworkNote(markdown);
+}
+/** 前后文跳过的块：模板占位、公共框架说明、来源说明 */
+export function isContextFiller(markdown: string): boolean {
+  return isTemplateFiller(markdown) || isSourceNote(markdown);
 }
 
 /** 验收 40 P1-1：AI 编写本节的块操作可能在 draft 或 done 事件里给出。只把本片段里的 replace 填进草稿，其余计为跳过。 */

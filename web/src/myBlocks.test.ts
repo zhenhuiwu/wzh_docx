@@ -85,3 +85,12 @@ describe("contextView / 公共框架占位 / 前后文章节", () => {
     expect([only.before, only.beforeSection]).toEqual(["真正的前文", "1 范围"]);
   });
 });
+
+describe("来源说明不当上下文（复验 P2-2）", () => {
+  it("跳过（来源：…）取更前面的正文；来源说明本身在输入框里照常可改", () => {
+    const doc = [o("a", "paragraph", "真正的前文"), o("s", "paragraph", "（来源：《软件需求规格说明》范围，创建时复制的初稿，可修改，不随上游更新）"), o("h", "heading", "# 6 进度安排"), o("b", "paragraph", "我的段")];
+    const [only] = buildFragments(doc, [r("b", ["me"]), r("h", ["me"])], "me");
+    expect(only.before).toBe("真正的前文");
+    expect(isTemplateFiller(doc[1].markdown)).toBe(false);
+  });
+});
