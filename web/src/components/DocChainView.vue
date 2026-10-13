@@ -34,6 +34,11 @@ const related = computed(() => {
   return set;
 });
 
+const createdDocs = computed(() => [...(chain.value?.nodes ?? []), ...(chain.value?.others ?? [])]
+  .filter((n) => n.created && n.documentId).map((n) => ({ id: n.documentId as string, name: n.name })));
+function defaultUpstreams(node: ChainNode) {
+  return node.upstream.map((k) => byKey.value.get(k)).filter((n): n is ChainNode => Boolean(n?.created && n.documentId)).map((n) => n.documentId as string);
+}
 function upstreamNames(node: ChainNode) { return node.upstream.map((k) => byKey.value.get(k)?.name ?? k); }
 function percent(node: ChainNode) { return node.total ? Math.round((node.written / node.total) * 100) : 0; }
 
@@ -94,6 +99,7 @@ defineExpose({ reload: load });
           <li><span class="swatch writing" />编写中</li>
           <li><span class="swatch done" />已完成</li>
           <li><span class="swatch missing" />未创建</li>
+          <li><span class="tag warning">上游已更新</span></li>
         </ul>
         <div class="seg" role="group" aria-label="视图">
           <button type="button" class="ghost" :aria-pressed="view === 'graph'" :class="{ on: view === 'graph' }" @click="setView('graph')">依赖图</button>
@@ -116,6 +122,7 @@ defineExpose({ reload: load });
                   @mouseenter="hovered = node.key" @mouseleave="hovered = null" @focus="hovered = node.key" @blur="hovered = null" @click="open(node)">
             <span class="node-name">{{ node.name }}</span>
             <template v-if="node.created">
+              <span v-if="node.upstreamChanged" class="tag warning" data-testid="upstream-changed">上游已更新</span>
               <span class="node-meta"><span class="tag" :class="{ info: node.status !== 'completed', success: node.status === 'completed' }">{{ statusLabel[node.status] ?? node.status }}</span><span class="num">{{ node.written }}/{{ node.total }} 章</span></span>
               <span class="bar" aria-hidden="true"><span :style="{ width: percent(node) + '%' }" /></span>
               <span class="owner">{{ node.ownerName || "—" }}</span>
@@ -136,7 +143,7 @@ defineExpose({ reload: load });
       </table></div>
       <p v-if="chain.others.length" class="others">不在依赖链中的文档：{{ chain.others.map((n) => n.name).join("、") }}</p>
     </template>
-    <CreateFromTemplateDialog :project-id="projectId" :node="creating" :upstream-names="creating ? upstreamNames(creating) : []" @close="creating = null" @created="onCreated" />
+    <CreateFromTemplateDialog :project-id="projectId" :node="creating" :upstream-options="createdDocs" :default-upstream-ids="creating ? defaultUpstreams(creating) : []" @close="creating = null" @created="onCreated" />
   </section>
 </template>
 
@@ -164,6 +171,7 @@ defineExpose({ reload: load });
 .node.missing { border-style:dashed; background:transparent; }
 .node:disabled { cursor:default; }
 .node.dim { opacity:.45; }
+.node .tag.warning { justify-self:start; }
 .node-name { font-weight:var(--weight-medium); overflow-wrap:anywhere; }
 .node-meta { display:flex; justify-content:space-between; align-items:center; color:var(--text-secondary); font-size:var(--text-xs); }
 .node-missing { color:var(--stamp); font-size:var(--text-sm); }
