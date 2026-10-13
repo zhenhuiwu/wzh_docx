@@ -10,6 +10,7 @@ import ProjectFrame from "../components/ProjectFrame.vue";
 import StatePanel from "../components/StatePanel.vue";
 import DiffView from "../components/baselines/DiffView.vue";
 import { formatDateTime } from "../format";
+import { crossSummary } from "../baselineCompare";
 
 const route = useRoute();
 const projectId = computed(() => String(route.params.id));
@@ -78,7 +79,7 @@ const crossRows = computed<CrossRow[]>(() => {
     }
     const other = target.get(row.document.id);
     target.delete(row.document.id);
-    if (!other) { rows.push({ id: row.document.id, name: row.document.name, base: row.version.seq, compare: null, state: "removed", note: `不在 ${value.to.label} 中` }); continue; }
+    if (!other) { rows.push({ id: row.document.id, name: row.document.name, base: row.version.seq, compare: null, state: "removed", note: `未纳入 ${value.to.label}` }); continue; }
     const same = other.version.revision === row.version.revision;
     rows.push({ id: row.document.id, name: row.document.name, base: row.version.seq, compare: other.version.seq, state: same ? "same" : "changed", note: same ? "无变化" : `${row.version.label} → ${other.version.label}` });
   }
@@ -86,7 +87,7 @@ const crossRows = computed<CrossRow[]>(() => {
   const order = { changed: 0, added: 1, removed: 2, same: 3 } as const;
   return rows.sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "zh-CN"));
 });
-const crossChanged = computed(() => crossRows.value.filter((row) => row.state !== "same").length);
+const crossText = computed(() => cross.value ? crossSummary(crossRows.value.map((row) => row.state), cross.value.from.label, cross.value.to?.label ?? "当前") : "");
 const crossActive = computed(() => crossRows.value.find((row) => row.id === crossDoc.value) ?? null);
 async function startCross() {
   if (fromSeq.value === null || fromSeq.value === toSeq.value) return;
@@ -168,7 +169,7 @@ async function submit() {
         <StatePanel v-if="crossPhase === 'error'" kind="error" title="对比失败" :text="crossError"><button type="button" class="ghost" @click="startCross">重试</button></StatePanel>
         <section v-else-if="cross && crossPhase === 'ready'" class="cross" :aria-label="`基线对比 ${cross.label}`">
           <nav class="cross-docs" :aria-label="`${cross.label} 涉及的文档`">
-            <p class="cross-summary">{{ cross.label }}：{{ crossChanged ? `${crossChanged} 份文档有变化` : "没有文档变化" }}</p>
+            <p class="cross-summary">{{ cross.label }}：{{ crossText }}</p>
             <button v-for="row in crossRows" :key="row.id" type="button" class="cross-doc" :class="[row.state, { on: row.id === crossDoc }]" :aria-current="row.id === crossDoc ? 'true' : undefined" @click="crossDoc = row.id">
               <span class="cd-name">{{ row.name }}</span>
               <small>{{ row.note }}</small>
@@ -179,7 +180,7 @@ async function submit() {
             <template v-else>
               <div class="compare-head"><h3>{{ crossActive.name }}：{{ cross.label }}</h3><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: crossActive.id } }">打开文档</router-link></div>
               <StatePanel v-if="crossActive.state === 'same'" kind="empty" title="这份文档没有变化" text="" />
-              <StatePanel v-else-if="crossActive.base === null || crossActive.compare === null" kind="empty" :title="crossActive.note" :text="crossActive.base === null ? '这份文档只在后一个基线里，没有可比的旧版本。' : '这份文档只在前一个基线里。'" />
+              <StatePanel v-else-if="crossActive.base === null || crossActive.compare === null" kind="empty" :title="crossActive.note" :text="crossActive.base === null ? '这份文档只在后一个基线里，没有可比的旧版本。' : '这份文档没有纳入后一个基线，不算变化。'" />
               <DiffView v-else :key="`${crossActive.id}:${crossActive.base}:${crossActive.compare}`" :document-id="crossActive.id" :base="crossActive.base" :compare="crossActive.compare" />
             </template>
           </div>
@@ -282,7 +283,7 @@ async function submit() {
 .cross-doc small { color: var(--ink-secondary); font-size: var(--text-xs); }
 .cross-doc.same { color: var(--ink-tertiary); }
 .cross-doc.added small { color: var(--ok); }
-.cross-doc.removed small { color: var(--fault); }
+.cross-doc.removed small { color: var(--text-secondary); }
 .cd-name { overflow-wrap: anywhere; }
 .cross-diff { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
