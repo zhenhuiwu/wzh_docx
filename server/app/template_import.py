@@ -44,8 +44,8 @@ def _elements(document):
                         yield f"{path}/row/{row_index}/cell/{cell_index}/p/{paragraph_index}", paragraph, path
 
 
-def parse_template(path: str | Path) -> dict:
-    content = Path(path).read_bytes()
+def parse_template(path: str | Path | bytes) -> dict:
+    content = path if isinstance(path, bytes) else Path(path).read_bytes()
     document = Document(BytesIO(content))
     source_hash = sha256(content).hexdigest()
     blocks, current_heading, guidance_chain, body_started = [], None, False, False

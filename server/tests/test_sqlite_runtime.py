@@ -2,7 +2,6 @@
 
 from io import BytesIO
 from typing import ClassVar
-from uuid import uuid4
 
 from docx import Document
 from fastapi.testclient import TestClient
@@ -50,6 +49,15 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             "107_document_memory_retractions.sql",
             "108_document_versions.sql",
             "109_writing_skills.sql",
+            "110_project_member_owner_backfill.sql",
+            "111_document_objects.sql",
+            "112_document_changes.sql",
+            "113_document_conflicts.sql",
+            "114_document_objects_deleted_after.sql",
+            "115_document_conflict_mine_snapshots.sql",
+            "116_project_members_v2.sql",
+            "117_template_versions.sql",
+            "118_document_assignments.sql",
         ]
         assert migrate() == []
         admin_id = create_user(

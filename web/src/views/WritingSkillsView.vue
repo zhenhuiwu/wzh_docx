@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import StatePanel from "../components/StatePanel.vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 import { ApiError } from "../api/client";
 import { getCurrentSession } from "../api/identity";
@@ -290,32 +291,37 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="card skills-page">
-    <header class="head"><h1>Skill 管理</h1><button v-if="canManage" type="button" class="primary" :disabled="mutationBusy || phase !== 'ready'" @click="openDialog()">新建 Skill</button></header>
-    <p v-if="notice" class="feedback" role="status">{{ notice }}</p>
-    <p v-if="actionError" class="feedback failure" role="alert">{{ actionError }}</p>
-    <form class="skill-query" @submit.prevent="search()">
+  <section class="view fill skills-page">
+    <header class="page-head">
+      <div><h1>Skill 管理</h1><p class="page-desc">维护文档编写规范（Skill），供文档工作台的写作助手选用。</p></div>
+      <div class="page-actions"><button v-if="canManage" type="button" class="primary" :disabled="mutationBusy || phase !== 'ready'" @click="openDialog()"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>新建 Skill</button></div>
+    </header>
+    <div class="card skills-card">
+    <p v-if="notice" class="notice success" role="status">{{ notice }}</p>
+    <p v-if="actionError" class="notice" role="alert">{{ actionError }}</p>
+    <form class="query skill-query" @submit.prevent="search()">
       <label>名称<input v-model="draftQuery.name" class="control" type="search" maxlength="120" :disabled="mutationBusy || phase === 'loading'" /></label>
       <label>状态<select v-model="draftQuery.status" class="control" :disabled="mutationBusy || phase === 'loading'"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">停用</option></select></label>
       <div class="query-actions"><button type="submit" class="primary" :disabled="mutationBusy || phase === 'loading'">查询</button><button type="button" class="ghost" :disabled="mutationBusy || phase === 'loading'" @click="search(true)">重置</button></div>
     </form>
-    <p v-if="phase === 'loading'" class="empty" role="status">正在读取 Skill…</p>
-    <div v-else-if="phase === 'error'" class="empty state-error" role="alert"><p>{{ errorText }}</p><button type="button" class="ghost" :disabled="mutationBusy" @click="load">重试</button></div>
-    <p v-else-if="items.length === 0" class="empty">{{ appliedQuery.name || appliedQuery.status ? '没有符合条件的 Skill' : '还没有 Skill' }}</p>
-    <div v-else class="table-wrap">
+    <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取 Skill…" />
+    <StatePanel v-else-if="phase === 'error'" kind="error" title="Skill 加载失败" :text="errorText"><button type="button" class="ghost" :disabled="mutationBusy" @click="load">重试</button></StatePanel>
+    <StatePanel v-else-if="items.length === 0" :title="appliedQuery.name || appliedQuery.status ? '没有符合条件的 Skill' : '还没有 Skill'" :text="appliedQuery.name || appliedQuery.status ? '换个条件试试。' : '新建 Skill 后，写作助手即可按规范编写。'" />
+    <div v-else class="table-wrap skill-table">
       <table><colgroup><col class="name-col" /><col class="description-col" /><col class="kind-col" /><col class="status-col" /><col class="actions-col" /></colgroup>
-        <thead><tr><th>名称</th><th>说明</th><th>基准规范</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>名称</th><th>说明</th><th>基准规范</th><th>状态</th><th class="th-right">操作</th></tr></thead>
         <tbody><tr v-for="item in items" :key="item.id">
-          <td class="skill-name">{{ item.name }}</td><td>{{ item.description || '—' }}</td><td>{{ kinds[item.baseKind] }}</td><td>{{ item.status === 'active' ? '启用' : '停用' }}</td>
-          <td><div class="row-actions"><button type="button" class="ghost" :disabled="mutationBusy" @click="openDialog(item)">{{ canManage ? '编辑' : '查看' }}</button><button v-if="canManage" type="button" class="ghost" :disabled="mutationBusy" :aria-label="`${item.status === 'active' ? '停用' : '启用'} ${item.name}`" @click="toggleStatus(item)">{{ statusBusyId === item.id ? '正在更新…' : item.status === 'active' ? '停用' : '启用' }}</button></div></td>
+          <td class="skill-name">{{ item.name }}<span v-if="item.builtin" class="tag plain builtin">内置</span></td><td class="muted">{{ item.description || '—' }}</td><td>{{ kinds[item.baseKind] }}</td><td><span class="status" :data-status="item.status === 'active' ? '启用' : '停用'">{{ item.status === 'active' ? '启用' : '停用' }}</span></td>
+          <td><div class="row-actions"><button type="button" class="text" :disabled="mutationBusy" @click="openDialog(item)">{{ canManage ? '编辑' : '查看' }}</button><button v-if="canManage" type="button" class="text" :class="{ neutral: item.status === 'active' }" :disabled="mutationBusy" :aria-label="`${item.status === 'active' ? '停用' : '启用'} ${item.name}`" @click="toggleStatus(item)">{{ statusBusyId === item.id ? '正在更新…' : item.status === 'active' ? '停用' : '启用' }}</button></div></td>
         </tr></tbody>
       </table>
     </div>
-    <nav v-if="phase === 'ready'" class="skill-pager" aria-label="Skill 分页"><span>共 {{ total }} 条</span><span>{{ page }} / {{ pageCount }}</span><button type="button" class="ghost" :disabled="mutationBusy || page <= 1" @click="changePage(page - 1)">上一页</button><button type="button" class="ghost" :disabled="mutationBusy || page >= pageCount" @click="changePage(page + 1)">下一页</button></nav>
+    <nav v-if="phase === 'ready'" class="pager" aria-label="Skill 分页"><span class="total">共 {{ total }} 条</span><span>第 {{ page }} / {{ pageCount }} 页</span><button type="button" class="ghost" :disabled="mutationBusy || page <= 1" @click="changePage(page - 1)">上一页</button><button type="button" class="ghost" :disabled="mutationBusy || page >= pageCount" @click="changePage(page + 1)">下一页</button></nav>
+    </div>
 
-    <dialog v-if="dialogOpen" ref="dialog" class="skill-dialog" aria-labelledby="skill-dialog-title" @cancel="cancelDialog" @close="dialogClosed">
+    <dialog v-if="dialogOpen" ref="dialog" class="app-dialog skill-dialog" aria-labelledby="skill-dialog-title" @cancel="cancelDialog" @close="dialogClosed">
       <form novalidate :aria-busy="formBusy" @submit.prevent="save">
-        <header class="dialog-head"><h2 id="skill-dialog-title">{{ !canManage ? '查看 Skill' : editing ? '编辑 Skill' : '新建 Skill' }}</h2><button type="button" class="ghost" :disabled="formBusy" @click="closeDialog">关闭</button></header>
+        <header class="dialog-head"><h2 id="skill-dialog-title">{{ !canManage ? '查看 Skill' : editing ? '编辑 Skill' : '新建 Skill' }}</h2><button type="button" class="subtle icon-close" aria-label="关闭" :disabled="formBusy" @click="closeDialog"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button></header>
         <p v-if="detailPhase === 'loading'" class="dialog-state" role="status">正在读取 Skill…</p>
         <div v-else-if="detailPhase === 'error'" class="dialog-state" role="alert"><p>{{ detailError }}</p><button type="button" class="ghost" @click="loadDetail">重试</button></div>
         <div v-else class="dialog-fields">
@@ -325,7 +331,7 @@ onBeforeUnmount(() => {
           </div>
           <label for="skill-description">说明<input id="skill-description" v-model="form.description" class="control" type="text" maxlength="500" aria-label="说明" :readonly="!canManage" :disabled="formBusy" :aria-invalid="Boolean(fieldErrors.description)" :aria-describedby="fieldErrors.description ? 'skill-description-error' : undefined" /><span v-if="fieldErrors.description" id="skill-description-error" class="field-error" role="alert">{{ fieldErrors.description }}</span></label>
           <div class="instruction-field">
-            <div class="instruction-label"><label for="skill-instructions">编写要求</label><button v-if="canManage" type="button" class="ghost" :disabled="formBusy" @click="fileInput?.click()">{{ importing ? '正在读取…' : '导入文本' }}</button><input ref="fileInput" type="file" accept=".md,.txt" hidden :disabled="formBusy || !canManage" @change="importText" /></div>
+            <div class="instruction-label"><label for="skill-instructions">编写要求</label><button v-if="canManage" type="button" class="ghost sm" :disabled="formBusy" @click="fileInput?.click()">{{ importing ? '正在读取…' : '导入文本' }}</button><input ref="fileInput" type="file" accept=".md,.txt" hidden :disabled="formBusy || !canManage" @change="importText" /></div>
             <textarea id="skill-instructions" ref="instructionsInput" v-model="form.instructions" class="control requirements" :class="{ 'is-invalid': fieldErrors.instructions }" rows="10" maxlength="12000" :readonly="!canManage" :disabled="formBusy" :spellcheck="false" :aria-invalid="Boolean(fieldErrors.instructions)" :aria-describedby="fieldErrors.instructions ? 'skill-instructions-error' : undefined" />
             <span v-if="fieldErrors.instructions" id="skill-instructions-error" class="field-error" role="alert">{{ fieldErrors.instructions }}</span>
           </div>
@@ -333,7 +339,7 @@ onBeforeUnmount(() => {
             <label for="skill-forbiddenTerms">禁用词（每行一个）<textarea id="skill-forbiddenTerms" v-model="form.forbiddenTerms" class="control" rows="3" aria-label="禁用词（每行一个）" :readonly="!canManage" :disabled="formBusy" :aria-invalid="Boolean(fieldErrors.forbiddenTerms)" :aria-describedby="fieldErrors.forbiddenTerms ? 'skill-forbiddenTerms-error' : undefined" /><span v-if="fieldErrors.forbiddenTerms" id="skill-forbiddenTerms-error" class="field-error" role="alert">{{ fieldErrors.forbiddenTerms }}</span></label>
             <label for="skill-maxChars">章节 / 选区字数上限<input id="skill-maxChars" v-model="form.maxChars" class="control" type="number" min="100" max="20000" step="1" placeholder="不限制" aria-label="章节 / 选区字数上限" :readonly="!canManage" :disabled="formBusy" :aria-invalid="Boolean(fieldErrors.maxChars)" :aria-describedby="fieldErrors.maxChars ? 'skill-maxChars-error' : undefined" /><span v-if="fieldErrors.maxChars" id="skill-maxChars-error" class="field-error" role="alert">{{ fieldErrors.maxChars }}</span></label>
           </div></details>
-          <p v-if="formError" class="field-error" role="alert">{{ formError }}</p>
+          <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
         </div>
         <footer class="dialog-actions"><button type="button" class="ghost" :disabled="formBusy" @click="closeDialog">{{ canManage ? '取消' : '关闭' }}</button><button v-if="canManage && detailPhase === 'ready'" type="submit" class="primary" :disabled="formBusy">{{ submitting ? '正在保存…' : '保存 Skill' }}</button></footer>
       </form>
@@ -342,34 +348,26 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.skill-query { display:flex; align-items:flex-end; gap:var(--space-4); padding:var(--space-4); border-bottom:1px solid var(--rule); }
-.skill-query label { display:grid; gap:var(--space-1); min-width:calc(var(--space-7) * 4); color:var(--ink-secondary); font-size:var(--text-sm); }
-.feedback { margin:0; padding:var(--space-3) var(--space-4); color:var(--ok); font-size:var(--text-sm); border-bottom:1px solid var(--rule); overflow-wrap:anywhere; }
-.feedback.failure { color:var(--fault); }
-.state-error { display:flex; flex-direction:column; align-items:center; gap:var(--space-2); }
-.state-error p,.dialog-state p { margin:0; }
-.state-error p,.dialog-state[role="alert"] { color:var(--fault); }
+.skills-card { overflow:hidden; }
+.skill-table { flex:1; min-height:0; overflow-y:auto; }
 .skills-page table { width:100%; table-layout:fixed; }
-.skills-page th,.skills-page td { white-space:normal; overflow-wrap:anywhere; }
-.name-col { width:22%; }.description-col { width:40%; }.kind-col { width:16%; }.status-col { width:8%; }.actions-col { width:14%; }
-.skill-name { font-weight:600; }
-.row-actions { display:flex; gap:var(--space-2); align-items:center; }
-.row-actions button { white-space:nowrap; }
-.skill-pager { display:flex; justify-content:flex-end; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-4); margin-top:auto; color:var(--ink-secondary); font-size:var(--text-sm); }
-.skill-dialog { width:calc(var(--space-7) * 20); max-height:calc(100vh - var(--space-7)); padding:0; overflow:auto; border:1px solid var(--rule-strong); border-radius:var(--radius-sheet); background:var(--sheet); color:var(--ink); font-family:var(--font); }
-.skill-dialog::backdrop { background:var(--spine); opacity:.45; }
-.dialog-head { display:flex; align-items:center; justify-content:space-between; padding:var(--space-5); border-bottom:1px solid var(--rule); }
-.dialog-head h2 { margin:0; font-size:calc(var(--text-md) * 1.25); }
-.dialog-fields { display:grid; gap:var(--space-4); padding:var(--space-5); }
+.skills-page td { white-space:normal; overflow-wrap:anywhere; }
+.name-col { width:24%; }.description-col { width:40%; }.kind-col { width:14%; }.status-col { width:10%; }.actions-col { width:12%; }
+.skill-name { font-weight:var(--weight-medium); }
+.builtin { margin-left:var(--space-2); }
+.row-actions { display:flex; justify-content:flex-end; gap:var(--space-4); align-items:center; }
+.skill-dialog { width:calc(var(--space-7) * 18); }
+.skill-dialog .dialog-fields { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-4); }
 .identity-fields,.rule-fields { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:var(--space-4); align-items:start; }
-.dialog-fields label { display:grid; gap:var(--space-1); color:var(--ink-secondary); font-size:var(--text-sm); }
-.dialog-fields .field-error { margin:0; overflow-wrap:anywhere; }
-.instruction-field { display:grid; gap:var(--space-2); }
+.dialog-fields label { display:grid; gap:6px; color:var(--text-primary); font-size:var(--text-sm); font-weight:var(--weight-medium); }
+.dialog-fields .field-error { margin:0; overflow-wrap:anywhere; font-weight:var(--weight-regular); }
+.instruction-field { display:grid; gap:6px; }
 .instruction-label { display:flex; justify-content:space-between; align-items:center; gap:var(--space-3); }
-.requirements { min-height:calc(var(--space-7) * 5); line-height:1.7; }
-.validation-rules summary { width:fit-content; padding:var(--space-1) 0; cursor:pointer; color:var(--ink-secondary); font-size:var(--text-sm); }
-.validation-rules summary:focus-visible { outline:2px solid var(--stamp); outline-offset:2px; }
+.requirements { min-height:calc(var(--space-7) * 5); line-height:var(--leading-md); }
+.validation-rules summary { width:fit-content; padding:var(--space-1) 0; cursor:pointer; color:var(--text-secondary); font-size:var(--text-sm); }
+.validation-rules summary:focus-visible { outline:none; border-radius:var(--radius-control); box-shadow:var(--focus-shadow); }
 .rule-fields { padding-top:var(--space-3); }
-.dialog-state { display:grid; justify-items:start; gap:var(--space-3); padding:var(--space-5); color:var(--ink-secondary); font-size:var(--text-sm); }
-.dialog-actions { display:flex; justify-content:flex-end; gap:var(--space-2); padding:var(--space-4) var(--space-5); border-top:1px solid var(--rule); }
+.dialog-state { display:grid; justify-items:start; gap:var(--space-3); padding:var(--space-5); color:var(--text-secondary); font-size:var(--text-sm); }
+.dialog-state p { margin:0; }
+.dialog-state[role="alert"] { color:var(--danger-600); }
 </style>

@@ -6,7 +6,7 @@ import pytest
 from lxml import html
 from docx import Document
 from docx.oxml import OxmlElement
-from test_document_versions import version_context, save, login
+from test_document_versions import version_context, save, login  # noqa: F401 - pytest fixtures
 import app.documents as documents
 from app.config import get_settings
 from app.db import connect

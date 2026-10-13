@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 
 from app.db import connect
+from app.document_access import effective_owner_sql
 from app.documents import _uuid
 from app.errors import AppError
 from app.identity import require_permission
@@ -230,7 +231,7 @@ def list_issues(
                 (projectId, actor.user_id) if not admin else (projectId,),
             ).fetchone()
             if visible is None:
-                raise AppError(404, "NOT_FOUND", "没有这个项目。")
+                raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
         items = [] if status == "resolved" else _collect(connection, actor.user_id, admin)
     if projectId:
         items = [item for item in items if item["projectId"] == projectId]
@@ -263,11 +264,11 @@ def get_workbench(request: Request) -> dict[str, object]:
         projects = connection.execute(
             f"""
             select p.id, p.name, p.description, p.organization, p.department, p.group_name, p.client_contact,
-                   p.owner_id, owner.name as owner_name, p.period_start, p.period_end,
-                   p.status, p.archived_at, p.revision, p.created_at, p.updated_at,
+                   {effective_owner_sql("p")} as owner_id, owner.name as owner_name, p.period_start, p.period_end,
+                   p.status, p.archived_at, p.revision, p.members_revision, p.created_at, p.updated_at,
                    p.software_version
             from projects p
-            join users owner on owner.id = p.owner_id
+            left join users owner on owner.id = {effective_owner_sql("p")}
             where p.archived_at is null and {_visible(admin)}
             order by p.updated_at desc
             limit 8

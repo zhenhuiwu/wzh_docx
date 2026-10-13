@@ -16,6 +16,7 @@ dependencies = [
   "playwright==1.63.0",
   "httpx==0.28.1",
   "pytest==9.1.1",
+  "defusedxml==0.7.1",
 ]
 
 [dependency-groups]
@@ -27,3 +28,17 @@ package = false
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 160
+extend-exclude = ["workspaces"]
+
+[tool.ruff.lint]
+# Pyflakes (unused imports/variables, undefined names), syntax errors, loop-variable
+# closures, silently swallowed exceptions and unsafe XML parsing.
+select = ["E9", "F", "B023", "S110", "S314"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import shared pytest fixtures from sibling modules and receive them as arguments.
+"tests/**" = ["S110", "F811"]

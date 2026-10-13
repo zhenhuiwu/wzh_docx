@@ -9,9 +9,11 @@ export class ApiError extends Error {
   readonly fieldErrors: FieldError[];
   readonly currentRevision?: number;
   readonly requestId: string;
+  readonly details?: Record<string, any>;
 
-  constructor(status: number, code: string, message: string, requestId = "", fieldErrors: FieldError[] = [], currentRevision?: number) {
+  constructor(status: number, code: string, message: string, requestId = "", fieldErrors: FieldError[] = [], currentRevision?: number, details?: Record<string, any>) {
     super(message);
+    this.details = details;
     this.name = "ApiError";
     this.status = status;
     this.code = code;
@@ -22,6 +24,24 @@ export class ApiError extends Error {
 }
 
 let csrfToken = "";
+let passwordChangeHandler: (() => void) | null = null;
+let sessionExpiredHandler: (() => void) | null = null;
+let forbiddenHandler: (() => void) | null = null;
+
+/** 任意请求收到 403 PASSWORD_CHANGE_REQUIRED 时调用（由路由注册，跳到改密页）。 */
+export function onPasswordChangeRequired(handler: () => void) {
+  passwordChangeHandler = handler;
+}
+
+/** 任意请求收到 401（会话失效或被管理员吊销）时调用（由路由注册，跳到登录页）。 */
+export function onSessionExpired(handler: () => void) {
+  sessionExpiredHandler = handler;
+}
+
+/** 任意请求收到普通 403 时调用（由路由注册，重新读取会话权限）。 */
+export function onForbidden(handler: () => void) {
+  forbiddenHandler = handler;
+}
 
 export function setCsrfToken(token: string) {
   csrfToken = token;
@@ -45,6 +65,8 @@ interface RequestOptions<T> {
   timeoutMs?: number;
   csrf?: string | null;
   idempotencyKey?: string;
+  /** 页面关闭时的保存（01 §6.5）：浏览器在页面卸载后继续发送，正文需 <64KB。 */
+  keepalive?: boolean;
   onEvent?: (event: T) => void;
 }
 
@@ -71,6 +93,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
       headers,
       body: options.form ?? (options.json !== undefined ? JSON.stringify(options.json) : undefined),
       signal,
+      keepalive: options.keepalive,
     });
     if (response.status === 204) return undefined;
     if (response.ok && options.onEvent) {
@@ -100,6 +123,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
       const error = payload?.error ?? {};
+      if (response.status === 403 && error.code === "PASSWORD_CHANGE_REQUIRED") passwordChangeHandler?.();
+      else if (response.status === 403 && path !== "/auth/me") forbiddenHandler?.();
+      // /auth/me 由路由守卫自行处理，/auth/login 的 401 是账号或密码错误。
+      if (response.status === 401 && path !== "/auth/me" && path !== "/auth/login") sessionExpiredHandler?.();
       throw new ApiError(
         response.status,
         typeof error.code === "string" ? error.code : "INTERNAL_ERROR",
@@ -107,6 +134,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
         typeof payload?.requestId === "string" ? payload.requestId : "",
         Array.isArray(error.fieldErrors) ? error.fieldErrors : [],
         typeof error.currentRevision === "number" ? error.currentRevision : undefined,
+        error.details && typeof error.details === "object" ? error.details : undefined,
       );
     }
     return payload as T;
@@ -119,4 +147,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+/**
+ * 按路径 id 读取对象时的“不存在”口径：404，以及 id 格式不合法时的 422（如 /projects/abc），
+ * 都按“不存在或无权访问”处理，不显示无意义的重试（09 复审 R4）。只用于按路径 id 的读取请求。
+ */
+export function isMissingResource(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 422);
 }

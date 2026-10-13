@@ -34,7 +34,8 @@ class UserCreateBody(BaseModel):
     account: str
     name: str
     department: str = ""
-    globalRoles: list[str] = Field(min_length=1)
+    # 省略或空数组：不授予全局角色，即“仅项目成员”账号（只能访问被加入的项目）。
+    globalRoles: list[str] = Field(default_factory=list, max_length=10)
     password: str
 
 
@@ -170,18 +171,30 @@ def _clean_reason(reason: str) -> str:
     return cleaned
 
 
+_MAX_ROLES = 10
+
+
 def _grantable(actor_roles: tuple[str, ...] | list[str], requested: list[str]) -> list[str]:
-    if not requested or len(requested) > 10:
+    """校验要授予的全局角色；空列表合法（不授予全局角色）。"""
+    if len(requested) > _MAX_ROLES:
         raise AppError(422, "VALIDATION_FAILED", "角色不正确。")
     unknown = [role for role in requested if role not in GLOBAL_ROLES]
     if unknown:
         raise AppError(422, "VALIDATION_FAILED", "角色不在可分配范围内。")
+    roles = list(dict.fromkeys(requested))
+    # 系统管理员只能由系统管理员授予（即使将来有别的角色拿到 users.manage）。
+    if "system_admin" in roles and "system_admin" not in actor_roles:
+        raise AppError(403, "FORBIDDEN", "只有系统管理员能授予系统管理员角色。")
     actor_permissions = set(permissions_for(actor_roles))
-    for role in requested:
+    for role in roles:
         needed = set(permissions_for([role]))
         if not needed.issubset(actor_permissions):
             raise AppError(403, "FORBIDDEN", "不能分配超出自己权限的角色。")
-    return list(dict.fromkeys(requested))
+    return roles
+
+
+def _roles_text(roles: list[str]) -> str:
+    return "、".join(roles) if roles else "无（仅项目成员）"
 
 
 def _record(connection, user_id: UUID, actor_id: UUID, action: str, reason: str) -> None:
@@ -194,14 +207,24 @@ def _record(connection, user_id: UUID, actor_id: UUID, action: str, reason: str)
     )
 
 
-def _revoke(connection, user_id: UUID) -> None:
+def _revoke(connection, user_id: UUID, keep_session: UUID | None = None) -> None:
+    if keep_session is None:
+        connection.execute(
+            """
+            update sessions
+            set revoked_at = now()
+            where user_id = %s and revoked_at is null
+            """,
+            (user_id,),
+        )
+        return
     connection.execute(
         """
         update sessions
         set revoked_at = now()
-        where user_id = %s and revoked_at is null
+        where user_id = %s and revoked_at is null and id <> %s
         """,
-        (user_id,),
+        (user_id, keep_session),
     )
 
 
@@ -336,6 +359,8 @@ def create_account(request: Request, body: UserCreateBody) -> dict[str, object]:
                 roles=roles,
                 department=body.department.strip(),
                 connection=connection,
+                must_change_password=True,
+                allow_no_roles=True,
             )
             connection.execute(
                 """
@@ -346,7 +371,9 @@ def create_account(request: Request, body: UserCreateBody) -> dict[str, object]:
                 """,
                 (actor.user_id, key, request_hash, user_id),
             )
-            _record(connection, user_id, actor.user_id, "create", "创建账号")
+            _record(connection, user_id, actor.user_id, "create", f"创建账号；全局角色：{_roles_text(roles)}")
+            if "system_admin" in roles:
+                _record(connection, user_id, actor.user_id, "users.role.grant_admin", "授予系统管理员")
             created = _load(connection, user_id)
     return _envelope(request, created)
 
@@ -385,7 +412,7 @@ def update_user(user_id: str, request: Request, body: UserPatchBody) -> dict[str
 def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, object]:
     actor = require_permission(request, "users.manage")
     target = _parse_user_id(user_id)
-    roles = _grantable(actor.roles, body.globalRoles) if body.globalRoles else []
+    roles = _grantable(actor.roles, body.globalRoles)
     reason = _clean_reason(body.reason)
     with connect() as connection:
         with connection.transaction(immediate=True):
@@ -397,6 +424,7 @@ def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, 
                 raise AppError(404, "NOT_FOUND", "没有这个账号。")
             _check_revision(row["revision"], body.expectedRevision)
             _reject_last_admin(connection, target, roles, disabling=False)
+            previous = _roles_for(connection, target)
             connection.execute("delete from user_roles where user_id = %s", (target,))
             for role in roles:
                 connection.execute(
@@ -411,9 +439,24 @@ def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, 
                 """,
                 (target,),
             )
-            _record(connection, target, actor.user_id, "roles", reason)
+            _record(connection, target, actor.user_id, "roles", f"{reason}（全局角色：{_roles_text(roles)}）"[:1000])
+            if "system_admin" in roles and "system_admin" not in previous:
+                _record(connection, target, actor.user_id, "users.role.grant_admin", "授予系统管理员")
+            if sorted(previous) != sorted(roles):
+                # 权限变了：撤销该用户的会话，让其重新登录后拿到新权限（自己改自己时保留当前会话）。
+                keep = actor.session_id if target == actor.user_id else None
+                _revoke(connection, target, keep)
             updated = _load(connection, target)
     return _envelope(request, updated)
+
+
+def _touch_assignments(connection, user_id) -> None:
+    """A07 复验：停用 / 启用会改变分工面板的“负责人已停用”与编写权，所在项目各文档 assignments_revision + 1，前端随轮询重取。"""
+    connection.execute(
+        "update documents set assignments_revision = assignments_revision + 1 "
+        "where project_id in (select project_id from project_members where user_id = %s)",
+        (str(user_id),),
+    )
 
 
 @router.post("/users/{user_id}/disable")
@@ -432,6 +475,11 @@ def disable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, 
             _check_revision(row["revision"], body.expectedRevision)
             if row["status"] == "active":
                 _reject_last_admin(connection, target, [], disabling=True)
+                # A05 R2 / U-5：该账号是某些项目唯一的启用负责人时拒绝停用（409 LAST_OWNER，列出项目），
+                # 与成员事务同为 IMMEDIATE，“停用 A”与“降级 B”串行，后执行的一方看得到前者的结果。
+                from app.project_members import reject_disabling_sole_owner
+
+                reject_disabling_sole_owner(connection, target)
                 connection.execute(
                     """
                     update users
@@ -442,6 +490,7 @@ def disable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, 
                 )
                 _revoke(connection, target)
                 _mark_jobs(connection, target)
+            _touch_assignments(connection, target)
             _record(connection, target, actor.user_id, "disable", reason)
             updated = _load(connection, target)
     return _envelope(request, updated)
@@ -469,6 +518,7 @@ def enable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, o
                 """,
                 (target,),
             )
+            _touch_assignments(connection, target)
             _record(connection, target, actor.user_id, "enable", reason)
             updated = _load(connection, target)
     return _envelope(request, updated)
@@ -481,8 +531,10 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
     reason = _clean_reason(body.reason)
     from app.identity import _require_new_password, hash_password
 
-    _require_new_password(body.password)
+    _require_new_password(body.password, "password")
     stored = hash_password(body.password)
+    # A password chosen by someone else must be replaced by its owner.
+    must_change = target != actor.user_id
     with connect() as connection:
         with connection.transaction(immediate=True):
             row = connection.execute(
@@ -496,12 +548,12 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
                 """
                 update users
                 set password_hash = %s,
-                    must_change_password = false,
+                    must_change_password = %s,
                     revision = revision + 1,
                     updated_at = now()
                 where id = %s
                 """,
-                (stored, target),
+                (stored, 1 if must_change else 0, target),
             )
             _revoke(connection, target)
             _record(connection, target, actor.user_id, "reset", reason)
@@ -509,7 +561,7 @@ def reset_credentials(user_id: str, request: Request, body: ResetCredentialsBody
         "data": {
             "userId": str(target),
             "status": "updated",
-            "requiresFirstLoginChange": False,
+            "requiresFirstLoginChange": must_change,
             "message": "密码已重置。",
         },
         "requestId": request.state.request_id,

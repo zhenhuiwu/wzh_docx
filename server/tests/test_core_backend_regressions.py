@@ -121,8 +121,21 @@ def test_two_admins_cannot_both_disable_themselves(client, monkeypatch):
     assert count["total"] == 1
 
 
+def _change_password(client, csrf, current, new):
+    response = client.post("/api/v1/auth/change-password", json={"currentPassword": current, "newPassword": new},
+                           headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 204, response.text
+
+
+def _must_change(client):
+    me = client.get("/api/v1/auth/me")
+    assert me.status_code == 200, me.text
+    blocked = client.get("/api/v1/projects")
+    return me.json()["data"]["user"]["requiresFirstLoginChange"], blocked
+
+
 def test_create_and_reset_passwords_are_usable_and_never_returned(client):
-    _user("core-admin")
+    admin_id = _user("core-admin")
     csrf = _login(client, "core-admin")
     create_payload = {"account": "new-user", "name": "新用户", "globalRoles": ["project_creator"], "password": PASSWORD}
     response = client.post("/api/v1/users", json=create_payload, headers={"X-CSRF-Token": csrf, "Idempotency-Key": "new-user"})
@@ -130,20 +143,33 @@ def test_create_and_reset_passwords_are_usable_and_never_returned(client):
     user_id = response.json()["data"]["id"]
     assert PASSWORD not in response.text
     member = TestClient(client.app)
-    _login(member, "new-user")
-    assert member.get("/api/v1/auth/me").status_code == 200
-    reset = client.post(f"/api/v1/users/{user_id}/reset-credentials", json={"expectedRevision": 0, "reason": "重新设定", "password": NEW_PASSWORD}, headers={"X-CSRF-Token": csrf})
+    member_csrf = _login(member, "new-user")
+    flagged, blocked = _must_change(member)
+    assert flagged and blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+    _change_password(member, member_csrf, PASSWORD, "member-chosen-1")
+    flagged, allowed = _must_change(member)
+    assert not flagged and allowed.status_code == 200
+    reset = client.post(f"/api/v1/users/{user_id}/reset-credentials", json={"expectedRevision": 1, "reason": "重新设定", "password": NEW_PASSWORD}, headers={"X-CSRF-Token": csrf})
     assert reset.status_code == 200, reset.text
-    assert NEW_PASSWORD not in reset.text and not reset.json()["data"]["requiresFirstLoginChange"]
+    assert NEW_PASSWORD not in reset.text and reset.json()["data"]["requiresFirstLoginChange"]
     assert member.get("/api/v1/auth/me").status_code == 401
-    _login(member, "new-user", NEW_PASSWORD)
-    assert member.get("/api/v1/auth/me").status_code == 200
+    member_csrf = _login(member, "new-user", NEW_PASSWORD)
+    flagged, blocked = _must_change(member)
+    assert flagged and blocked.status_code == 403
     with connect() as connection:
-        stored = connection.execute("SELECT password_hash, must_change_password FROM users WHERE id = %s", (user_id,)).fetchone()
-    assert verify_password(NEW_PASSWORD, stored["password_hash"]) and not stored["must_change_password"]
-    for payload in [{"expectedRevision": 1, "reason": "缺少密码"}, {"expectedRevision": 1, "reason": "太短", "password": "short"}]:
+        stored = connection.execute("SELECT password_hash, must_change_password, revision FROM users WHERE id = %s", (user_id,)).fetchone()
+    assert verify_password(NEW_PASSWORD, stored["password_hash"]) and stored["must_change_password"]
+    for payload in [{"expectedRevision": stored["revision"], "reason": "缺少密码"}, {"expectedRevision": stored["revision"], "reason": "太短", "password": "short"}]:
         assert client.post(f"/api/v1/users/{user_id}/reset-credentials", json=payload, headers={"X-CSRF-Token": csrf}).status_code == 422
     assert member.get("/api/v1/auth/me").status_code == 200
+    _change_password(member, member_csrf, NEW_PASSWORD, "member-chosen-2")
+    assert _must_change(member)[1].status_code == 200
+    # An administrator resetting their own password is not forced to change it again.
+    with connect() as connection:
+        revision = connection.execute("SELECT revision FROM users WHERE id = %s", (admin_id,)).fetchone()["revision"]
+    own = client.post(f"/api/v1/users/{admin_id}/reset-credentials", json={"expectedRevision": revision, "reason": "自行设定", "password": "admin-chosen-pass-3"}, headers={"X-CSRF-Token": csrf})
+    assert own.status_code == 200 and not own.json()["data"]["requiresFirstLoginChange"]
 
 
 def test_existing_fixed_admin_credentials_can_login(client):
@@ -191,7 +217,7 @@ def test_project_owner_choices_for_admin_are_paginated_and_minimal(client):
 
 def test_upload_scope_and_idempotency_include_metadata(client):
     owner = _user("core-owner", ["project_creator"])
-    outsider = _user("core-outsider", ["project_creator"])
+    _user("core-outsider", ["project_creator"])
     csrf = _login(client, "core-owner")
     first = _project(client, csrf, owner)
     second = _project(client, csrf, owner, "第二项目")
@@ -199,7 +225,7 @@ def test_upload_scope_and_idempotency_include_metadata(client):
     other_csrf = _login(other, "core-outsider")
     def upload(browser, token, project=first["id"], key="same-upload", name="中文说明.txt", purpose="attachment"):
         return browser.post("/api/v1/files", files={"file": (name, b"same content", "text/plain")}, data={"purpose": purpose, "projectId": project}, headers={"X-CSRF-Token": token, "Idempotency-Key": key})
-    assert upload(other, other_csrf).status_code == 403
+    assert upload(other, other_csrf).status_code == 404  # 三审：看不到项目与不存在一样 404
     assert upload(other, other_csrf, purpose="template").status_code == 403
     stored = upload(client, csrf)
     assert stored.status_code == 201, stored.text

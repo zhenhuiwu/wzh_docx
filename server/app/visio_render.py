@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from pathlib import Path
 import subprocess
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 class VisioRenderError(RuntimeError):
@@ -142,7 +145,7 @@ def _native_render(graph: dict, directory: Path) -> dict:
             try:
                 application.Quit()
             except Exception:
-                pass
+                logger.warning("Visio did not quit cleanly", exc_info=True)
         pythoncom.CoUninitialize()
         (directory / "visio.pid").unlink(missing_ok=True)
 

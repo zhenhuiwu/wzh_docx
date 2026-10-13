@@ -7,7 +7,7 @@ import json
 import os
 import re
 from contextlib import nullcontext
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -82,7 +82,7 @@ def guard_knowledge_file(request: Request, file_id: str) -> None:
                 _require_base(connection, base_id, actor.user_id, False)
             return
         if file_row["project_id"] is not None:
-            if project_role(connection, file_row["project_id"], actor.user_id) is None:
+            if not project_file_reader(actor.roles) and project_role(connection, file_row["project_id"], actor.user_id) is None:
                 raise AppError(404, "NOT_FOUND", "没有这个文件。")
             return
         if file_row["purpose"] == "template" and has_permission(actor.roles, "templates.read"):
@@ -284,17 +284,34 @@ def read_object_bytes(root: Path, storage_key: str) -> bytes:
     return path.read_bytes()
 
 
+def _ascii_filename(name: str) -> str:
+    """A quoted-string safe fallback: printable ASCII without quotes or backslashes.
+
+    Non-ASCII names fall back to "download" plus a safe extension; browsers
+    use the RFC 5987 filename* parameter for the real name.
+    """
+    def safe(value: str) -> str:
+        return "".join(char if " " <= char <= "~" and char not in '"\\' else "_" for char in value)
+
+    if not name.isascii():
+        suffix = PurePath(name).suffix
+        return "download" + (suffix if suffix.isascii() and safe(suffix) == suffix and len(suffix) <= 16 else "")
+    return safe(name).strip(" .")[:150] or "download"
+
+
+def content_disposition(disposition: str, name: str) -> str:
+    """Never echo control characters or quotes from a stored file name into a header."""
+    encoded = quote(name, safe="")
+    return f"{disposition}; filename=\"{_ascii_filename(name)}\"; filename*=UTF-8''{encoded}"
+
+
 def _file_response(record: FileRecord, inline: bool) -> Response:
     payload = read_object_bytes(get_settings().file_data_dir, record.storage_key)
     disposition = "inline" if inline else "attachment"
     headers = {
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": f"{disposition}; filename=\"download\"; filename*=UTF-8''{quote(record.name, safe='')}",
+        "Content-Disposition": content_disposition(disposition, record.name),
     }
-    if record.name.isascii() and '"' not in record.name and "\\" not in record.name:
-        headers["Content-Disposition"] = (
-            f"{disposition}; filename=\"{record.name}\""
-        )
     return Response(content=payload, media_type=record.media_type, headers=headers)
 
 
@@ -307,10 +324,18 @@ def _load_visible(file_id: str) -> FileRecord:
 
 @router.post("/files", status_code=201)
 async def upload_file(request: Request) -> dict[str, object]:
-    principal = authorize(request, "files.upload")
+    from app.identity import has_permission, require_csrf, require_session
+
+    principal = require_session(request)
+    require_csrf(request, principal)
     form = await request.form()
     upload = form.get("file")
     purpose = form.get("purpose")
+    # P0-4（决策1）：上传到项目的文件只看项目角色（下方 require_project_editor）；其余仍需全局 files.upload。
+    if not has_permission(principal.roles, "files.upload") and not (
+        form.get("projectId") and purpose not in {"template", "source"}
+    ):
+        raise AppError(403, "FORBIDDEN", "没有执行这个操作的权限。")
     idempotency_key = request.headers.get("idempotency-key", "").strip()
     if not idempotency_key or len(idempotency_key) > 128:
         raise AppError(
@@ -326,7 +351,7 @@ async def upload_file(request: Request) -> dict[str, object]:
     base_id = _optional_uuid(form.get("baseId"), "baseId")
     from app.identity import require_permission
     from app.knowledge import _require_writer
-    from app.projects import require_project_editor
+    from app.projects import _reads_all, project_role, require_project_editor
 
     if purpose == "template":
         require_permission(request, "templates.manage")
@@ -349,8 +374,12 @@ async def upload_file(request: Request) -> dict[str, object]:
             with connection.transaction(immediate=True):
                 if project_id is not None:
                     project = connection.execute("SELECT archived_at FROM projects WHERE id = %s", (project_id,)).fetchone()
-                    if project is None:
-                        raise AppError(404, "NOT_FOUND", "没有这个项目。")
+                    # 三审：看不到这个项目（非成员、非管理员/审计员）与不存在一样回 404，不泄露存在性；看得到但不能写才 403
+                    if project is None or (
+                        not _reads_all(principal.roles)
+                        and project_role(connection, project_id, principal.user_id) is None
+                    ):
+                        raise AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")
                     require_project_editor(connection, principal, project_id)
                     if project["archived_at"] is not None:
                         raise AppError(409, "INVALID_TRANSITION", "项目已归档，无法上传文件。")
@@ -419,10 +448,41 @@ def _idempotent_file(
     return record
 
 
+def authorize_read(request: Request, file_id: str) -> None:
+    """下载/预览权限（审查 S9 收紧，待用户确认；auditor 新增可读项目文件同样待用户确认）。
+
+    - 项目文件（project_id 非空、不属于知识库）：项目成员、system_admin 或 auditor（只读审计）可读；
+      全局 files.read 不再跨项目放行。
+    - 其余文件：仍要求 files.read，再由 guard_knowledge_file 按知识库/模板范围检查。
+    - 状态码（复审 S9）：与项目接口对非成员返回 404 的口径一致，凡是“不能读”一律 404“没有这个文件。”，
+      不存在的 id 也是 404，不再用 403/404 的差别泄露文件是否存在。
+    """
+
+    from app.identity import require_session
+    from app.permissions import has_permission
+    from app.projects import project_role
+
+    actor = require_session(request)
+    with connect() as connection:
+        row = connection.execute("select project_id, base_id from files where id = %s", (file_id,)).fetchone()
+        if row is not None and row["project_id"] is not None and row["base_id"] is None:
+            if project_file_reader(actor.roles) or project_role(connection, row["project_id"], actor.user_id) is not None:
+                return
+            raise AppError(404, "NOT_FOUND", "没有这个文件。")
+    if has_permission(actor.roles, "files.read"):
+        return
+    raise AppError(404, "NOT_FOUND", "没有这个文件。")
+
+
+def project_file_reader(roles) -> bool:
+    """不是项目成员也能读项目文件的全局角色：系统管理员与审计查看者（只读）。"""
+    return "system_admin" in roles or "auditor" in roles
+
+
 @router.get("/files/{file_id}/content")
 def download_file(file_id: str, request: Request) -> Response:
     parsed = parse_file_id(file_id)
-    authorize(request, "files.read")
+    authorize_read(request, parsed)
     guard_knowledge_file(request, parsed)
     return _file_response(_load_visible(parsed), inline=False)
 
@@ -430,6 +490,6 @@ def download_file(file_id: str, request: Request) -> Response:
 @router.get("/files/{file_id}/preview")
 def preview_file(file_id: str, request: Request) -> Response:
     parsed = parse_file_id(file_id)
-    authorize(request, "files.read")
+    authorize_read(request, parsed)
     guard_knowledge_file(request, parsed)
     return _file_response(_load_visible(parsed), inline=True)

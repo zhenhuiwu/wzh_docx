@@ -7,7 +7,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import secrets
 import socket
 import sys
 import threading
@@ -36,19 +35,82 @@ class FrontendFiles(StaticFiles):
             return await super().get_response("index.html", scope)
 
 
-def initialize_admin():
+INITIAL_PASSWORD_FILE = "初始管理员密码.txt"
+
+
+class InitialAdminError(RuntimeError):
+    """The first administrator could not be created safely."""
+
+
+def initialize_admin(home: Path) -> None:
+    """Create the first administrator with a random one-time password.
+
+    The password file is written (owner-only, exclusive create) and the
+    password printed *before* the account is committed. If either step fails
+    the transaction rolls back, so the next start simply tries again instead of
+    leaving an account whose password nobody knows.
+    """
+    from app.bootstrap_admin import (
+        INITIAL_PASSWORD_FILE_ENV, create_initial_admin, generate_initial_password,
+        initial_password_text, write_secret_file,
+    )
     from app.db import connect, migrate
-    from app.identity import create_user, hash_password
 
     migrate()
+    password = generate_initial_password()
+    target = home / INITIAL_PASSWORD_FILE
+    os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
     with connect() as connection:
         with connection.transaction(immediate=True):
             if connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"]:
                 return
-            user = create_user(account="admin", name="管理员", password=secrets.token_urlsafe(24),
-                               roles=["system_admin"], connection=connection)
-            # Preserve the user's fixed initial account without changing password validation.
-            connection.execute("UPDATE users SET password_hash=%s WHERE id=%s", (hash_password("admin123"), user))
+            create_initial_admin("admin", "管理员", password, connection=connection)
+            try:
+                write_secret_file(target, initial_password_text("admin", password))
+            except FileExistsError:
+                raise InitialAdminError(
+                    f"{target} 已存在（可能是上次失败留下的）。请删除该文件后重新启动。"
+                ) from None
+            except OSError as error:
+                raise InitialAdminError(
+                    f"不能写入初始密码文件 {target}：{error.strerror or error}。请把程序放到可写目录后重新启动。"
+                ) from None
+            try:
+                print(f"初始管理员：admin，初始密码：{password}（已保存到 {target}，首次登录须修改）", flush=True)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
+    logging.info("已创建初始管理员 admin，初始密码已写入 %s", target)
+
+
+def reset_admin(home: Path, account: str) -> None:
+    """Offline recovery for the portable package: new random password, must change."""
+    from app.bootstrap_admin import (
+        INITIAL_PASSWORD_FILE_ENV, ResetError, initial_password_text, reset_account_password, write_secret_file,
+    )
+    from app.db import migrate
+
+    migrate()
+    target = home / INITIAL_PASSWORD_FILE
+    os.environ[INITIAL_PASSWORD_FILE_ENV] = str(target)
+
+    def save(password: str) -> None:
+        # Runs only after the account was found. Same rule as the first start: the
+        # file is written owner-only before the new password is committed; any
+        # failure leaves the old password in place.
+        target.unlink(missing_ok=True)
+        try:
+            write_secret_file(target, initial_password_text(account, password))
+        except OSError as error:
+            raise ResetError(f"不能写入密码文件 {target}：{error}，密码没有改变。") from None
+        try:
+            print(f"已重置账号 {account}：临时密码 {password}，已保存到 {target}。"
+                  "原有会话已失效，下次登录须修改密码。", flush=True)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+
+    reset_account_password(account, before_commit=save)
 
 
 def application(home: Path):
@@ -104,6 +166,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--render-visio", type=Path)
+    parser.add_argument("--reset-admin", nargs="?", const="admin", metavar="ACCOUNT",
+                        help="离线重置该账号密码（默认 admin），生成随机临时密码，下次登录须修改")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("端口必须在 1–65535 之间")
@@ -120,6 +184,14 @@ def main():
         return 0
     if args.self_check:
         self_check()
+        return 0
+    if args.reset_admin:
+        from app.bootstrap_admin import ResetError
+        try:
+            reset_admin(home, args.reset_admin)
+        except ResetError as error:
+            print(f"没有重置：{error}", file=sys.stderr)
+            return 1
         return 0
     url = f"http://localhost:{args.port}"
     installation = hashlib.sha256(str(home).encode()).hexdigest()
@@ -141,7 +213,11 @@ def main():
     (home / "logs").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.FileHandler(home / "logs" / "server.log", encoding="utf-8"), logging.StreamHandler()])
-    initialize_admin()
+    try:
+        initialize_admin(home)
+    except InitialAdminError as error:
+        logging.error("没有创建初始管理员：%s", error)
+        return 1
     if not args.no_browser:
         def open_when_ready():
             for _ in range(150):

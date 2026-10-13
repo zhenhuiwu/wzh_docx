@@ -57,9 +57,9 @@ def test_project_creator_viewer_cannot_patch(client: TestClient) -> None:
     )
     assert created.status_code == 201, created.text
     project = created.json()["data"]
-    added = client.put(
-        f"/api/v1/projects/{project['id']}/members/{viewer}",
-        json={"userId": viewer, "role": "viewer", "expectedProjectRevision": project["revision"]},
+    added = client.post(
+        f"/api/v1/projects/{project['id']}/members:batch",
+        json={"userIds": [viewer], "role": "viewer", "expectedMembersRevision": project["membersRevision"]},
         headers={"X-CSRF-Token": csrf},
     )
     assert added.status_code == 200, added.text
@@ -69,14 +69,15 @@ def test_project_creator_viewer_cannot_patch(client: TestClient) -> None:
     assert visible.status_code == 200, visible.text
     patched = other.patch(
         f"/api/v1/projects/{project['id']}",
-        json={"expectedRevision": added.json()["data"]["projectRevision"], "name": "被抢走"},
+        json={"expectedRevision": project["revision"], "name": "被抢走"},
         headers={"X-CSRF-Token": other_csrf},
     )
     assert patched.status_code == 403
     preserved = client.get(f"/api/v1/projects/{project['id']}")
     assert preserved.status_code == 200
     assert preserved.json()["data"]["name"] == "范围项目"
-    assert preserved.json()["data"]["revision"] == added.json()["data"]["projectRevision"]
+    # A05 R5：成员变更不再递增项目 revision
+    assert preserved.json()["data"]["revision"] == project["revision"]
 
 
 def test_knowledge_reader_cannot_rename(client: TestClient) -> None:

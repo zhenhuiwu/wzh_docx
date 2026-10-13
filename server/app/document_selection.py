@@ -145,8 +145,13 @@ def _inline(value: str, absolute: int) -> list[_Char]:
                 continue
             if char == "&":
                 entity = _ENTITY.match(value, index, end)
-                if entity and unescape(entity.group()) != entity.group():
-                    result.extend(_Char(item, absolute + index, absolute + entity.end(), styles) for item in unescape(entity.group()))
+                decoded = unescape(entity.group()) if entity else ""
+                if entity and decoded != entity.group():
+                    if len(decoded) != 1:
+                        # Several characters would share one source span, so an
+                        # offset inside them cannot be mapped back unambiguously.
+                        raise SelectionError("此段含有无法安全定位的字符实体。")
+                    result.append(_Char(decoded, absolute + index, absolute + entity.end(), styles))
                     index = entity.end()
                     continue
             if char == "<":

@@ -139,7 +139,7 @@ def test_preview_resolves_paragraph_and_character_style_inheritance(tmp_path):
     assert "页眉" not in root.text_content() and "页脚" not in root.text_content()
     assert _css(root[0]).items() >= {
         "text-align": "center", "margin-left": "14pt", "text-indent": "7pt",
-        "margin-top": "0pt", "margin-bottom": "6pt", "line-height": "1.5",
+        "margin-top": "0pt", "margin-bottom": "6pt", "line-height": "1.95",  # 1.5 倍行距 × 单倍 1.3
     }.items()
     css = _css(_span(root, "继承字体"))
     assert (css["font-family"], css["font-size"], css["color"], css["font-style"]) == ('"Arial"', "13pt", "#123456", "italic")
@@ -322,3 +322,48 @@ def test_preview_propagates_complex_edit_protection_without_touching_source(tmp_
     with pytest.raises(ValueError, match="复杂 Word"):
         render_document_html(source, "新正文")
     assert source.read_bytes() == before
+
+
+def _long_doc(tmp_path, text):
+    source = tmp_path / "long.docx"
+    doc = Document()
+    doc.add_paragraph("第1段：原始内容 1。")
+    paragraph = doc.add_paragraph()
+    paragraph.add_run(text[: len(text) // 2]).bold = True
+    paragraph.add_run(text[len(text) // 2:])
+    doc.add_paragraph("第3段：原始内容 3。")
+    doc.save(source)
+    return source
+
+
+@pytest.mark.parametrize("chars,budget", [(20_000, 0.5), (990_000, 5.0)])
+def test_preview_long_paragraph_is_not_quadratic(tmp_path, chars, budget):
+    """测试工程师 N7：长段落预览曾按整段 SequenceMatcher（二次方），2 万字 46.8s、99 万字拖住整个服务。
+    现在先去公共前后缀、中间长时线性对齐：2 万字 ≤ 0.5s，99 万字几秒内（含解析 docx 本身）。"""
+    import time
+    import random
+    rnd = random.Random(chars)
+    text = "".join(rnd.choice("长文字甲乙丙丁戊己庚辛子丑寅卯辰巳午未申酉戌亥") for _ in range(chars))
+    source = _long_doc(tmp_path, text)
+    # 正文与原稿不同：中间插了字、两处改字（最坏：前后缀去不掉多少，中间很长）
+    edited = "第1段：原始内容 1。\n\n" + "改" + text[:chars // 3] + "插入的字" + text[chars // 3:-5] + "尾改\n\n第3段：原始内容 3。"
+    for markdown in (parse_docx(str(source)).markdown, edited, "第1段：原始内容 1。\n\n" + "长" * chars + "\n\n第3段：原始内容 3。"):
+        started = time.perf_counter()
+        root = html.fragment_fromstring(render_document_html(source, markdown, None), create_parent="div")
+        elapsed = time.perf_counter() - started
+        assert elapsed <= budget, f"{chars} 字预览 {elapsed:.2f}s"
+        assert "第3段：原始内容 3。" in root.text_content()
+
+
+def test_preview_alignment_keeps_run_styles_on_long_paragraph(tmp_path):
+    """线性对齐仍把原稿的加粗映射到对应文字上（前半段加粗、后半段不加粗）。"""
+    import random
+    rnd = random.Random(3)
+    text = "".join(rnd.choice("长文字甲乙丙丁戊己庚辛子丑寅卯辰巳午未申酉戌亥") for _ in range(6000))
+    source = _long_doc(tmp_path, text)
+    markdown = parse_docx(str(source)).markdown.replace(text[3490:3500], text[3490:3500] + "新增", 1)
+    root = _root(source, markdown)
+    bold = "".join(node.text or "" for node in root.xpath(".//span") if "font-weight:700" in node.get("style", ""))
+    plain = "".join(node.text or "" for node in root.xpath(".//span") if "font-weight:700" not in node.get("style", ""))
+    assert bold == text[:3000], (len(bold), bold[-20:])
+    assert text[3000:3500] + "新增" + text[3500:] in plain

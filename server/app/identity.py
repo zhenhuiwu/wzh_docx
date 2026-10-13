@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 from contextlib import nullcontext
 import secrets
@@ -45,7 +46,7 @@ def _matches(left: str, right: str) -> bool:
         return False
     return hmac.compare_digest(left, right)
 
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 8
 _ITERATIONS = 210_000
 _SESSION_HOURS = 12
 _CHALLENGE_MINUTES = 10
@@ -112,8 +113,8 @@ def _clean_account(account: str) -> str:
         raise AppError(
             422,
             "VALIDATION_FAILED",
-            "工号不正确。",
-            [{"field": "account", "message": "请填写有效工号。"}],
+            "账号不正确。",
+            [{"field": "account", "message": "请填写有效账号。"}],
         )
     return cleaned
 
@@ -129,14 +130,14 @@ def _clean_password(password: str, field: str) -> str:
     return password
 
 
-def _require_new_password(password: str) -> str:
-    cleaned = _clean_password(password, "newPassword")
+def _require_new_password(password: str, field: str = "newPassword") -> str:
+    cleaned = _clean_password(password, field)
     if len(cleaned) < MIN_PASSWORD_LENGTH:
         raise AppError(
             422,
             "VALIDATION_FAILED",
             "新密码太短。",
-            [{"field": "newPassword", "message": "至少需要 12 位。"}],
+            [{"field": field, "message": f"至少需要 {MIN_PASSWORD_LENGTH} 位。"}],
         )
     return cleaned
 
@@ -156,6 +157,7 @@ class Principal:
     session_id: UUID
     csrf_token: str
     expires_at: datetime
+    must_change_password: bool = False
 
     def public_user(self) -> dict[str, object]:
         return {
@@ -173,6 +175,7 @@ class Principal:
                 if self.last_login_at is None
                 else format_timestamp(self.last_login_at)
             ),
+            "requiresFirstLoginChange": self.must_change_password,
         }
 
     def public_session(self, request: Request) -> dict[str, object]:
@@ -195,6 +198,8 @@ def create_user(
     roles: list[str],
     department: str = "",
     connection=None,
+    must_change_password: bool = False,
+    allow_no_roles: bool = False,
 ) -> UUID:
     cleaned = _clean_account(account)
     display_name = name.strip()
@@ -202,9 +207,10 @@ def create_user(
         raise AppError(422, "VALIDATION_FAILED", "姓名不正确。")
     if len(department) > 120:
         raise AppError(422, "VALIDATION_FAILED", "部门不正确。")
-    _require_new_password(password)
+    _require_new_password(password, "password")
     unknown = [role for role in roles if role not in GLOBAL_ROLES]
-    if not roles or unknown:
+    # 管理界面可以创建不带全局角色的“仅项目成员”账号；初始化管理员等内部调用仍要求至少一个角色。
+    if (not roles and not allow_no_roles) or unknown:
         raise AppError(422, "VALIDATION_FAILED", "角色不正确。")
     user_id = uuid4()
     password_hash = hash_password(password)
@@ -216,14 +222,14 @@ def create_user(
                 (account_key(cleaned),),
             ).fetchone()
             if conflict:
-                raise AppError(409, "DUPLICATE_NAME", "这个工号已经存在。")
+                raise AppError(409, "DUPLICATE_NAME", "这个账号已经存在。")
             connection.execute(
                 """
                 insert into users (
                   id, account, account_key, name, department,
-                  password_hash, status
+                  password_hash, status, must_change_password
                 )
-                values (%s, %s, %s, %s, %s, %s, 'active')
+                values (%s, %s, %s, %s, %s, %s, 'active', %s)
                 """,
                 (
                     user_id,
@@ -232,6 +238,7 @@ def create_user(
                     display_name,
                     department,
                     password_hash,
+                    1 if must_change_password else 0,
                 ),
             )
             for role in roles:
@@ -272,7 +279,8 @@ def _load_principal(token: str) -> Principal | None:
             """
             select s.id as session_id, s.csrf_token, s.expires_at, s.revoked_at,
                    u.id as user_id, u.account, u.name, u.department, u.status,
-                   u.revision, u.created_at, u.updated_at, u.last_login_at
+                   u.revision, u.created_at, u.updated_at, u.last_login_at,
+                   u.must_change_password
             from sessions s
             join users u on u.id = s.user_id
             where s.token_hash = %s
@@ -307,6 +315,7 @@ def _load_principal(token: str) -> Principal | None:
         session_id=row["session_id"],
         csrf_token=row["csrf_token"],
         expires_at=row["expires_at"],
+        must_change_password=bool(row["must_change_password"]),
     )
 
 
@@ -314,10 +323,17 @@ def current_principal(request: Request) -> Principal | None:
     return _load_principal(request.cookies.get(_SESSION_COOKIE, ""))
 
 
-def require_session(request: Request) -> Principal:
+def require_session(request: Request, *, allow_password_change: bool = False) -> Principal:
+    """Return the signed-in principal.
+
+    An account that must change its password can only read its own session,
+    log out, or change the password; every other API is refused until then.
+    """
     principal = current_principal(request)
     if principal is None:
         raise AppError(401, "AUTH_REQUIRED", "需要登录后才能继续。")
+    if principal.must_change_password and not allow_password_change:
+        raise AppError(403, "PASSWORD_CHANGE_REQUIRED", "请先修改初始密码。")
     return principal
 
 
@@ -336,6 +352,16 @@ def require_permission(request: Request, permission: str) -> Principal:
     return principal
 
 
+# Change-password failures are counted under their own key space in login_guards.
+# Account keys can never contain control characters (see _clean_account), so this
+# prefix cannot collide with a sign-in counter and needs no schema change.
+PASSWORD_CHANGE_GUARD_PREFIX = "\x1fchange-password:"
+
+
+def password_change_guard(user_id) -> str:
+    return f"{PASSWORD_CHANGE_GUARD_PREFIX}{user_id}"
+
+
 def _locked(connection, key: str) -> bool:
     row = connection.execute(
         "select failed_count, window_started_at from login_guards where account_key = %s",
@@ -346,6 +372,18 @@ def _locked(connection, key: str) -> bool:
     if _now() - row["window_started_at"] > _FAILURE_WINDOW:
         return False
     return int(row["failed_count"]) >= _FAILURE_LIMIT
+
+
+def _retry_after(connection, key: str) -> int:
+    """Whole seconds until the failure window of ``key`` ends (at least 1)."""
+    row = connection.execute(
+        "select window_started_at from login_guards where account_key = %s",
+        (key,),
+    ).fetchone()
+    if row is None:
+        return 1
+    remaining = row["window_started_at"] + _FAILURE_WINDOW - _now()
+    return max(1, math.ceil(remaining.total_seconds()))
 
 
 def _record_failure(key: str) -> None:
@@ -487,7 +525,8 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
     key = account_key(cleaned)
     with connect() as connection:
         if _locked(connection, key):
-            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。")
+            raise AppError(429, "LIMIT_EXCEEDED", "尝试次数过多，请稍后再登录。",
+                           retry_after=_retry_after(connection, key))
         row = connection.execute(
             """
             select id, password_hash, status
@@ -500,7 +539,7 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
     matched = verify_password(secret, stored)
     if row is None or not matched:
         _record_failure(key)
-        raise AppError(401, "AUTH_REQUIRED", "工号或密码不正确。")
+        raise AppError(401, "AUTH_REQUIRED", "账号或密码不正确。")
     if row["status"] != "active":
         raise AppError(403, "FORBIDDEN", "账号已停用。")
     token, _expires_at, _csrf = _issue_session(row["id"])
@@ -517,12 +556,12 @@ def login(request: Request, response: Response, body: LoginBody) -> dict[str, ob
 
 @router.get("/auth/me")
 def get_current_session(request: Request) -> dict[str, object]:
-    return require_session(request).public_session(request)
+    return require_session(request, allow_password_change=True).public_session(request)
 
 
 @router.post("/auth/logout", status_code=204)
 def logout(request: Request) -> Response:
-    principal = require_session(request)
+    principal = require_session(request, allow_password_change=True)
     require_csrf(request, principal)
     with connect() as connection:
         with connection.transaction():
@@ -541,17 +580,28 @@ def logout(request: Request) -> Response:
 
 @router.post("/auth/change-password", status_code=204)
 def change_password(request: Request, body: PasswordBody) -> Response:
-    principal = require_session(request)
+    principal = require_session(request, allow_password_change=True)
     require_csrf(request, principal)
     current = _clean_password(body.currentPassword, "currentPassword")
     new_password = _require_new_password(body.newPassword)
+    # Separate counter from sign-in so a stolen session cannot guess the
+    # current password without limit, yet cannot lock the owner out of login.
+    guard = password_change_guard(principal.user_id)
     with connect() as connection:
+        if _locked(connection, guard):
+            raise AppError(429, "LIMIT_EXCEEDED", "当前密码错误次数过多，请稍后再试。",
+                           retry_after=_retry_after(connection, guard))
         row = connection.execute(
             "select password_hash from users where id = %s",
             (principal.user_id,),
         ).fetchone()
     if row is None or not verify_password(current, row["password_hash"]):
-        raise AppError(401, "AUTH_REQUIRED", "当前密码不正确。")
+        _record_failure(guard)
+        # 422 rather than 401: the session is still valid and must not be treated as signed out.
+        raise AppError(
+            422, "CURRENT_PASSWORD_INCORRECT", "当前密码不正确。",
+            [{"field": "currentPassword", "message": "当前密码不正确。"}],
+        )
     if current == new_password:
         raise AppError(422, "VALIDATION_FAILED", "新密码需要和当前密码不同。")
     updated = hash_password(new_password)
@@ -560,7 +610,8 @@ def change_password(request: Request, body: PasswordBody) -> Response:
             connection.execute(
                 """
                 update users
-                set password_hash = %s, revision = revision + 1, updated_at = now()
+                set password_hash = %s, must_change_password = 0,
+                    revision = revision + 1, updated_at = now()
                 where id = %s
                 """,
                 (updated, principal.user_id),
@@ -581,4 +632,8 @@ def change_password(request: Request, body: PasswordBody) -> Response:
                 """,
                 (_token(), principal.session_id),
             )
+            _clear_failures(connection, guard)
+    from app.bootstrap_admin import remove_initial_password_file
+
+    remove_initial_password_file(principal.account)
     return Response(status_code=204)

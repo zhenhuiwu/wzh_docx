@@ -34,6 +34,7 @@ class OfflineConnection:
         self.count = 0
         self.queries = []
         self.plan = None
+        self.archived_at = None
 
     def __enter__(self):
         return self
@@ -48,6 +49,8 @@ class OfflineConnection:
         self.queries.append((sql, params))
         if "from project_members" in sql:
             return Result({"role": self.role} if self.role else None)
+        if "select archived_at from projects" in sql:  # A05 R3：归档项目只读
+            return Result({"archived_at": self.archived_at})
         if "from templates where id" in sql:
             return Result({"id": params[0]} if self.template_exists else None)
         if "from document_plans where project_id" in sql and "count(*)" not in sql:
@@ -84,6 +87,13 @@ class DocumentPlanTests(unittest.TestCase):
     def create(self, body=None):
         return plans.create_document_plan(self.project_id, self.request, body or self.body())
 
+    def test_archived_project_rejects_new_plans(self):
+        self.connection.archived_at = "2026-10-11 00:00:00"
+        with self.assertRaises(AppError) as raised:
+            self.create()
+        self.assertEqual((raised.exception.status_code, raised.exception.code), (409, "PROJECT_ARCHIVED"))
+        self.assertIsNone(self.connection.plan)
+
     def test_offline_create_and_response_never_claim_template_is_published(self):
         result = self.create()
         self.assertEqual(result["requestId"], "offline-id")
@@ -106,12 +116,12 @@ class DocumentPlanTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValidationError):
                 self.body(**data)
 
-    def test_explicit_capability_and_project_role_both_required(self):
+    def test_project_role_decides_without_global_capability(self):
+        # 决策1（阶段2 S1）：只有项目编写角色、没有全局 documents.edit 也可以建计划。
         self.actor.roles = ("auditor",)
-        with self.assertRaises(AppError) as caught:
-            self.create()
-        self.assertEqual(caught.exception.status_code, 403)
-        self.assertEqual(self.connection.queries, [])
+        self.assertEqual(self.create()["data"]["name"], "验收报告")
+        self.connection.plan = None
+        self.connection.queries.clear()
         self.actor.roles = ("project_creator",)
         self.connection.role = "viewer"
         with self.assertRaises(AppError) as caught:
@@ -129,7 +139,7 @@ class DocumentPlanTests(unittest.TestCase):
         self.assertEqual(self.connection.queries, [])
 
     def test_missing_project_remains_not_found(self):
-        with patch.object(plans, "_load", side_effect=AppError(404, "NOT_FOUND", "没有这个项目。")):
+        with patch.object(plans, "_load", side_effect=AppError(404, "NOT_FOUND", "项目不存在或你无权访问。")):
             with self.assertRaises(AppError) as caught:
                 self.create()
         self.assertEqual(caught.exception.status_code, 404)

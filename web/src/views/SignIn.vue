@@ -7,7 +7,7 @@ import { loginDestination, writeSession } from "../session";
 
 const STAFF_KEY = "doc-workbench.staff-id";
 
-const staffId = ref("admin");
+const staffId = ref("");
 const password = ref("");
 const rememberStaffId = ref(false);
 const showPassword = ref(false);
@@ -72,7 +72,14 @@ async function onSubmit() {
     csrf.value = await fetchCsrf();
     const session = await login(staff, password.value, csrf.value);
     writeStaffId(rememberStaffId.value ? staff : null);
-    writeSession({ staffId: session.user.account, name: session.user.name });
+    writeSession({
+      staffId: session.user.account,
+      userId: session.user.id,
+      name: session.user.name,
+      mustChangePassword: Boolean(session.user.requiresFirstLoginChange),
+      department: session.user.department,
+      permissions: session.permissions,
+    });
     password.value = "";
     showPassword.value = false;
     await router.replace(loginDestination(route.query.redirect));
@@ -102,8 +109,9 @@ function onPasswordInput() {
 <template>
   <main class="desk">
     <form class="card" novalidate @submit.prevent="onSubmit">
-      <p class="brand">文档工作室</p>
+      <p class="brand"><span class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7zM14 3.5V8h4M10 12h5M10 15.5h5" /></svg></span>文档工作室</p>
       <h1>登录</h1>
+      <p class="subtitle">使用公司分配的账号登录。</p>
 
       <div class="field">
         <label for="staff-id">账号</label>
@@ -159,255 +167,13 @@ function onPasswordInput() {
         <span>记住账号</span>
       </label>
 
+      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
       <button class="primary" type="submit" :disabled="busy" :aria-busy="busy">
         {{ busy ? "正在登录" : "登录" }}
       </button>
-      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-
     </form>
+    <p class="footnote">忘记密码请联系系统管理员重置。</p>
   </main>
 </template>
 
-<style scoped>
-.desk {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-7) var(--space-5);
-  background: var(--desk);
-}
-
-.card {
-  width: min(calc(var(--space-7) * 9), 100%);
-  margin: 0;
-  padding: var(--space-6) var(--space-5) var(--space-6);
-  background: var(--sheet);
-  border-radius: var(--radius-sheet);
-  border: 1px solid var(--rule);
-}
-
-.brand {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--stamp);
-}
-
-.card h1 {
-  margin: var(--space-1) 0 var(--space-5);
-  font-size: calc(var(--text-md) * 1.5);
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.02em;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.field + .field {
-  margin-top: var(--space-4);
-}
-
-.field label {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.control,
-.secret {
-  height: calc(var(--space-6) + var(--space-3));
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-control);
-  background: var(--sheet);
-  color: var(--ink);
-}
-
-.control {
-  width: 100%;
-  padding: 0 var(--space-3);
-  font-size: var(--text-md);
-}
-
-.control:hover:not(:disabled),
-.secret:hover:not(.is-disabled) {
-  border-color: var(--ink-tertiary);
-}
-
-.control:focus-visible,
-.secret:focus-within {
-  outline: none;
-  border-color: var(--stamp);
-  box-shadow: 0 0 0 3px var(--focus-ring);
-}
-
-.control.is-invalid,
-.secret.is-invalid {
-  border-color: var(--fault);
-  background: var(--fault-wash);
-}
-
-.control.is-invalid:focus-visible,
-.secret.is-invalid:focus-within {
-  border-color: var(--fault);
-  box-shadow: 0 0 0 3px var(--fault-wash);
-}
-
-.control:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.secret {
-  display: flex;
-  align-items: center;
-  padding-right: var(--space-2);
-}
-
-.secret.is-disabled {
-  opacity: 0.6;
-}
-
-.secret-input {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0 var(--space-3);
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: var(--text-md);
-  outline: none;
-}
-
-.secret-input:disabled {
-  cursor: not-allowed;
-}
-
-.toggle {
-  flex: none;
-  height: var(--space-6);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--ink-secondary);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.toggle:hover:not(:disabled) {
-  color: var(--ink);
-  background: var(--desk);
-}
-
-.toggle:focus-visible {
-  outline: 2px solid var(--stamp);
-  outline-offset: 1px;
-}
-
-.toggle:disabled {
-  cursor: not-allowed;
-}
-
-.field-error {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: 1.4;
-  color: var(--fault);
-}
-
-.remember {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--space-6);
-  margin-top: var(--space-2);
-  color: var(--ink-secondary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.remember input {
-  width: var(--space-4);
-  height: var(--space-4);
-  margin: 0;
-  accent-color: var(--stamp);
-}
-
-.remember:has(input:disabled) {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.primary {
-  width: 100%;
-  height: calc(var(--space-6) + var(--space-3));
-  margin-top: var(--space-2);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: var(--stamp);
-  color: var(--on-stamp);
-  font-size: var(--text-md);
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background-color 150ms var(--ease-out),
-    transform 120ms var(--ease-out);
-}
-
-.primary:hover:not(:disabled) {
-  background: var(--stamp-press);
-}
-
-.primary:focus-visible {
-  outline: 2px solid var(--stamp);
-  outline-offset: 3px;
-}
-
-.primary:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.primary:disabled {
-  cursor: progress;
-  opacity: 0.55;
-}
-
-.form-error {
-  margin: var(--space-3) 0 0;
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  color: var(--fault);
-}
-
-@media (max-width: 480px) {
-  .desk {
-    align-items: flex-start;
-    padding: 12vh var(--space-4) var(--space-6);
-  }
-
-  .card {
-    padding: var(--space-5) var(--space-4) var(--space-5);
-    box-shadow: none;
-    background: transparent;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .primary {
-    transition: background-color 150ms var(--ease-out);
-  }
-
-  .primary:active:not(:disabled) {
-    transform: none;
-  }
-}
-</style>
-
+<style scoped src="./auth-card.css"></style>

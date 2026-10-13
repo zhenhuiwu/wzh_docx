@@ -11,7 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
 from app.errors import AppError
-from app.identity import require_permission
+from app.document_objects import revision_conflict
+from app.document_access import document_principal
 from app.models import format_timestamp
 
 router = APIRouter()
@@ -43,7 +44,7 @@ def record_current_version(connection, document_id: UUID, *, expected_revision: 
     if row is None:
         raise AppError(404, "NOT_FOUND", "没有这个文档。")
     if expected_revision is not None and row["revision"] != expected_revision:
-        raise AppError(409, "REVISION_CONFLICT", "文档已更新，请刷新后重试。")
+        raise revision_conflict(connection, document_id, "文档已更新，请刷新后重试。")
     if connection.execute("SELECT 1 FROM document_versions WHERE document_id=%s AND revision=%s",
                           (document_id, row["revision"])).fetchone():
         return row
@@ -72,6 +73,12 @@ def sync_current_version_memory(connection, document_id: UUID) -> None:
 def _public(row, *, detail: bool = False) -> dict:
     value = {"revision": row["revision"], "createdAt": format_timestamp(row["created_at"]),
              "kind": row["kind"], "restoredFromRevision": row["restored_from_revision"]}
+    # 112 之前的历史版本两项为 null，界面显示“未记录”（4.5）
+    names = list(row)
+    created_by = row["created_by"] if "created_by" in names else None
+    value["createdBy"] = None if created_by is None else {
+        "id": str(created_by), "name": row["created_by_name"] if "created_by_name" in names else None}
+    value["changedObjects"] = row["changed_objects"] if "changed_objects" in names else None
     if detail:
         value.update(markdownContent=row["markdown_content"], outline=row["outline"], formatTemplate=row["format_template"],
                      html=markdown.markdown(row["markdown_content"], extensions=["tables", "fenced_code"]))
@@ -80,9 +87,10 @@ def _public(row, *, detail: bool = False) -> dict:
 
 def _visible(connection, request: Request, document_id: str, permission: str):
     from app.documents import _admin, _document_row, _uuid
-    actor = require_permission(request, permission)
+    actor = document_principal(request)
     did = _uuid(document_id, "documentId")
-    return did, _document_row(connection, did, actor.user_id, _admin(actor.roles))
+    need = "edit" if permission == "documents.edit" else "read"
+    return did, _document_row(connection, did, actor.user_id, _admin(actor.roles), need)
 
 
 def _version(connection, document_id: UUID, revision: int):
@@ -101,7 +109,10 @@ def list_versions(request: Request, document_id: str, offset: int = 0, limit: in
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.read")
         record_current_version(connection, did)
-        rows = connection.execute("SELECT revision, created_at, kind, restored_from_revision FROM document_versions WHERE document_id=%s ORDER BY revision DESC LIMIT %s OFFSET %s",
+        rows = connection.execute("""SELECT v.revision, v.created_at, v.kind, v.restored_from_revision, v.created_by,
+                                     u.name AS created_by_name, v.changed_objects
+                                     FROM document_versions v LEFT JOIN users u ON u.id = v.created_by
+                                     WHERE v.document_id=%s ORDER BY v.revision DESC LIMIT %s OFFSET %s""",
                                   (did, limit + 1, offset)).fetchall()
         connection.commit()
     return {"data": {"items": [_public(row) for row in rows[:limit]], "offset": offset, "limit": limit,
@@ -109,7 +120,8 @@ def list_versions(request: Request, document_id: str, offset: int = 0, limit: in
 
 
 @router.get("/documents/{document_id}/versions/{revision}")
-def get_version(request: Request, document_id: str, revision: int) -> dict:
+def get_version(request: Request, document_id: str, revision: int, html: bool = True) -> dict:
+    """html=false 时只返回 markdown（终验 S-7：版本比较只需要两版 markdown，不必等 Word 版式渲染）。"""
     from app.documents import _editing_html
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.read")
@@ -118,7 +130,7 @@ def get_version(request: Request, document_id: str, revision: int) -> dict:
         snapshot = [current[index] for index in range(16)]
         snapshot[6], snapshot[7] = version["format_template"], version["markdown_content"]
         result = _public(version, detail=True)
-        result["html"] = _editing_html(connection, snapshot)
+        result["html"] = _editing_html(connection, snapshot) if html else ""
         connection.commit()
     return {"data": result, "requestId": request.state.request_id}
 
@@ -143,8 +155,13 @@ def restore_version(request: Request, document_id: str, revision: int, body: Ver
     from app.documents import _check_word, _content_result, _document_row, _admin, _save_markdown
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.edit")
+        from app.document_assignments import actor_scope, restricted
+        if restricted(*actor_scope(connection, did, document_principal(request).user_id)):
+            # A07 U-12：按分工编辑的文档，整篇版本恢复只有项目负责人和系统管理员能做
+            raise AppError(403, "FORBIDDEN", "按分工编辑的文档只有项目负责人可以恢复版本。",
+                           details={"projectRole": "editor", "ownerName": None})
         if current[12] != body.expectedRevision:
-            raise AppError(409, "REVISION_CONFLICT", "文档已更新，请重新核对后恢复。")
+            raise revision_conflict(connection, did, "文档已更新，请重新核对后恢复。")
         record_current_version(connection, did, expected_revision=body.expectedRevision)
         version = _version(connection, did, revision)
         template = version["format_template"]
@@ -153,7 +170,7 @@ def restore_version(request: Request, document_id: str, revision: int, body: Ver
                        format_template=template, outline=version["outline"], kind="restore", restored_from_revision=revision)
         _restore_memory(connection, did, version["memory_revisions"])
         connection.commit()
-        actor = require_permission(request, "documents.edit")
+        actor = document_principal(request)
         current = _document_row(connection, did, actor.user_id, _admin(actor.roles))
         result = _content_result(request, current)
         result["data"]["formatTemplate"] = current[6]

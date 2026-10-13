@@ -3,7 +3,6 @@
 import json
 import sys
 from io import BytesIO
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest

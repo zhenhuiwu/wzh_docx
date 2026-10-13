@@ -131,20 +131,31 @@ _ROLE_TEXT: dict[str, tuple[str, str, str, bool]] = {
     "viewer": ("只读成员", "project", "查看已授权的项目内容。", True),
 }
 
+AUDIT_PROJECT_ROLE = "auditor"
+
 _PROJECT_PERMISSIONS: dict[str, frozenset[str]] = {
     "owner": frozenset(
         {
             "documents.edit",
+            "documents.export",
             "documents.read",
             "projects.manage",
             "projects.members.manage",
             "projects.read",
         }
     ),
-    "editor": frozenset({"documents.edit", "documents.read"}),
-    "reviewer": frozenset({"documents.read", "reviews.decide", "reviews.read"}),
-    "viewer": frozenset({"documents.read", "projects.read"}),
+    "editor": frozenset({"documents.edit", "documents.export", "documents.read"}),
+    "reviewer": frozenset({"documents.export", "documents.read", "reviews.decide", "reviews.read"}),
+    # 03-决策记录 追加（06:20）：查看者可以导出。
+    "viewer": frozenset({"documents.export", "documents.read", "projects.read"}),
+    # 测试复测 I6（待用户确认）：全局 auditor 不是成员时按“审计查看者”只读：能读、能导出，不能写。
+    AUDIT_PROJECT_ROLE: frozenset({"documents.export", "documents.read", "projects.read"}),
 }
+
+
+def project_permissions(role: str | None) -> frozenset[str]:
+    """项目角色拥有的权限；非成员为空集。"""
+    return _PROJECT_PERMISSIONS.get(role or "", frozenset())
 
 
 def role_definitions() -> list[dict[str, object]]:

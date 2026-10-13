@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import connect
 from app.errors import AppError
-from app.identity import require_permission
-from app.projects import _is_admin, _load, _parse_uuid, require_project_editor
+from app.document_access import document_principal
+from app.projects import _load, _parse_uuid, _reads_all, require_project_editor
 
 router = APIRouter()
 
@@ -56,12 +56,13 @@ def _public(row: dict) -> dict[str, object]:
 
 @router.get("/projects/{project_id}/document-plans")
 def list_document_plans(project_id: str, request: Request, page: int = 1, pageSize: int = 20) -> dict[str, object]:
-    actor = require_permission(request, "documents.read")
+    actor = document_principal(request)
     target = _parse_uuid(project_id, "projectId")
     if page < 1 or not 1 <= pageSize <= 50:
         raise AppError(422, "VALIDATION_FAILED", "查询条件不正确。")
     with connect() as connection:
-        _load(connection, target, actor.user_id, _is_admin(actor.roles))
+        # 三审：审计员与项目详情一致，可读文档计划
+        _load(connection, target, actor.user_id, _reads_all(actor.roles))
         total = connection.execute(
             "select count(*) as total from document_plans where project_id = %s", (target,)
         ).fetchone()["total"]
@@ -77,14 +78,14 @@ def list_document_plans(project_id: str, request: Request, page: int = 1, pageSi
 
 @router.post("/projects/{project_id}/document-plans", status_code=201)
 def create_document_plan(project_id: str, request: Request, body: DocumentPlanBody) -> dict[str, object]:
-    actor = require_permission(request, "documents.edit")
+    actor = document_principal(request)
     target = _parse_uuid(project_id, "projectId")
     name = _text(body.name, "name")
     purpose = _text(body.purpose, "purpose")
     plan_id = uuid4()
     with connect() as connection:
         with connection.transaction():
-            _load(connection, target, actor.user_id, _is_admin(actor.roles))
+            _load(connection, target, actor.user_id, _reads_all(actor.roles))
             require_project_editor(connection, actor, target)
             # Serialize creates per project so the 100-plan ceiling cannot race.
             connection.execute("select id from projects where id = %s for update", (target,))

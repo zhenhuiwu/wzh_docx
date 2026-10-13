@@ -2,9 +2,10 @@
 import { computed, nextTick, onUnmounted, ref } from "vue";
 import { generateDocumentDiagram, insertDocumentDiagram, listDocumentDiagrams, type DocumentDiagram } from "../api/documentDiagrams";
 import type { DocumentContentResult, DocumentRecord } from "../api/documents";
+import { ApiError } from "../api/client";
 
 const props = defineProps<{ document: DocumentRecord; headings: { text: string }[]; headingIndex: number | null }>();
-const emit = defineEmits<{ inserted: [DocumentContentResult & { formatTemplate: Record<string, any> }]; busy: [boolean] }>();
+const emit = defineEmits<{ inserted: [DocumentContentResult & { formatTemplate: Record<string, any> }]; busy: [boolean]; conflict: [ApiError] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const instructionInput = ref<HTMLTextAreaElement | null>(null);
 const items = ref<DocumentDiagram[]>([]);
@@ -68,10 +69,14 @@ async function insert() {
   inserting.value = true;
   emit("busy", true);
   try {
-    const result = await insertDocumentDiagram(props.document.id, selected.value.id, props.document.revision, target());
+    // S6：与他人修改按块合并；改到同一段时进入冲突面板。
+    const result = await insertDocumentDiagram(props.document.id, selected.value.id, props.document.revision, target(), { allowMerge: true, clientSaveKey: crypto.randomUUID() });
     emit("inserted", result);
     dialog.value?.close();
-  } catch (value) { error.value = message(value); }
+  } catch (value) {
+    error.value = message(value);
+    if (value instanceof ApiError && value.code === "OBJECT_CONFLICT") emit("conflict", value);
+  }
   finally { inserting.value = false; emit("busy", false); }
 }
 function select(item: DocumentDiagram) { selected.value = item; kind.value = item.kind; imageError.value = false; }
@@ -113,24 +118,25 @@ onUnmounted(() => controller?.abort());
 </template>
 
 <style scoped>
-.diagram-dialog { width:calc(var(--space-7) * 30); height:calc(var(--space-7) * 19); max-width:calc(100vw - var(--space-7) * 2); max-height:calc(100vh - var(--space-7) * 2); padding:0; border:1px solid var(--rule-strong); border-radius:var(--radius-sheet); background:var(--sheet); color:var(--ink); font-family:var(--font); }
-.diagram-dialog::backdrop { background:var(--spine); opacity:.45; }
-header,footer { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--rule); }
+.diagram-dialog { width:calc(var(--space-7) * 30); height:calc(var(--space-7) * 19); max-width:calc(100vw - var(--space-7) * 2); max-height:calc(100vh - var(--space-7) * 2); padding:0; border:1px solid var(--border-strong); border-radius:var(--radius-sheet); background:var(--bg-surface); color:var(--text-primary); font-family:var(--font); }
+.diagram-dialog::backdrop { background:var(--gray-900); opacity:.45; }
+header,footer { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--border-subtle); }
 h2,h3 { margin:0; font-size:var(--text-md); overflow-wrap:anywhere; }
 .diagram-workspace { display:grid; grid-template-columns:calc(var(--space-7) * 7) minmax(0,1fr); height:calc(100% - var(--space-7) - var(--space-5)); }
-aside { padding:var(--space-5); overflow:auto; border-right:1px solid var(--rule); }
+aside { padding:var(--space-5); overflow:auto; border-right:1px solid var(--border-subtle); }
 form { display:flex; flex-direction:column; gap:var(--space-3); }
 label { font-size:var(--text-sm); font-weight:600; }
 .control { width:100%; }
 textarea { resize:vertical; }
-nav { display:flex; flex-direction:column; gap:var(--space-2); margin-top:var(--space-5); border-top:1px solid var(--rule); padding-top:var(--space-4); }
-nav button { white-space:normal; text-align:left; overflow-wrap:anywhere; }
-[aria-current="true"] { color:var(--stamp); border-color:var(--stamp); background:var(--stamp-wash); }
+nav { display:flex; flex-direction:column; gap:var(--space-2); margin-top:var(--space-5); border-top:1px solid var(--border-subtle); padding-top:var(--space-4); }
+/* 原 visual 分支的全局左对齐规则收回到组件自身 */
+nav button { justify-content:flex-start; white-space:normal; text-align:left; overflow-wrap:anywhere; }
+[aria-current="true"] { color:var(--brand-600); border-color:var(--brand-600); background:var(--brand-50); }
 main { display:flex; flex-direction:column; min-width:0; min-height:0; }
 main h3 { padding:var(--space-4) var(--space-5); }
-.diagram-preview { flex:1; min-height:0; overflow:auto; padding:var(--space-5); background:var(--desk); text-align:center; }
+.diagram-preview { flex:1; min-height:0; overflow:auto; padding:var(--space-5); background:var(--bg-page); text-align:center; }
 img { max-width:100%; max-height:100%; object-fit:contain; }
-.diagram-state { display:flex; flex:1; align-items:center; justify-content:center; flex-direction:column; gap:var(--space-3); padding:var(--space-5); color:var(--ink-secondary); }
-footer { justify-content:flex-end; border-top:1px solid var(--rule); border-bottom:0; }
-.diagram-error { margin:0; padding:var(--space-3) var(--space-5); color:var(--fault-ink); font-size:var(--text-sm); overflow-wrap:anywhere; }
+.diagram-state { display:flex; flex:1; align-items:center; justify-content:center; flex-direction:column; gap:var(--space-3); padding:var(--space-5); color:var(--text-secondary); }
+footer { justify-content:flex-end; border-top:1px solid var(--border-subtle); border-bottom:0; }
+.diagram-error { margin:0; padding:var(--space-3) var(--space-5); color:var(--danger-700); font-size:var(--text-sm); overflow-wrap:anywhere; }
 </style>

@@ -195,6 +195,10 @@ def _tree_bytes(root: Path) -> bytes:
         return b""
     for path in root.rglob("*"):
         if path.is_file():
+            if path.name.endswith(".service.lock"):
+                # Windows 不允许读取已锁定字节；运行标记本身必须始终为空。
+                assert path.stat().st_size == 0
+                continue
             chunks.append(path.read_bytes())
     return b"".join(chunks)
 
@@ -266,3 +270,19 @@ def test_path_and_unauthenticated_reads_are_rejected(
         assert row["name"] == "files"
     finally:
         secret.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("name,fallback", [
+    ("report.docx", "report.docx"),
+    ('evil"\r\nSet-Cookie: x=1.docx', "evil___Set-Cookie: x=1.docx"),
+    ("a\\b.pdf", "a_b.pdf"),
+    ("需求规格说明.docx", "download.docx"),
+    ("\x00\x01", "__"),
+    ("...", "download"),
+])
+def test_content_disposition_never_echoes_unsafe_characters(name, fallback):
+    from app.files import content_disposition
+
+    header = content_disposition("attachment", name)
+    assert "\r" not in header and "\n" not in header and "\x00" not in header
+    assert header.startswith(f'attachment; filename="{fallback}"; filename*=UTF-8\'\'')

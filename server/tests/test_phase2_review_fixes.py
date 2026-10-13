@@ -1,0 +1,535 @@
+"""阶段2 审查（10-阶段2审查.md）修复的回归测试。"""
+import json
+
+from app.db import connect
+from tests.test_document_access import _as, members  # noqa: F401
+from tests.test_document_concurrency import TEXT, current, pair, save, team  # noqa: F401
+from tests.test_documents import document_context  # noqa: F401
+
+
+def _resolve(client, did, cid, headers, base, items, key):
+    return client.post(f"/api/v1/documents/{did}/conflicts/{cid}/resolve", headers=headers,
+                       json={"clientSaveKey": key, "baseDocumentRevision": base, "items": items})
+
+
+def test_s1_theirs_deleted_keep_mine_restores_in_place(team):
+    client, did, _users = team
+    assert save(client, did, 1, TEXT.replace("第二段。\n\n", ""), _as(client, "editor")).status_code == 200
+    b = _as(client, "editor2")
+    r = save(client, did, 1, TEXT.replace("第二段。", "B 改的第二段。"), b)
+    assert r.status_code == 409
+    details = r.json()["error"]["details"]
+    assert details["conflicts"][0]["reason"] == "DELETED"
+    resp = _resolve(client, did, details["conflictId"], b, 2, [{"itemIndex": 0, "action": "keep_mine"}], "s1-keep-mine-1")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["markdownContent"].startswith("# 1 范围\n\n第一段。\n\nB 改的第二段。\n\n第三段。")
+    # 界面验收 M2：全部处理后 summary 仍给出已处理条数，前端据此保留“冲突”入口
+    assert client.get(f"/api/v1/documents/{did}/conflicts/summary").json()["data"] == {"mineOpen": 0, "mineHandled": 1, "allOpen": None}
+
+
+def test_s1_reconflict_keeps_object_ids_for_placement(team):
+    client, did, _users = team
+    assert save(client, did, 1, TEXT.replace("第二段。", "A 的第二段。"), _as(client, "editor")).status_code == 200
+    r = save(client, did, 1, TEXT.replace("第二段。", "B 的第二段。"), _as(client, "editor2"))
+    cid = r.json()["error"]["details"]["conflictId"]
+    # 对方随后把这段删掉：keep_mine 再次冲突，但条目仍记住原对象（用于定位）
+    base = current(client, did)["revision"]
+    assert save(client, did, base, TEXT.replace("A 的第二段。\n\n", "").replace("第二段。\n\n", ""), _as(client, "editor")).status_code == 200
+    b = _as(client, "editor2")
+    again = _resolve(client, did, cid, b, base + 1, [{"itemIndex": 0, "action": "keep_mine"}], "s1-reconflict-1")
+    assert again.status_code == 409
+    with connect() as connection:
+        payload = json.loads(connection.execute("SELECT payload_json FROM document_conflicts WHERE id=%s", (cid,)).fetchone()["payload_json"])
+    snap = payload["attempts"][-1]["items"]["0"]
+    assert snap["objectIds"] and snap["goneObjectIds"] == snap["objectIds"]
+    keep_both = _resolve(client, did, cid, b, base + 1, [{"itemIndex": 0, "action": "keep_both"}], "s1-keep-both-1")
+    assert keep_both.status_code == 200, keep_both.text
+    assert keep_both.json()["data"]["markdownContent"].startswith("# 1 范围\n\n第一段。\n\nB 的第二段。")
+
+
+# ---------------------------------------------------------------- 复审 M3：恢复为新段落的位置
+
+import pytest  # noqa: E402
+
+
+def _deleted_conflict(client, did, b_text):
+    b = _as(client, "editor2")
+    r = save(client, did, 1, b_text, b)
+    assert r.status_code == 409, r.text
+    details = r.json()["error"]["details"]
+    assert details["conflicts"][0]["reason"] == "DELETED"
+    return b, details["conflictId"]
+
+
+@pytest.mark.parametrize("action", ["restore_as_new", "keep_mine"])
+def test_m3_restore_after_inserts_above(team, action):
+    """审查员复现用例 test_r2_restore_after_inserts_above：对方删第二段后又有人在开头插入 3 段，恢复后仍在“第一段。”之后。"""
+    client, did, _users = team
+    a = _as(client, "editor")
+    assert save(client, did, 1, TEXT.replace("第二段。\n\n", ""), a).status_code == 200
+    cur = current(client, did)
+    assert save(client, did, cur["revision"], "插一。\n\n插二。\n\n插三。\n\n" + cur["markdownContent"], a).status_code == 200
+    b, cid = _deleted_conflict(client, did, TEXT.replace("第二段。", "B 改的第二段。"))
+    res = _resolve(client, did, cid, b, current(client, did)["revision"], [{"itemIndex": 0, "action": action}], f"m3-{action}-1")
+    assert res.status_code == 200, res.text
+    data = res.json()["data"]
+    assert data["markdownContent"].startswith("插一。\n\n插二。\n\n插三。\n\n# 1 范围\n\n第一段。\n\nB 改的第二段。\n\n第三段。")
+    assert not any(item.get("placementFallback") for item in data["items"])
+
+
+def test_m3_restore_follows_chain_of_deleted_predecessors(team):
+    """前驱“第一段。”在冲突产生后也被删了：沿前驱链找到标题，放在标题之后。"""
+    client, did, _users = team
+    a = _as(client, "editor")
+    assert save(client, did, 1, TEXT.replace("第二段。\n\n", ""), a).status_code == 200
+    b, cid = _deleted_conflict(client, did, TEXT.replace("第二段。", "B 改的第二段。"))
+    cur = current(client, did)
+    a = _as(client, "editor")
+    assert save(client, did, cur["revision"], "插一。\n\n" + cur["markdownContent"].replace("第一段。\n\n", ""), a).status_code == 200
+    b = _as(client, "editor2")
+    res = _resolve(client, did, cid, b, current(client, did)["revision"], [{"itemIndex": 0, "action": "restore_as_new"}], "m3-chain-1")
+    assert res.status_code == 200, res.text
+    assert res.json()["data"]["markdownContent"].startswith("插一。\n\n# 1 范围\n\nB 改的第二段。\n\n第三段。")
+
+
+def test_m3_legacy_deleted_object_falls_back_to_heading_path_and_ordinal(team):
+    client, did, _users = team
+    a = _as(client, "editor")
+    assert save(client, did, 1, TEXT.replace("第二段。\n\n", ""), a).status_code == 200
+    cur = current(client, did)
+    assert save(client, did, cur["revision"], "插一。\n\n插二。\n\n" + cur["markdownContent"], a).status_code == 200
+    with connect() as connection:  # 模拟 114 之前删除的对象：没有前驱记录
+        connection.execute("UPDATE document_objects SET deleted_after_ref=NULL WHERE document_id=%s", (did,))
+        connection.commit()
+    b, cid = _deleted_conflict(client, did, TEXT.replace("第二段。", "B 改的第二段。"))
+    res = _resolve(client, did, cid, b, current(client, did)["revision"], [{"itemIndex": 0, "action": "keep_mine"}], "m3-legacy-1")
+    assert res.status_code == 200, res.text
+    data = res.json()["data"]
+    assert "# 1 范围\n\n第一段。\n\nB 改的第二段。\n\n第三段。" in data["markdownContent"]
+    assert not any(item.get("placementFallback") for item in data["items"])
+
+
+def test_m3_falls_back_to_section_end_and_flags_it(team):
+    """前驱没有记录（114 之前删除）且本节已没有足够的段落：放到所属章节末尾并标记 placementFallback。"""
+    client, did, _users = team
+    a = _as(client, "editor")
+    assert save(client, did, 1, TEXT.replace("第二段。\n\n", ""), a).status_code == 200
+    b, cid = _deleted_conflict(client, did, TEXT.replace("第二段。", "B 改的第二段。"))
+    cur = current(client, did)
+    a = _as(client, "editor")
+    assert save(client, did, cur["revision"], "# 1 范围\n\n# 2 引用\n\n引用段。\n", a).status_code == 200
+    with connect() as connection:
+        connection.execute("UPDATE document_objects SET deleted_after_ref=NULL WHERE document_id=%s", (did,))
+        connection.commit()
+    b = _as(client, "editor2")
+    res = _resolve(client, did, cid, b, current(client, did)["revision"], [{"itemIndex": 0, "action": "restore_as_new"}], "m3-end-1")
+    assert res.status_code == 200, res.text
+    data = res.json()["data"]
+    assert "# 1 范围\n\nB 改的第二段。\n\n# 2 引用" in data["markdownContent"]
+    assert data["items"][0]["placementFallback"] is True
+
+
+def test_m3_deleted_after_ref_recorded(team):
+    client, did, _users = team
+    a = _as(client, "editor")
+    assert save(client, did, 1, TEXT.replace("# 1 范围\n\n", "").replace("第二段。\n\n", ""), a).status_code == 200
+    with connect() as connection:
+        rows = {row["body"]: row["deleted_after_ref"] for row in connection.execute(
+            "SELECT body, deleted_after_ref FROM document_objects WHERE document_id=%s AND deleted_at IS NOT NULL", (did,)).fetchall()}
+        first = connection.execute("SELECT id FROM document_objects WHERE document_id=%s AND body='第一段。' AND deleted_at IS NULL",
+                                   (did,)).fetchone()["id"]
+    assert str(rows["# 1 范围"]) == "^"
+    assert str(rows["第二段。"]) == str(first)
+
+
+def test_preview_keeps_existing_noncharacter_apart_from_tabs(tmp_path):
+    """复审：正文原有的 U+FDEF 不能被预览当成 tab 还原；行内 tab 仍保留。"""
+    from docx import Document as WordDocument
+
+    from app.docx_parser import parse_docx
+    from app.docx_preview import render_document_html
+
+    source = tmp_path / "mark.docx"
+    doc = WordDocument()
+    doc.add_paragraph("甲\ufdef乙\t丙\ufdee丁")
+    doc.save(source)
+    markdown = parse_docx(str(source)).markdown
+    assert "\ufdef" in markdown and "\t" in markdown
+    html_text = render_document_html(source, markdown)
+    assert html_text.count("\t") == 1
+    assert html_text.count("\ufdef") == 1 and html_text.count("\ufdee") == 1
+
+
+def _bookmark_doc(path, build):
+    from docx import Document as WordDocument
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    def mark(paragraph, kind, ident, name=None, parent=None):
+        node = OxmlElement(f"w:bookmark{kind}")
+        node.set(qn("w:id"), str(ident))
+        if name:
+            node.set(qn("w:name"), name)
+        (parent if parent is not None else paragraph._p).append(node)
+
+    doc = WordDocument()
+    doc.add_heading("概述", 1)
+    build(doc, mark)
+    doc.save(path)
+
+
+def _children(path, index):
+    from docx import Document as WordDocument
+    from docx.oxml.ns import qn
+
+    out = []
+    for child in WordDocument(path).paragraphs[index]._p:
+        tag = child.tag.split("}")[1]
+        if tag == "r":
+            out.append("".join(node.text or "" for node in child.iter(qn("w:t"))))
+        elif tag.startswith("bookmark"):
+            out.append(f"{tag[8:]}:{child.get(qn('w:id'))}")
+    return out
+
+
+def _add_ref(doc, name):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    q = doc.add_paragraph("详见")
+    for kind, text in (("begin", None), ("instr", f" REF {name} \\h "), ("separate", None), ("text", "表"), ("end", None)):
+        run = q.add_run()
+        if kind in ("begin", "separate", "end"):
+            node = OxmlElement("w:fldChar")
+            node.set(qn("w:fldCharType"), kind)
+            run._r.append(node)
+        elif kind == "instr":
+            node = OxmlElement("w:instrText")
+            node.text = text
+            run._r.append(node)
+        else:
+            run.text = text
+
+
+def test_bookmarks_keep_range_when_formatting_changes(tmp_path):
+    """复审：改格式/段首加字时，部分覆盖与嵌套的书签保持原范围，不扩到整段、不丢。"""
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source, out = tmp_path / "bm.docx", tmp_path / "out.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph()
+        mark(p, "Start", 1, "_Ref1")
+        p.add_run("表 3-1")
+        mark(p, "Start", 2, "_Ref2")
+        p.add_run(" 系统")
+        mark(p, "End", 2)
+        mark(p, "End", 1)
+        p.add_run("参数表")
+        _add_ref(doc, "_Ref1")
+        _add_ref(doc, "_Ref2")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    for new, expected in (
+        (markdown.replace("系统参数表", "系统**参数**表"),
+         ["Start:1", "表 3-1", "Start:2", " 系统", "End:2", "End:1", "参", "数", "表"]),
+        (markdown.replace("表 3-1 系统参数表", "附表 3-1 系统参数表"),
+         ["附", "Start:1", "表 3-1", "Start:2", " 系统", "End:2", "End:1", "参数表"]),
+        (markdown.replace("表 3-1 系统参数表", "**表** 3-1 系统参数表"),
+         ["Start:1", "表", " 3-1", "Start:2", " 系统", "End:2", "End:1", "参数表"]),
+    ):
+        edit_original_docx(new, source, out)
+        got = _children(out, 1)
+        assert [item for item in got if item.startswith(("Start", "End"))] == [
+            item for item in expected if item.startswith(("Start", "End"))]
+        assert "".join(item for item in got if ":" not in item) == "".join(item for item in expected if ":" not in item)
+        # 书签内文字不变
+        start, end = got.index("Start:1"), got.index("End:1")
+        inside = "".join(item for item in got[start:end] if ":" not in item).replace("**", "")
+        assert inside.endswith("3-1 系统") and not inside.startswith("附"), got
+
+
+def test_bookmark_spanning_paragraphs_keeps_its_end(tmp_path):
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source, out = tmp_path / "span.docx", tmp_path / "out.docx"
+
+    def build(doc, mark):
+        first = doc.add_paragraph("第一段")
+        mark(first, "Start", 5, "_Ref5")
+        first.add_run("开始")
+        second = doc.add_paragraph("第二段")
+        mark(second, "End", 5)
+        second.add_run("之后")
+        _add_ref(doc, "_Ref5")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    edit_original_docx(markdown.replace("第二段之后", "第二段**之后**"), source, out)
+    got = _children(out, 2)
+    assert got.index("End:5") == 1 and got[0] == "第二段", got
+
+
+def test_referenced_bookmark_with_ambiguous_edge_stays_protected(tmp_path):
+    import pytest as _pytest
+
+    from app.docx_export import WordEditError, edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "amb.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph()
+        p.add_run("前文")
+        mark(p, "Start", 3, "_Ref3")
+        p.add_run("表 3-1")
+        mark(p, "End", 3)
+        _add_ref(doc, "_Ref3")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    with _pytest.raises((WordEditError, ValueError)):
+        edit_original_docx(markdown.replace("前文表 3-1", "前言附录 3-1"), source, tmp_path / "out.docx")
+    # 同样的改动落在未被引用的 _Toc 书签上可以改
+    source2 = tmp_path / "toc.docx"
+
+    def build2(doc, mark):
+        p = doc.add_paragraph()
+        p.add_run("前文")
+        mark(p, "Start", 3, "_Toc3")
+        p.add_run("表 3-1")
+        mark(p, "End", 3)
+
+    _bookmark_doc(source2, build2)
+    edit_original_docx(parse_docx(str(source2)).markdown.replace("前文表 3-1", "前言附录 3-1"), source2, tmp_path / "out2.docx")
+    assert "".join(item for item in _children(tmp_path / "out2.docx", 1) if ":" not in item) == "前言附录 3-1"
+
+
+def test_bookmark_nested_in_other_element_stays_protected(tmp_path):
+    import pytest as _pytest
+    from docx.oxml import OxmlElement
+
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "nested.docx"
+
+    def build(doc, mark):
+        p = doc.add_paragraph("正文")
+        wrapper = OxmlElement("w:customXml")
+        p._p.append(wrapper)
+        mark(p, "Start", 9, "_Ref9", parent=wrapper)
+        mark(p, "End", 9, parent=wrapper)
+        p.add_run("其余")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    with _pytest.raises(ValueError):
+        edit_original_docx(markdown.replace("正文其余", "正文**其余**"), source, tmp_path / "out.docx")
+
+
+def test_bookmark_paragraph_fully_replaced_is_protected(tmp_path):
+    """测试复测 N3：标识号行行首退格并入上一段、再回车写新段——书签不能跑到新段上，按受保护拒绝。"""
+    import pytest as _pytest
+
+    from app.docx_export import edit_original_docx
+    from app.docx_parser import parse_docx
+
+    source = tmp_path / "ident.docx"
+
+    def build(doc, mark):
+        doc.add_paragraph("本文档适用于系统。")
+        p = doc.add_paragraph()
+        mark(p, "Start", 4, "OLE_LINK4")
+        p.add_run("文档标识号：TN/x")
+        mark(p, "End", 4)
+        doc.add_paragraph("其后一段。")
+
+    _bookmark_doc(source, build)
+    markdown = parse_docx(str(source)).markdown
+    merged = markdown.replace("本文档适用于系统。\n\n文档标识号：TN/x", "本文档适用于系统。文档标识号：TN/x\n\n【新增段N】")
+    assert merged != markdown
+    with _pytest.raises(ValueError, match="书签"):
+        edit_original_docx(merged, source, tmp_path / "out.docx")
+    # _Toc 书签的标题整段改名照常可以
+    toc = tmp_path / "toc.docx"
+
+    def build_toc(doc, mark):
+        heading = doc.add_heading("", 2)
+        mark(heading, "Start", 6, "_Toc6")
+        heading.add_run("范围")
+        mark(heading, "End", 6)
+
+    _bookmark_doc(toc, build_toc)
+    edit_original_docx(parse_docx(str(toc)).markdown.replace("## 范围", "## 概述"), toc, tmp_path / "toc-out.docx")
+
+
+# ---------------------------------------------------------------- 增量审查 M1：显式基准正文（baseMarkdown）
+
+def _save_with_base(client, did, base, text, base_md, headers, key=None):
+    body = {"expectedRevision": base, "markdownContent": text, "allowMerge": True, "baseMarkdown": base_md}
+    if key:
+        body["clientSaveKey"] = key
+    return client.patch(f"/api/v1/documents/{did}/content", json=body, headers=headers)
+
+
+def test_explicit_base_keeps_own_saved_text_out_of_conflict(team):
+    """已保存“第二段。【P1】”后编辑区停在旧正文又接着打【P2】，同时对方改了第三段：
+    按旧修订提交会和自己冲突；以“上次保存对应的编辑区文字”为显式基准则干净合并。"""
+    client, did, _users = team
+    def a():
+        return _as(client, "editor")
+
+    def b():
+        return _as(client, "editor2")
+
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, a()).status_code == 200                                   # rev 2（我）
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), b()).status_code == 200  # rev 3（对方）
+    mine = saved.replace("【P1】", "【P1】【P2】")                                             # 编辑区：不含对方修改
+    old_way = save(client, did, 1, mine, a())
+    assert old_way.status_code == 409                       # 旧基准：自己已保存的【P1】被当成对方的修改
+    with connect() as connection:
+        connection.execute("DELETE FROM document_conflict_items"); connection.execute("DELETE FROM document_conflicts"); connection.commit()
+    r = _save_with_base(client, did, 3, mine, saved, a(), key="explicit-base-1")
+    assert r.status_code == 200, r.text
+    text = r.json()["data"]["markdownContent"]
+    assert "第二段。【P1】【P2】" in text and "第三段（B 改）。" in text
+    again = _save_with_base(client, did, 3, mine, saved, a(), key="explicit-base-1")   # 同键重放
+    assert again.status_code == 200 and again.json()["data"]["revision"] == r.json()["data"]["revision"]
+
+
+def test_explicit_base_genuine_conflict_names_the_other_person(team):
+    client, did, _users = team
+    def a():
+        return _as(client, "editor")
+
+    def b():
+        return _as(client, "editor2")
+
+    saved = TEXT.replace("第一段。", "第一段。【P1】")
+    assert save(client, did, 1, saved, a()).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), b()).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, a())
+    assert r.status_code == 409, r.text
+    conflicts = r.json()["error"]["details"]["conflicts"]
+    assert len(conflicts) == 1                               # 只有第三段；第一段（自己已存的）不进冲突
+    assert "第三段（B 改）" in conflicts[0]["theirs"]["markdown"]
+    assert conflicts[0]["theirs"]["updatedBy"]["name"] == "成员editor2"
+    appliable = r.json()["error"]["details"]["appliableMarkdown"]
+    assert "【P1】【P2】" in appliable
+
+
+def test_adjacent_edit_stays_out_of_neighbouring_conflict(team):
+    """相邻两段：第二段只有我改（自己已存后续打），第三段双方都改——只有第三段进冲突，第二段的续打照常合并。"""
+    client, did, _users = team
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, _as(client, "editor")).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), _as(client, "editor2")).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    details = r.json()["error"]["details"]
+    assert len(details["conflicts"]) == 1 and details["conflicts"][0]["mine"]["markdown"] == "第三段【我改】。"
+    assert details["conflicts"][0]["theirs"]["updatedBy"]["name"] == "成员editor2"
+    assert "第二段。【P1】【P2】" in details["appliableMarkdown"]
+
+
+def test_conflict_theirs_names_the_block_that_changed(team):
+    """结构性修改（块数变化）把自己刚存过的第二段和对方改的第三段并成一处冲突时，“对方”仍是改了第三段的人。"""
+    client, did, _users = team
+    saved = TEXT.replace("第二段。", "第二段。【P1】")
+    assert save(client, did, 1, saved, _as(client, "editor")).status_code == 200
+    assert save(client, did, 2, saved.replace("第三段。", "第三段（B 改）。"), _as(client, "editor2")).status_code == 200
+    mine = saved.replace("【P1】", "【P1】【P2】\n\n我新加的段。").replace("第三段。", "第三段【我改】。")
+    r = _save_with_base(client, did, 3, mine, saved, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    conflicts = r.json()["error"]["details"]["conflicts"]
+    assert len(conflicts) == 1 and "第二段" in conflicts[0]["theirs"]["markdown"], conflicts
+    assert conflicts[0]["theirs"]["updatedBy"]["name"] == "成员editor2", conflicts
+
+
+def test_explicit_base_requires_merge(team):
+    client, did, _users = team
+    r = client.patch(f"/api/v1/documents/{did}/content", headers=_as(client, "editor"),
+                     json={"expectedRevision": 1, "markdownContent": TEXT, "baseMarkdown": TEXT})
+    assert r.status_code == 422
+
+
+def test_equal_count_replace_not_split_when_blocks_differ():
+    """增量审查 N1（/tmp/p8-shift.py）：[A,B]→[B（我改）,X] 块数相同但不是同一段，不能按位置拆成 A→B'、B→X。
+    应只有一处完整冲突，正文里 B 只出现一次（对方的版本），不出现重复段。"""
+    from app.document_merge import merge3
+    base = "段A：甲。\n\n段B：乙。\n\n段C：丙。\n\n段D：丁。"
+    theirs = base.replace("段B：乙。", "段B：乙（张改）。")
+    mine = base.replace("段A：甲。\n\n段B：乙。", "段B：乙（我改）。\n\n新段X。")
+    result = merge3(base, theirs, mine)
+    assert len(result.conflicts) == 1, result.conflicts
+    blocks = result.markdown.split("\n\n")
+    assert sum("段B" in block for block in blocks) == 1, blocks
+    assert "段B：乙（张改）。" in blocks and "段B：乙（我改）。" not in blocks
+    # 75fde3f 要改进的两种情况仍逐块处理：同时改相邻两段（只有一段双方都改）
+    mine2 = base.replace("段A：甲。", "段A：甲【我】。").replace("段B：乙。", "段B：乙【我】。")
+    result2 = merge3(base, theirs, mine2)
+    assert len(result2.conflicts) == 1 and "段A：甲【我】。" in result2.markdown
+
+
+def test_shift_replace_http_single_structure_conflict(team):
+    """N1 的 HTTP 复现：409 只有一处冲突，mine/theirs 是同一段区间（不把“新段X”配给“段B（张改）”），可合并部分不重复。"""
+    client, did, _users = team
+    text = "段A：甲。\n\n段B：乙。\n\n段C：丙。\n\n段D：丁。"
+    start = current(client, did)
+    assert save(client, did, start["revision"], text, _as(client, "editor")).status_code == 200
+    rev = current(client, did)["revision"]
+    assert save(client, did, rev, text.replace("段B：乙。", "段B：乙（张改）。"), _as(client, "editor2")).status_code == 200
+    mine = text.replace("段A：甲。\n\n段B：乙。", "段B：乙（我改）。\n\n新段X。")
+    r = save(client, did, rev, mine, _as(client, "editor"))
+    assert r.status_code == 409, r.text
+    details = r.json()["error"]["details"]
+    assert len(details["conflicts"]) == 1, details["conflicts"]
+    item = details["conflicts"][0]
+    assert "新段X" in item["mine"]["markdown"] and "段B：乙（我改）" in item["mine"]["markdown"]
+    assert "段B：乙（张改）" in item["theirs"]["markdown"]
+    appliable = details.get("appliableMarkdown") or ""
+    assert appliable.count("段B") <= 1, appliable
+
+
+def test_explicit_base_empty_or_unrelated_is_409_not_silent_merge(team):
+    """增量审查建议 1(b)（/tmp/p8-basemd.py）：空基准或与 expectedRevision 那一版几乎无共同段落 → 409 BASE_MISMATCH，正文不变。"""
+    client, did, _users = team
+    before = current(client, did)
+    mine = TEXT.replace("第三段。", "第三段【我改】。")
+    for base_md in ("", "完全无关的一段。\n\n另一段。\n\n第三段。\n\n第四段。"):
+        r = _save_with_base(client, did, before["revision"], mine, base_md, _as(client, "editor"))
+        assert r.status_code == 409 and r.json()["error"]["code"] == "BASE_MISMATCH", r.text
+    assert current(client, did)["markdownContent"] == before["markdownContent"]
+    # 正常的显式基准（只差一处）仍照常合并
+    r = _save_with_base(client, did, before["revision"], mine, TEXT.replace("引用段。", "引用段（编辑区没显示的旧样子）。"),
+                        _as(client, "editor"))
+    assert r.status_code == 200, r.text
+
+
+def test_content_and_base_size_limits(team):
+    client, did, _users = team
+    big = "长" * 4_000_001
+    r = _save_with_base(client, did, 1, TEXT, big, _as(client, "editor"))
+    assert r.status_code == 422, r.status_code
+    r = client.patch(f"/api/v1/documents/{did}/content", headers=_as(client, "editor"),
+                     json={"expectedRevision": 1, "markdownContent": big, "allowMerge": True})
+    assert r.status_code == 422, r.status_code
+
+
+def test_explicit_base_does_not_dedupe_when_others_changed(team):
+    """增量审查建议 1(c)：显式基准与正文之间有别人的新增段（合并进来但编辑区没显示），我又打了相同文字的一段——
+    不能按“没人改过”去重吞掉我的这段。"""
+    client, did, _users = team
+    assert save(client, did, 1, TEXT.replace("第二段。", "第二段。\n\n同文字的新段。"), _as(client, "editor2")).status_code == 200
+    rev = current(client, did)["revision"]
+    mine = TEXT.replace("第二段。", "第二段。\n\n同文字的新段。").replace("引用段。", "引用段【我】。")
+    r = _save_with_base(client, did, rev, mine, TEXT, _as(client, "editor"))
+    # 不静默去重：要么两段都在，要么列为冲突让人确认
+    assert r.status_code == 409 or current(client, did)["markdownContent"].count("同文字的新段。") == 2, r.text

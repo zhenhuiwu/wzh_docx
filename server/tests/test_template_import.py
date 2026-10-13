@@ -291,7 +291,14 @@ def test_api_review_cas_creation_and_guidance_free_export(api, tmp_path):
     assert "本条应" not in preview.json()["data"]["html"]
     structure = saved.json()["data"]["importStructure"]
     next(x for x in structure["blocks"] if x["kind"] == "guidance")["text"] += " 后续模板变化。"
-    assert client.patch(endpoint, json={"expectedRevision": 1, "importStructure": structure}, headers=headers).status_code == 200
+    # A06：确认后的结构是第 1 版，之后只能经草稿 → 发布新版本修改；已有文档仍用自己的拷贝
+    refused = client.patch(endpoint, json={"expectedRevision": 1, "importStructure": structure}, headers=headers)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "TEMPLATE_VERSIONED"
+    draft = client.put(f"/api/v1/template-documents/{template['id']}/draft", json={"structure": structure, "expectedDraftRevision": 0}, headers=headers)
+    assert draft.status_code == 200, draft.text
+    published = client.post(f"/api/v1/template-documents/{template['id']}/versions", json={"draftRevision": 1, "note": "改指导"}, headers=headers)
+    assert published.status_code == 201, published.text
+    assert published.json()["data"]["version"]["seq"] == 2
     assert client.get(f"/api/v1/documents/{document['id']}").json()["data"]["formatTemplate"]["importStructure"]["revision"] == 1
     exported = client.post(f"/api/v1/documents/{document['id']}/export", json={"expectedRevision": 0}, headers=headers)
     assert exported.status_code == 200, exported.text

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import app.test_browser_agent as module
 from app.config import clear_settings_cache
-from test_browser_agent import local_skill, neutral_service
+from test_browser_agent import local_skill, neutral_service  # noqa: F401 - pytest fixtures
 
 
 def test_repeated_agent_runs_use_owned_keepalive_model_connections(neutral_service, local_skill, tmp_path, monkeypatch):

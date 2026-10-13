@@ -1,40 +1,64 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { START_LOCATION, createRouter, createWebHistory } from "vue-router";
 import { defineAsyncComponent, h } from "vue";
+import type { RouteRecordRaw } from "vue-router";
+import { routePermission } from "./access";
 import AppShell from "./layouts/AppShell.vue";
-import { endSession, ensureSession, loginDestination } from "./session";
+import { onForbidden, onPasswordChangeRequired, onSessionExpired } from "./api/client";
+import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired, refreshSession } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
 import ProjectsView from "./views/ProjectsView.vue";
 import TemplateDetailView from "./views/TemplateDetailView.vue";
+import TemplateEditorView from "./views/TemplateEditorView.vue";
 import TemplatesView from "./views/TemplatesView.vue";
 import SignIn from "./views/SignIn.vue";
+import ChangePasswordView from "./views/ChangePasswordView.vue";
 import UsersView from "./views/UsersView.vue";
+import KnowledgeView from "./views/KnowledgeView.vue";
+import KnowledgeDetailView from "./views/KnowledgeDetailView.vue";
+import NotFoundView from "./views/NotFoundView.vue";
 import WritingSkillsView from "./views/WritingSkillsView.vue";
 
 const TestCasesView = defineAsyncComponent({
   loader: () => import("./views/TestCasesView.vue"),
   delay: 0,
-  loadingComponent: { render: () => h("section", { class: "card" }, [
-    h("header", { class: "head" }, h("h1", "测试用例管理")),
-    h("p", { class: "empty", role: "status" }, "正在加载…"),
+  loadingComponent: { render: () => h("section", { class: "view fill" }, [
+    h("header", { class: "page-head" }, h("div", h("h1", "测试用例管理"))),
+    h("div", { class: "card" }, h("div", { class: "state-panel", role: "status" }, [h("span", { class: "spinner", "aria-hidden": "true" }), "正在加载…"])),
   ]) },
-  errorComponent: { render: () => h("section", { class: "card" }, [
-    h("header", { class: "head" }, h("h1", "测试用例管理")),
-    h("div", { class: "empty", role: "alert" }, ["页面加载失败。",
+  errorComponent: { render: () => h("section", { class: "view fill" }, [
+    h("header", { class: "page-head" }, h("div", h("h1", "测试用例管理"))),
+    h("div", { class: "card" }, h("div", { class: "state-panel", role: "alert" }, [h("strong", "页面加载失败"),
       h("button", { type: "button", class: "ghost", onClick: () => window.location.reload() }, "重新加载"),
-    ]),
+    ])),
   ]) },
 });
 
+/** 按 access.ts 的权限表写入 meta.permission（路由与导航共用一张表）。 */
+function withPermissions(records: RouteRecordRaw[]): RouteRecordRaw[] {
+  for (const record of records) {
+    const needed = typeof record.name === "string" ? routePermission(record.name) : null;
+    if (needed) record.meta = { ...record.meta, permission: needed };
+    if (record.children) withPermissions(record.children);
+  }
+  return records;
+}
+
 export const router = createRouter({
   history: createWebHistory(),
-  routes: [
+  routes: withPermissions([
     {
       path: "/login",
       name: "login",
       component: SignIn,
       meta: { public: true, title: "登录" },
+    },
+    {
+      path: "/change-password",
+      name: "change-password",
+      component: ChangePasswordView,
+      meta: { title: "修改密码" },
     },
     {
       path: "/",
@@ -76,7 +100,19 @@ export const router = createRouter({
           name: "project-reviews",
           redirect: (to) => ({ name: "project", params: { id: to.params.id } }),
         },
-        { path: "knowledge/:id?", redirect: { name: "projects" } },
+        // 知识库：页面与接口均已实现（DEV-09），此前路由被整体重定向到项目列表，导致入口不可达（02 评审 P1-6）。
+        {
+          path: "knowledge",
+          name: "knowledge",
+          component: KnowledgeView,
+          meta: { title: "知识库" },
+        },
+        {
+          path: "knowledge/:id",
+          name: "knowledge-base",
+          component: KnowledgeDetailView,
+          meta: { title: "知识库详情" },
+        },
         { path: "assistant", redirect: { name: "projects" } },
         {
           path: "test-cases",
@@ -97,6 +133,12 @@ export const router = createRouter({
           meta: { title: "模板详情" },
         },
         {
+          path: "system/templates/:id/documents/:docId/edit",
+          name: "template-editor",
+          component: TemplateEditorView,
+          meta: { title: "编辑模板" },
+        },
+        {
           path: "system/users",
           name: "users",
           component: UsersView,
@@ -109,10 +151,11 @@ export const router = createRouter({
           meta: { title: "Skill 管理" },
         },
         { path: "users", redirect: { name: "users" } },
+        // 未知地址显示 404，不再静默跳回项目列表（02 评审 P1-6）。
+        { path: ":pathMatch(.*)*", name: "not-found", component: NotFoundView, meta: { title: "页面不存在" } },
       ],
     },
-    { path: "/:pathMatch(.*)*", redirect: { name: "projects" } },
-  ],
+  ]),
 });
 
 router.beforeEach(async (to) => {
@@ -126,7 +169,31 @@ router.beforeEach(async (to) => {
     return session ? loginDestination(to.query.redirect) : true;
   }
   const session = await ensureSession();
-  return session ? true : { name: "login", query: { redirect: to.fullPath } };
+  if (!session) return { name: "login", query: { redirect: to.fullPath } };
+  if (session.mustChangePassword && to.name !== "change-password") {
+    return { name: "change-password", query: { redirect: to.fullPath } };
+  }
+  return true;
+});
+
+onPasswordChangeRequired(() => {
+  markPasswordChangeRequired();
+  const current = router.currentRoute.value;
+  if (current.name === "change-password" || current.meta.public) return;
+  void router.replace({ name: "change-password", query: { redirect: current.fullPath } });
+});
+
+onSessionExpired(() => {
+  markSessionExpired();
+  const current = router.currentRoute.value;
+  // 首次导航由守卫处理；登录页等公开页面自身的 401 不跳转。
+  if (current === START_LOCATION || current.meta.public) return;
+  void router.replace({ name: "login", query: { redirect: current.fullPath } });
+});
+
+// 普通 403：权限可能刚被调整，刷新会话权限让导航自愈（09 审查 S1）。
+onForbidden(() => {
+  void refreshSession();
 });
 
 router.afterEach((to, _from, failure) => {

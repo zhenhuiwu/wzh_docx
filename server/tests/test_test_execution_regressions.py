@@ -3,7 +3,6 @@
 import asyncio
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import Thread
 import struct
 import time
@@ -14,10 +13,17 @@ import zlib
 from docx import Document
 import pytest
 
-from app.test_executor import MissingInput, _concurrency_async, _unit, build_report, execute_run
+import shutil
+
+from app.test_executor import MIN_NODE_MAJOR, MissingInput, _concurrency_async, _node_major, _unit, build_report, execute_run
 from app.test_management import _interrupt_result
 
 
+_NODE = shutil.which("node")
+_NODE_MAJOR = _node_major(_NODE) if _NODE else 0
+
+
+@pytest.mark.skipif(_NODE_MAJOR < MIN_NODE_MAJOR, reason=f"requires Node.js >= {MIN_NODE_MAJOR} (per-file test:summary)")
 @pytest.mark.parametrize("code,selector,expected", [
     ("const add = (a,b) => a+b;", "", "blocked"),
     ("const test = require('node:test'); test.todo('pending');", "", "blocked"),
@@ -37,6 +43,17 @@ def test_node_requires_real_completed_tests(tmp_path, code, selector, expected):
     observed = _unit({"frontendRoot": str(source)}, case, evidence, lambda: False, lambda _: None)
     assert observed["status"] == expected
     assert observed["steps"][0]["status"] == expected
+
+
+@pytest.mark.skipif(not _NODE or _NODE_MAJOR >= MIN_NODE_MAJOR, reason="only meaningful on an older Node.js")
+def test_old_node_is_reported_as_missing_input(tmp_path):
+    source, evidence = tmp_path / "source", tmp_path / "evidence"
+    source.mkdir()
+    evidence.mkdir()
+    (source / "test.cjs").write_text("require('node:test')('x', () => {});", encoding="utf-8")
+    case = {"id": str(uuid4()), "steps": [{"runner": "node", "root": "frontend", "testFile": "test.cjs"}]}
+    with pytest.raises(MissingInput, match="Node.js 22"):
+        _unit({"frontendRoot": str(source)}, case, evidence, lambda: False, lambda _: None)
 
 
 @pytest.mark.parametrize("body", [
@@ -178,7 +195,7 @@ def test_report_uses_full_frame_instead_of_existing_legacy_crop_and_requires_com
     (tmp_path / "real.png").write_bytes(png)
     (tmp_path / "legacy-detail.png").write_bytes(bad_crop)
     run = {"id": str(uuid4()), "status": "completed", "result": {"cases": [
-        {"title": "neutral", "kind": "functional", "status": "passed", "steps": [
+        {"caseId": str(uuid4()), "title": "neutral", "kind": "functional", "status": "passed", "steps": [
             {"action": "assert_text", "status": "passed", "screenshot": "real.png", "reportScreenshot": "legacy-detail.png"},
         ]},
     ]}}
@@ -205,7 +222,7 @@ def test_report_crops_display_from_complete_image_and_ignores_unsafe_regions(tmp
     rect = {"x": 480, "y": 270, "width": 960, "height": 270}
     common = {"status": "passed", "screenshot": "real.png"}
     run = {"id": str(uuid4()), "status": "completed", "result": {"cases": [
-        {"title": "neutral", "kind": "functional", "status": "passed", "steps": [
+        {"caseId": str(uuid4()), "title": "neutral", "kind": "functional", "status": "passed", "steps": [
             {**common, "action": "assert_text", "focusRect": rect},
             {**common, "action": "click", "focusRect": rect},
             {**common, "action": "assert_text", "focusRect": {**rect, "x": 1920}},

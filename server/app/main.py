@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,23 +14,31 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.bootstrap_admin import bootstrap_first_admin
-from app.db import migrate, ping
-from app.errors import AppError, error_content, install_error_handlers
+from app import service_lock
+from app.db import database_path, journal_mode, migrate, ping
+from app.errors import AppError, database_busy_error, error_content, install_error_handlers
 from app.files import router as files_router
 from app.identity import router as identity_router
 from app.jobs import router as jobs_router
 from app.knowledge import router as knowledge_router
 from app.projects import router as projects_router
+from app.project_members import router as project_members_router
+from app.ai_capability import router as capabilities_router
+from app.assignments_api import router as assignments_router
 from app.documents import router as documents_router
 from app.document_diagrams import router as document_diagrams_router
 from app.document_plans import router as document_plans_router
 from app.facts import router as facts_router
 from app.templates import router as templates_router
+from app.template_versions import router as template_versions_router
+from app.migrate_template_versions import backfill as backfill_template_versions
 from app.test_management import router as test_management_router, recover_interrupted_tasks
 from app.users import router as users_router
 from app.workbench import router as workbench_router
 from app.writing_skills import router as writing_skills_router, seed_writing_skills
 from app.models import format_timestamp
+
+logger = logging.getLogger(__name__)
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
@@ -49,11 +58,17 @@ def get_health(request: Request) -> dict[str, object]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    service_lock.acquire(database_path())  # 维护脚本据此判断服务是否在运行
     migrate()
+    backfill_template_versions()
+    logger.info("sqlite journal_mode=%s", journal_mode())
     seed_writing_skills()
     bootstrap_first_admin()
     recover_interrupted_tasks()
-    yield
+    try:
+        yield
+    finally:
+        service_lock.release()
 
 
 def create_app() -> FastAPI:
@@ -81,7 +96,13 @@ def create_app() -> FastAPI:
             )
         except StarletteHTTPException:
             raise
-        except Exception:
+        except Exception as exc:
+            busy = database_busy_error(exc)
+            if busy is not None:
+                logger.warning("database busy, request %s", request.state.request_id)
+                return JSONResponse(status_code=503, content=error_content(request, busy),
+                                    headers={"Retry-After": str(busy.retry_after)})
+            logger.exception("unhandled error, request %s", request.state.request_id)
             response = JSONResponse(
                 status_code=500,
                 content=error_content(
@@ -98,13 +119,17 @@ def create_app() -> FastAPI:
 
     api = APIRouter(prefix="/api/v1")
     api.include_router(health_router)
+    api.include_router(capabilities_router)
     api.include_router(identity_router)
     api.include_router(users_router)
     api.include_router(projects_router)
+    api.include_router(project_members_router)
     api.include_router(jobs_router)
     api.include_router(templates_router)
+    api.include_router(template_versions_router)
     api.include_router(writing_skills_router)
     api.include_router(documents_router)
+    api.include_router(assignments_router)
     api.include_router(document_diagrams_router)
     api.include_router(document_plans_router)
     api.include_router(facts_router)

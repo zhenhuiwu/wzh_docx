@@ -162,7 +162,9 @@ def test_last_owner_cannot_be_removed(client: TestClient) -> None:
     project = _create(client, csrf, owner, "负责人项目", "软件", "dev05-owner-1")
     removed = client.delete(
         f"/api/v1/projects/{project['id']}/members/{owner}",
+        params={"expectedMembersRevision": project["membersRevision"]},
         headers={"X-CSRF-Token": csrf},
     )
     assert removed.status_code == 409
-    assert removed.json()["error"]["code"] == "INVALID_TRANSITION"
+    # A05 B-4：最后一位启用负责人 → 409 LAST_OWNER（原为笼统的 INVALID_TRANSITION）
+    assert removed.json()["error"]["code"] == "LAST_OWNER"

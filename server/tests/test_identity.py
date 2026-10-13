@@ -159,8 +159,9 @@ def test_local_storage_claim_does_not_grant_access(client: TestClient) -> None:
     assert signed_in.status_code == 200
     assert "files.read" not in signed_in.json()["data"]["permissions"]
     denied = client.get("/api/v1/files/00000000-0000-4000-8000-000000000001/content")
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "FORBIDDEN"
+    # 复审 S9：读文件“不能读”与“不存在”统一 404，不泄露文件是否存在（伪造本地角色仍无效）
+    assert denied.status_code == 404
+    assert denied.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_change_password_revokes_other_sessions(client: TestClient) -> None:
@@ -196,6 +197,55 @@ def test_change_password_revokes_other_sessions(client: TestClient) -> None:
     assert resigned.status_code == 200
 
 
+def test_wrong_current_password_has_stable_code_and_is_limited(client: TestClient) -> None:
+    _reset("dev03-guess")
+    create_user(account="dev03-guess", name="猜测", password=PASSWORD, roles=["project_creator"])
+    signed = _login(client, "dev03-guess", PASSWORD)
+    csrf = signed.json()["data"]["csrfToken"]
+
+    def attempt(current: str):
+        return client.post(
+            "/api/v1/auth/change-password",
+            json={"currentPassword": current, "newPassword": "guessed-secret-9"},
+            headers={"X-CSRF-Token": csrf},
+        )
+
+    for _ in range(8):
+        wrong = attempt("not-the-password")
+        assert wrong.status_code == 422, wrong.text
+        assert wrong.json()["error"]["code"] == "CURRENT_PASSWORD_INCORRECT"
+        assert wrong.json()["error"]["fieldErrors"][0]["field"] == "currentPassword"
+    assert client.get("/api/v1/auth/me").status_code == 200
+    limited = attempt(PASSWORD)
+    assert limited.status_code == 429 and limited.json()["error"]["code"] == "LIMIT_EXCEEDED"
+    assert 1 <= int(limited.headers["Retry-After"]) <= 600
+    # The change-password counter does not lock the account out of signing in.
+    other = TestClient(client.app)
+    assert _login(other, "dev03-guess", PASSWORD).status_code == 200
+    with connect() as connection:
+        from app.identity import PASSWORD_CHANGE_GUARD_PREFIX
+
+        keys = [row["account_key"] for row in connection.execute("select account_key from login_guards")]
+        assert "dev03-guess" not in keys
+        assert any(key.startswith(PASSWORD_CHANGE_GUARD_PREFIX) for key in keys)
+        connection.execute("delete from login_guards where substr(account_key, 1, %s) = %s",
+                           (len(PASSWORD_CHANGE_GUARD_PREFIX), PASSWORD_CHANGE_GUARD_PREFIX))
+        connection.commit()
+    assert attempt(PASSWORD).status_code == 204
+
+
+def test_login_lockout_sends_retry_after(client: TestClient) -> None:
+    _reset("dev03-lock")
+    create_user(account="dev03-lock", name="锁定", password=PASSWORD, roles=["project_creator"])
+    for _ in range(8):
+        client.cookies.clear()
+        assert _login(client, "dev03-lock", "wrong-password-00").status_code == 401
+    client.cookies.clear()
+    locked = _login(client, "dev03-lock", PASSWORD)
+    assert locked.status_code == 429 and locked.json()["error"]["code"] == "LIMIT_EXCEEDED"
+    assert 1 <= int(locked.headers["Retry-After"]) <= 600
+
+
 def test_disabled_account_cannot_login(client: TestClient) -> None:
     _reset("dev03-disabled")
     user_id = create_user(
@@ -214,3 +264,69 @@ def test_disabled_account_cannot_login(client: TestClient) -> None:
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
     assert PASSWORD not in response.text
+
+
+def test_bootstrap_admin_must_change_password_before_other_apis(runtime_env, monkeypatch) -> None:
+    from app.bootstrap_admin import bootstrap_first_admin
+    from app.main import create_app
+
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_ACCOUNT", "first-admin")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_NAME", "第一管理员")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "initial-secret-1")
+    assert bootstrap_first_admin() is True
+    with TestClient(create_app()) as client:
+        response = _login(client, "first-admin", "initial-secret-1")
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["user"]["requiresFirstLoginChange"] is True
+        csrf = response.json()["data"]["csrfToken"]
+        me = client.get("/api/v1/auth/me")
+        assert me.status_code == 200 and me.json()["data"]["user"]["requiresFirstLoginChange"] is True
+        for path in ("/api/v1/projects", "/api/v1/users", "/api/v1/templates"):
+            blocked = client.get(path)
+            assert blocked.status_code == 403, path
+            assert blocked.json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+        changed = client.post(
+            "/api/v1/auth/change-password",
+            json={"currentPassword": "initial-secret-1", "newPassword": "changed-secret-2"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert changed.status_code == 204, changed.text
+        me = client.get("/api/v1/auth/me")
+        assert me.json()["data"]["user"]["requiresFirstLoginChange"] is False
+        assert client.get("/api/v1/projects").status_code == 200
+
+
+def test_existing_admin_password_and_access_survive_restarts(runtime_env) -> None:
+    from app.main import create_app
+
+    create_user(account="admin", name="管理员", password="admin123", roles=["system_admin"])
+    with connect() as connection:
+        original_hash = connection.execute(
+            "select password_hash from users where account_key = 'admin'"
+        ).fetchone()["password_hash"]
+    for _ in range(2):
+        with TestClient(create_app()) as client:
+            signed = _login(client, "admin", "admin123")
+            assert signed.status_code == 200, signed.text
+            assert signed.json()["data"]["user"]["requiresFirstLoginChange"] is False
+            assert client.get("/api/v1/projects").status_code == 200
+    with connect() as connection:
+        assert connection.execute(
+            "select password_hash from users where account_key = 'admin'"
+        ).fetchone()["password_hash"] == original_hash
+
+
+@pytest.mark.parametrize("password,status", [("1234567", 422), ("admin123", 204), ("x" * 1024, 204), ("x" * 1025, 422)])
+def test_change_password_length_limits(client: TestClient, password: str, status: int) -> None:
+    create_user(account="password-length", name="长度检查", password=PASSWORD, roles=["project_creator"])
+    signed = _login(client, "password-length", PASSWORD)
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        json={"currentPassword": PASSWORD, "newPassword": password},
+        headers={"X-CSRF-Token": signed.json()["data"]["csrfToken"]},
+    )
+    assert changed.status_code == status, changed.text
+    if status == 422:
+        assert changed.json()["error"]["fieldErrors"][0]["field"] == "newPassword"
+    client.cookies.clear()
+    assert _login(client, "password-length", password if status == 204 else PASSWORD).status_code == 200

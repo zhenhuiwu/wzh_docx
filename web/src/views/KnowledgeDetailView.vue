@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import StatePanel from "../components/StatePanel.vue";
 import { useRoute } from "vue-router";
-import { ApiError } from "../api/client";
+import { ApiError, isMissingResource } from "../api/client";
 import { uploadFile } from "../api/files";
 import { createSource, getKnowledgeBase, listSources, type KnowledgeBase, type SourceVersion } from "../api/knowledge";
+import FilePicker from "../components/FilePicker.vue";
+import { rememberCrumb } from "../crumbs";
+import { hasPermission, readSession } from "../session";
+import { useFieldErrors } from "../fieldErrors";
 
 const route = useRoute();
 const baseId = computed(() => String(route.params.id));
@@ -16,101 +21,143 @@ const name = ref("");
 const file = ref<File | null>(null);
 const submitting = ref(false);
 const tab = ref<"materials" | "search">("materials");
+const notFound = ref(false);
+const fields = useFieldErrors<"name" | "file">("source");
+const canManage = computed(() => hasPermission(readSession(), "knowledge.manage"));
+let loadRequest = 0;
+let submitRequest = 0;
 
 async function load() {
+  const target = baseId.value;
+  const request = ++loadRequest;
   phase.value = "loading";
+  base.value = null;
+  sources.value = [];
+  errorText.value = "";
+  notFound.value = false;
   try {
-    base.value = await getKnowledgeBase(baseId.value);
-    sources.value = await listSources(baseId.value);
+    const [record, items] = await Promise.all([getKnowledgeBase(target), listSources(target)]);
+    if (request !== loadRequest || target !== baseId.value) return;
+    base.value = record;
+    sources.value = items;
+    rememberCrumb(`knowledge:${record.id}`, record.name);
     phase.value = "ready";
   } catch (error) {
+    if (request !== loadRequest || target !== baseId.value) return;
     phase.value = "error";
+    notFound.value = isMissingResource(error);
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   }
 }
 
 async function submitFile() {
+  if (submitting.value) return;
   notice.value = "";
-  if (!name.value.trim() || !file.value) {
-    notice.value = "请填写资料名称并选择文件";
-    return;
-  }
   const targetBase = baseId.value;
   const targetName = name.value.trim();
   const targetFile = file.value;
+  const request = ++submitRequest;
+  // 字段级校验（08 复验 N-S3）
+  if (await fields.report({
+    name: targetName ? "" : "请填写资料名称。",
+    file: targetFile ? "" : "请选择文件。",
+  }) || !targetFile || request !== submitRequest || targetBase !== baseId.value) return;
   submitting.value = true;
   try {
     const stored = await uploadFile(targetFile, "source", { baseId: targetBase, idempotencyKey: crypto.randomUUID() });
     await createSource(targetBase, targetName, stored.id);
+    if (request !== submitRequest || targetBase !== baseId.value) return;
     name.value = "";
     file.value = null;
     notice.value = "已登记。这份资料尚未解析，不能检索。";
     await load();
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
+    if (request === submitRequest && targetBase === baseId.value) notice.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
   } finally {
-    submitting.value = false;
+    if (request === submitRequest) submitting.value = false;
   }
 }
 
-onMounted(() => void load());
+watch(baseId, () => {
+  ++submitRequest;
+  submitting.value = false;
+  name.value = "";
+  file.value = null;
+  notice.value = "";
+  tab.value = "materials";
+  fields.clear();
+  void load();
+}, { immediate: true });
+onBeforeUnmount(() => { ++loadRequest; ++submitRequest; });
 </script>
 
 <template>
-  <section class="card">
-    <div class="head">
-      <h1>{{ base?.name || "知识库" }}</h1>
-      <router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link>
-    </div>
-    <p v-if="phase === 'loading'" class="empty">正在读取</p>
-    <p v-else-if="phase === 'error'" class="notice" role="alert">{{ errorText }}</p>
-    <template v-else>
-      <div class="tabs">
-        <button type="button" :class="{ on: tab === 'materials' }" @click="tab = 'materials'">资料</button>
-        <button type="button" :class="{ on: tab === 'search' }" @click="tab = 'search'">检索</button>
+  <section class="view fill">
+    <header class="page-head">
+      <div>
+        <h1>{{ base?.name || "知识库" }}</h1>
+        <p v-if="base" class="page-desc"><span class="tag plain">{{ base.scope === "project" ? "项目知识库" : "单位知识库" }}</span><span v-if="base.summary" class="summary">{{ base.summary }}</span></p>
       </div>
-      <div v-if="tab === 'search'">
-        <p class="empty">检索尚未接入。未发布和未解析的资料不会出现在检索结果里。</p>
-      </div>
-      <div v-else>
-        <form class="create" @submit.prevent="submitFile">
-          <label>资料名称<input v-model="name" class="control" type="text" :disabled="submitting" /></label>
-          <label>文件<input class="control" type="file" :disabled="submitting" @change="file = ($event.target as HTMLInputElement).files?.[0] ?? null" /></label>
-          <button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button>
+      <div v-if="!(phase === 'error' && notFound)" class="page-actions"><router-link class="ghost" :to="{ name: 'knowledge' }">返回列表</router-link></div>
+    </header>
+    <div v-if="phase === 'loading'" class="card"><StatePanel kind="loading" text="正在读取知识库…" /></div>
+    <div v-else-if="phase === 'error' && notFound" class="card"><StatePanel kind="error" title="知识库不存在或已删除。" text="请从知识库列表重新进入。"><router-link class="primary" :to="{ name: 'knowledge' }">返回知识库列表</router-link></StatePanel></div>
+    <div v-else-if="phase === 'error'" class="card"><StatePanel kind="error" title="知识库没有载入" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
+    <div v-else class="card kb-card">
+      <!-- 页签放进卡片顶部，与项目详情一致（08 验收 S5） -->
+      <nav class="tabs" aria-label="知识库内容">
+        <button type="button" :class="{ on: tab === 'materials' }" :aria-current="tab === 'materials' ? 'page' : undefined" @click="tab = 'materials'">资料<span class="count">{{ sources.length }}</span></button>
+        <button type="button" :class="{ on: tab === 'search' }" :aria-current="tab === 'search' ? 'page' : undefined" @click="tab = 'search'">检索</button>
+      </nav>
+      <StatePanel v-if="tab === 'search'" title="检索尚未接入" text="未发布和未解析的资料不会出现在检索结果里。" />
+      <template v-else>
+        <!-- 登记资料按 knowledge.manage 显隐（09 复审 R5） -->
+        <form v-if="canManage" class="query upload" @submit.prevent="submitFile">
+          <div class="query-fields">
+            <label><span class="required">资料名称</span><span class="field-stack"><input id="source-name" v-model="name" class="control" v-bind="fields.invalid('name')" type="text" :disabled="submitting" @input="fields.clear('name')" /><span v-if="fields.errors.value.name" :id="fields.errorId('name')" class="field-error" role="alert">{{ fields.errors.value.name }}</span></span></label>
+            <label><span class="required">文件</span><span class="field-stack"><FilePicker id="source-file" class="file" :file="file" :invalid="Boolean(fields.errors.value.file)" v-bind="fields.invalid('file')" :disabled="submitting" @change="picked => { file = picked; fields.clear('file'); }" /><span v-if="fields.errors.value.file" :id="fields.errorId('file')" class="field-error" role="alert">{{ fields.errors.value.file }}</span></span></label>
+          </div>
+          <div class="query-actions"><button type="submit" class="primary" :disabled="submitting">{{ submitting ? "正在登记" : "登记资料" }}</button></div>
         </form>
         <p v-if="notice" class="notice" role="status">{{ notice }}</p>
-        <p v-if="sources.length === 0" class="empty">还没有资料</p>
-        <div v-else class="table-wrap">
+        <StatePanel v-if="sources.length === 0" title="还没有资料" :text="canManage ? '选择文件并登记后，资料会出现在这里。' : '知识库维护者登记资料后，资料会出现在这里。'" />
+        <div v-else class="table-wrap kb-table">
           <table>
             <thead>
               <tr>
                 <th>资料名</th>
-                <th>版本</th>
-                <th>状态</th>
-                <th class="from-mid">说明</th>
+                <th class="col-ver">版本</th>
+                <th class="col-state">状态</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="item in sources" :key="item.id">
                 <td>{{ item.name }}</td>
-                <td>{{ item.version }}</td>
-                <td>{{ item.status === "uploaded" ? "已上传" : item.status }}</td>
-                <td class="from-mid">{{ item.message || "—" }}</td>
+                <td class="num">v{{ item.version }}</td>
+                <td><span class="tag" :class="item.status === 'uploaded' ? 'plain' : 'warning'">{{ item.status === "uploaded" ? "已上传" : item.status }}</span></td>
+                <td class="muted">{{ item.message || "—" }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.create { display: grid; gap: 8px; max-width: 420px; margin-bottom: 16px; }
-.create label { display: grid; gap: 4px; }
-.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
-.tabs button.on { border-color: var(--stamp); }
-@media (max-width: 767px) {
-  .from-mid { display: none; }
-}
+.page-desc { display: flex; align-items: center; gap: var(--space-2); }
+.summary { color: var(--text-secondary); }
+.kb-card { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.kb-table { flex: 1; min-height: 0; overflow-y: auto; }
+.kb-table table { table-layout: fixed; }
+.col-ver { width: 10%; }
+.col-state { width: 12%; }
+.kb-table td { white-space: normal; overflow-wrap: anywhere; }
+.upload .file { width: calc(var(--space-7) * 9); }
+.upload label { align-items: flex-start; }
+.upload label > span:first-child { line-height: var(--control-h); }
+.field-stack { display: inline-grid; gap: var(--space-1); }
+.field-stack .field-error { margin: 0; white-space: normal; }
 </style>

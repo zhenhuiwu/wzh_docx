@@ -6,6 +6,7 @@ import asyncio
 from copy import deepcopy
 from functools import partial
 import json
+import logging
 from pathlib import Path
 import re
 import time
@@ -25,6 +26,8 @@ from langchain_openai import ChatOpenAI
 
 from app.config import ai_reasoning_kwargs, get_settings
 from app.test_executor import MissingInput, _FOCUS_ACTIONS, _PAGE_PAINT_JS, _PAGE_READY_JS, _PAGE_READY_TIMEOUT_MS, _focus_rect, _locator, _origin, _redact, _target, _test_text, _value
+
+logger = logging.getLogger(__name__)
 
 
 SKILL_FILE = Path(__file__).resolve().parents[1] / "workspaces" / "browser-skills" / "agent-browser" / "SKILL.md"
@@ -144,7 +147,8 @@ class BrowserSession:
                 if valid_focus and observation.get("action") in _FOCUS_ACTIONS:
                     focus_rect = _focus_rect(await focus.bounding_box(timeout=1000))
         except Exception:
-            pass  # Pages without visible controls still retain the current viewport evidence.
+            # Pages without visible controls still retain the current viewport evidence.
+            logger.debug("no focusable control for screenshot metadata", exc_info=True)
         try:
             await self.page.screenshot(path=str(self.folder / image_name), full_page=False, animations="disabled",
                                        mask=mask, mask_color="gray")

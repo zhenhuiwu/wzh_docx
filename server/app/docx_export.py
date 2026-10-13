@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+
+from app.fast_diff import bounded_opcodes
 from pathlib import Path
 from shutil import copyfile
 from io import BytesIO
@@ -14,6 +16,7 @@ import re
 from typing import Sequence
 
 import markdown
+from lxml import etree
 from docx import Document
 from docx.oxml.table import CT_Tbl
 from docx.oxml import OxmlElement
@@ -25,6 +28,7 @@ from docx.section import Section
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.image.image import Image
 from docx.shared import Inches
+from docx.text.run import Run
 from lxml import html
 
 from app.docx_parser import parse_docx, _list_info, heading_level
@@ -35,11 +39,58 @@ _PROTECTED_INLINE = (
     "|.//w:footnoteReference|.//w:endnoteReference|.//m:oMath|.//w:sdt"
     "|.//w:bookmarkStart|.//w:bookmarkEnd|.//w:br[@w:type='page' or @w:type='column']"
 )
+# 改写段落文字时书签不承载内容，原样保留（界面验收 M1：438C“文档标识号”行只含一个 OLE_LINK 书签）。
+# 删除整段时仍按 _PROTECTED_INLINE 保守拒绝（书签可能被 REF 域引用）。
+_PROTECTED_EDIT = (
+    ".//w:drawing|.//w:pict|.//w:object|.//w:hyperlink|.//w:fldChar|.//w:fldSimple"
+    "|.//w:footnoteReference|.//w:endnoteReference|.//m:oMath|.//w:sdt"
+    "|.//w:br[@w:type='page' or @w:type='column']"
+)
 
 
-def _remove_element(element) -> None:
+class WordEditError(ValueError):
+    """A Word write-back failure tied to one Markdown top-level block (01 §4.10)."""
+
+    def __init__(self, message: str, block_index: int | None, removed_text: str | None = None):
+        super().__init__(message)
+        self.block_index = block_index
+        # 界面复验 N1：被拒的是“删除整段”时，被删段落在原稿里的文字（编辑稿里已没有它），供“撤销这一段”按原内容找回。
+        self.removed_text = removed_text
+
+
+class _RemoveRefused(ValueError):
+    def __init__(self, message: str, removed_text: str):
+        super().__init__(message)
+        self.removed_text = removed_text
+
+
+_REMOVE_KINDS = (
+    (".//w:drawing|.//w:pict|.//w:object", "图片或嵌入对象"),
+    (".//w:fldChar|.//w:fldSimple|.//w:sdt", "Word 域（目录、页码或交叉引用等）"),
+    (".//w:bookmarkStart|.//w:bookmarkEnd", "书签（可能被目录或交叉引用使用）"),
+    (".//w:hyperlink", "超链接"),
+    (".//w:footnoteReference|.//w:endnoteReference", "脚注或尾注"),
+    (".//m:oMath", "公式"),
+    (".//w:br[@w:type='page' or @w:type='column']", "分页符或分栏符"),
+    (".//w:sectPr", "分节信息"),
+    (".//w:gridSpan|.//w:vMerge", "合并单元格"),
+)
+
+
+def _removal_reason(element, heading: bool = False) -> str:
+    """界面复验 N8：拒绝删除时写明实际原因；删掉/并掉的是标题行时单独说明。"""
+    found = [label for path, label in _REMOVE_KINDS if element.xpath(path)]
+    what = "、".join(found) or "受保护的 Word 内容"
+    # 终审：中文与英文之间留空格（“含 Word 域”）
+    what = f" {what}" if what[:1].isascii() and what[:1].isalnum() else what
+    if heading:
+        return f"删除或合并了一个标题行，这个标题含{what}，无法安全删除；请保留标题行，或在原稿中修改。"
+    return f"此内容含{what}，无法安全删除；请在原稿中修改。"
+
+
+def _remove_element(element, heading: bool = False) -> None:
     if element.xpath(_PROTECTED_INLINE + "|.//w:sectPr|.//w:gridSpan|.//w:vMerge"):
-        raise ValueError("此内容包含图片、域、合并单元格或分节信息，无法安全删除；请在原稿中修改。")
+        raise ValueError(_removal_reason(element, heading))
     element.getparent().remove(element)
 
 
@@ -54,7 +105,16 @@ def _html_blocks(content: str) -> list:
         markdown.markdown(content, extensions=["tables", "fenced_code"]),
         create_parent="div",
     )
-    return list(root)
+    # 工作台重塑轮：正文里的 HTML 注释在 Word 中没有对应内容，整体去掉（保留其后的文字），
+    # 不再把 lxml 的英文报错（“Input object is not an XML element: HtmlComment”）抛给用户，也不把注释文字写进 Word。
+    for comment in list(root.iter(etree.Comment)):
+        comment.drop_tree()
+    # 只写“#”的空标题：Word 里不会产生可对应的标题段（预览因此 422），按不存在处理；编辑区重绘后这一行随之消失。
+    return [child for child in root if isinstance(child.tag, str)
+            and not (child.tag in _HEADING_TAGS and not "".join(child.itertext()).strip() and not child.xpath(".//img"))]
+
+
+_HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 
 
 def _word_blocks(doc, *, flat_lists: bool = False, outline_headings: bool = False) -> list[_Block]:
@@ -64,7 +124,6 @@ def _word_blocks(doc, *, flat_lists: bool = False, outline_headings: bool = Fals
             blocks.append(_Block("table", [element]))
         elif isinstance(element, CT_P):
             paragraph = Paragraph(element, doc)
-            style = paragraph.style.name if paragraph.style else "Normal"
             text = paragraph.text.strip()
             listing = _list_info(paragraph)
             if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None and text:
@@ -204,20 +263,8 @@ def _inline_chunks(element, bold=False, italic=False):
 
 def _anchored_operations(old: Sequence, new: Sequence):
     """Anchor unchanged boundaries so repeated words cannot steal their run style."""
-    prefix = 0
-    while prefix < min(len(old), len(new)) and old[prefix] == new[prefix]:
-        prefix += 1
-    suffix = 0
-    while suffix < min(len(old), len(new)) - prefix and old[-1 - suffix] == new[-1 - suffix]:
-        suffix += 1
-    if prefix:
-        yield "equal", 0, prefix, 0, prefix
-    for operation, start, end, new_start, new_end in SequenceMatcher(
-        None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix], autojunk=False
-    ).get_opcodes():
-        yield operation, start + prefix, end + prefix, new_start + prefix, new_end + prefix
-    if suffix:
-        yield "equal", len(old) - suffix, len(old), len(new) - suffix, len(new)
+    # 测试工程师 N7：先去公共前后缀；中间很长时线性对齐，不再二次方（app/fast_diff.py）
+    yield from bounded_opcodes(old, new)
 
 
 def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
@@ -226,11 +273,12 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
     target_inline = _key(target)[-1]
     if paragraph.text == new_text and source_inline == target_inline:
         return
-    if paragraph._p.xpath(_PROTECTED_INLINE):
+    if paragraph._p.xpath(_PROTECTED_EDIT):
         raise ValueError("此段包含图片、链接、域或复杂 Word 内容，无法安全替换；请在原稿中修改该段。")
 
     runs = paragraph.runs
-    if source_inline != target_inline:
+    # 复审：段内有书签时也走按偏移重建的路径，书签保持原范围（段首/书签边界处加字不再被并进书签）。
+    if source_inline != target_inline or paragraph._p.xpath("./w:bookmarkStart|./w:bookmarkEnd"):
         _edit_inline_runs(paragraph, target)
         return
 
@@ -241,14 +289,22 @@ def _edit_paragraph(paragraph: Paragraph, target, source=None) -> None:
     if old_text != paragraph.text:
         raise ValueError("此段包含复杂 Word 内容，无法安全替换；请在原稿中修改该段。")
     owners = [index for index, run in enumerate(runs) for _ in run.text]
-    pieces = [""] * len(runs)
+    # 测试工程师 N7：按片段收集再拼接，不逐字 += 字符串（长段落时是二次方）
+    parts: list[list[str]] = [[] for _ in runs]
     for operation, start, end, new_start, new_end in _anchored_operations(old_text, new_text):
         if operation == "equal":
-            for old_index in range(start, end):
-                pieces[owners[old_index]] += old_text[old_index]
+            index = start
+            while index < end:
+                owner = owners[index]
+                stop = index + 1
+                while stop < end and owners[stop] == owner:
+                    stop += 1
+                parts[owner].append(old_text[index:stop])
+                index = stop
         elif operation in {"insert", "replace"}:
             owner = owners[start] if start < len(owners) else (owners[-1] if owners else 0)
-            pieces[owner] += new_text[new_start:new_end]
+            parts[owner].append(new_text[new_start:new_end])
+    pieces = ["".join(part) for part in parts]
     for run, value in zip(runs, pieces):
         if not value and run.text:
             run._r.getparent().remove(run._r)
@@ -272,15 +328,27 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
         elif operation in {"insert", "replace"}:
             owner = owners[start] if start < len(owners) else owners[-1] if owners else 0
             new_owners[new_start:new_end] = [owner] * (new_end - new_start)
+    marks = _bookmark_marks(paragraph, old_text, new_text)
+    cuts = {offset for offset, _ in marks}
     groups = []
-    for (char, bold, italic), owner in zip(target_chars, new_owners):
+    for position, ((char, bold, italic), owner) in enumerate(zip(target_chars, new_owners)):
         key = (owner, bold, italic)
-        if groups and groups[-1][0] == key:
-            groups[-1][1] += char
+        if groups and groups[-1][0] == key and position not in cuts:
+            groups[-1][1].append(char)
         else:
-            groups.append([key, char])
+            groups.append([key, [char]])
+    groups = [[key, "".join(chars)] for key, chars in groups]
     paragraph.clear()
+    pending = list(marks)
+    offset = 0
+
+    def flush(upto: int) -> None:
+        while pending and pending[0][0] <= upto:
+            paragraph._p.append(pending.pop(0)[1])
+
     for (owner, bold, italic), text in groups:
+        flush(offset)
+        offset += len(text)
         original = runs[owner] if runs else None
         if original is not None and text == original.text and (not bold or original.bold is True) and (not italic or original.italic is True):
             paragraph._p.append(deepcopy(original._r))
@@ -292,6 +360,80 @@ def _edit_inline_runs(paragraph: Paragraph, target) -> None:
             run.bold = True
         if italic:
             run.italic = True
+    flush(len(new_text))
+
+
+_BOOKMARK_FREE = ("_Toc", "_GoBack", "OLE_LINK")
+
+
+def _referenced_bookmarks(paragraph: Paragraph) -> set[str]:
+    root = paragraph._p.getroottree().getroot()
+    texts = [node.text or "" for node in root.iter(qn("w:instrText"))]
+    texts += [node.get(qn("w:instr")) or "" for node in root.iter(qn("w:fldSimple"))]
+    names = {node.get(qn("w:anchor")) for node in root.iter(qn("w:hyperlink")) if node.get(qn("w:anchor"))}
+    for text in texts:
+        names.update(re.findall(r"\b(?:REF|PAGEREF|NOTEREF)\s+(\S+)", text))
+        names.update(re.findall(r"\bHYPERLINK\s+\\l\s+\"?([^\s\"]+)", text))
+    return names
+
+
+def _bookmark_marks(paragraph: Paragraph, old_text: str, new_text: str) -> list[tuple[int, object]]:
+    """复审：改格式（整段重建 run）时书签保持原范围。
+
+    记下每个书签开始/结束标记在原文字里的偏移，按新旧文字的差异映射到新文字里，重建时插回对应位置：
+    落在未改动的文字上就精确对应；落在被替换/删除的文字里时，开始往前、结束往后取（范围只扩不缩）。
+    被交叉引用（REF/PAGEREF/NOTEREF/超链接锚点）的书签若边界落在被改的文字里、范围说不清，按受保护处理；
+    嵌在其他元素里的书签（重建会丢）同样按受保护处理。_Toc/_GoBack/OLE_LINK 不承载引用内容，不受此限。
+    """
+    p = paragraph._p
+    if p.xpath("./*[not(self::w:bookmarkStart or self::w:bookmarkEnd)][.//w:bookmarkStart or .//w:bookmarkEnd]"):
+        raise ValueError("此段的书签嵌在其他 Word 结构里，改格式会丢失书签；请在原稿中修改该段。")
+    found = []
+    offset = 0
+    for child in p:
+        if child.tag == qn("w:r"):
+            offset += len(Run(child, paragraph).text)
+        elif child.tag in (qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
+            found.append((offset, child))
+    if not found:
+        return []
+    operations = list(_anchored_operations(old_text, new_text))
+    names_by_id = {node.get(qn("w:id")): node.get(qn("w:name")) or "" for node in p.getroottree().getroot().iter(qn("w:bookmarkStart"))}
+    # 测试复测 N3：整段文字全被换掉（例如行首退格并入上一段后又回车新写一段）时，书签会落到无关的新内容上。
+    # 标题目录书签（_Toc/_GoBack）随标题改名是正常的；其他书签按受保护处理。
+    # 判定“整段换掉”：首尾都没有保留原文字，且保留下来的零散字符不到原文一半。
+    kept = sum(end - start for operation, start, end, _, _ in operations if operation == "equal")
+    anchored = operations and (operations[0][0] == "equal" or operations[-1][0] == "equal")
+    if old_text.strip() and not anchored and kept * 2 < len(old_text):
+        names = [node.get(qn("w:name")) if node.tag == qn("w:bookmarkStart") else names_by_id.get(node.get(qn("w:id")), "")
+                 for _, node in found]
+        if any(not (name or "").startswith(("_Toc", "_GoBack")) for name in names):
+            raise ValueError("此段带书签，整段文字都被替换后书签会落到新内容上；请只修改其中的文字，或在原稿中修改该段。")
+    referenced = None
+    marks = []
+    for order, (old_offset, node) in enumerate(found):
+        is_start = node.tag == qn("w:bookmarkStart")
+        mapped, exact = None, False
+        for operation, start, end, new_start, new_end in operations:
+            if operation == "equal" and start <= old_offset <= end:
+                mapped, exact = new_start + old_offset - start, True
+                break
+        if mapped is None:
+            for operation, start, end, new_start, new_end in operations:
+                if start <= old_offset <= end:
+                    mapped = new_start if is_start else new_end
+                    break
+        if mapped is None:
+            mapped = len(new_text)
+        if not exact and old_offset not in (0, len(old_text)):
+            name = node.get(qn("w:name")) if is_start else names_by_id.get(node.get(qn("w:id")), "")
+            if not (name or "").startswith(_BOOKMARK_FREE):
+                referenced = _referenced_bookmarks(paragraph) if referenced is None else referenced
+                if name in referenced:
+                    raise ValueError("此段被交叉引用的书签边界处文字已改动，无法确定书签范围；请在原稿中修改该段。")
+        marks.append((mapped, order, deepcopy(node)))
+    marks.sort(key=lambda item: (item[0], item[1]))
+    return [(mapped, node) for mapped, _, node in marks]
 
 
 def _edit_table(table: Table, target, source) -> None:
@@ -640,43 +782,95 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
     ):
         if operation == "equal":
             continue
-        old_blocks = blocks[old_start:old_end]
-        new_blocks = target[new_start:new_end]
-        if (old_blocks and new_blocks and len(old_blocks) != len(new_blocks)
-                and all(block.tag == "p" and len(block.elements) == 1 for block in old_blocks)
-                and all(element.tag == "p" and not _key(element)[2]
-                        for element in source[old_start:old_end] + new_blocks)):
-            resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
-            for block, old, new in zip(resized, previous, new_blocks):
-                _edit_block(doc, block, new, old)
-            continue
-        prefix = 0
-        while (prefix < min(len(old_blocks), len(new_blocks))
-               and old_blocks[prefix].tag == new_blocks[prefix].tag
-               and _key(source[old_start + prefix])[2] == _key(new_blocks[prefix])[2]):
-            _edit_block(doc, old_blocks[prefix], new_blocks[prefix], source[old_start + prefix])
-            prefix += 1
-        suffix = 0
-        while (suffix < min(len(old_blocks), len(new_blocks)) - prefix
-               and old_blocks[-1 - suffix].tag == new_blocks[-1 - suffix].tag
-               and _key(source[old_end - 1 - suffix])[2] == _key(new_blocks[-1 - suffix])[2]):
-            _edit_block(doc, old_blocks[-1 - suffix], new_blocks[-1 - suffix], source[old_end - 1 - suffix])
-            suffix += 1
-        old_blocks = old_blocks[prefix:len(old_blocks) - suffix if suffix else len(old_blocks)]
-        new_blocks = new_blocks[prefix:len(new_blocks) - suffix if suffix else len(new_blocks)]
-        anchor = (blocks[old_end - suffix].elements[0] if suffix else next(
-            (element for block in blocks[old_end:] for element in block.elements
-             if element.getparent() is not None),
-            doc.element.body.sectPr,
-        ))
-        for block in old_blocks:
-            for element in block.elements:
-                if element.getparent() is not None:
-                    _remove_element(element)
-        for element in new_blocks:
-            _insert_block(doc, element, anchor, image_sources=image_sources, outline_headings=outline_headings)
-            if element.tag == "p" and element.xpath('./img[starts-with(@src,"docx-image:test-")]'):
-                test_pictures.append(anchor.getprevious())
+        try:
+            _apply_operation(doc, blocks, source, target, old_start, old_end, new_start, new_end,
+                             image_sources, outline_headings, test_pictures)
+        except WordEditError:
+            raise
+        except ValueError as exc:
+            raise WordEditError(str(exc), _failing_index(exc, new_start, new_end, len(target)),
+                                getattr(exc, "removed_text", None)) from None
+    _finish_document(doc, test_pictures)
+    doc.save(output_path)
+
+
+def _failing_index(exc: ValueError, new_start: int, new_end: int, total: int) -> int | None:
+    index = getattr(exc, "block_index", None)
+    if index is not None:
+        return index
+    if new_end > new_start:
+        return new_start
+    return min(new_start, total - 1) if total else None
+
+
+def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start, new_end,
+                     image_sources, outline_headings, test_pictures) -> None:
+    old_blocks = blocks[old_start:old_end]
+    new_blocks = target[new_start:new_end]
+    if (old_blocks and new_blocks and len(old_blocks) != len(new_blocks)
+            and all(block.tag == "p" and len(block.elements) == 1 for block in old_blocks)
+            and all(element.tag == "p" and not _key(element)[2]
+                    for element in source[old_start:old_end] + new_blocks)):
+        if len(old_blocks) > len(new_blocks):
+            # 界面复验 N1：相邻段刚被改过时，删掉的受保护段会和它落在同一个片段里走“跨段替换”。
+            # 受保护段的文字在新内容里已经找不到 → 按“删除”拒绝并带上原文字，界面才能把它插回去。
+            kept = "".join("".join("".join(element.itertext()).split()) for element in new_blocks)
+            for position, block in enumerate(old_blocks):
+                if not any(element.xpath(_PROTECTED_INLINE + "|.//w:sectPr") for element in block.elements):
+                    continue
+                text = " ".join("".join(source[old_start + position].itertext()).split())
+                if text and "".join(text.split()) not in kept:
+                    reason = _removal_reason(block.elements[0], block.tag.startswith("h"))
+                    raise _RemoveRefused(reason, text)
+        resized, previous = _resize_plain_paragraphs(doc, old_blocks, source[old_start:old_end], len(new_blocks))
+        for offset, (block, old, new) in enumerate(zip(resized, previous, new_blocks)):
+            _located(new_start + offset, _edit_block, doc, block, new, old)
+        return
+    prefix = 0
+    while (prefix < min(len(old_blocks), len(new_blocks))
+           and old_blocks[prefix].tag == new_blocks[prefix].tag
+           and _key(source[old_start + prefix])[2] == _key(new_blocks[prefix])[2]):
+        _located(new_start + prefix, _edit_block, doc, old_blocks[prefix], new_blocks[prefix], source[old_start + prefix])
+        prefix += 1
+    suffix = 0
+    while (suffix < min(len(old_blocks), len(new_blocks)) - prefix
+           and old_blocks[-1 - suffix].tag == new_blocks[-1 - suffix].tag
+           and _key(source[old_end - 1 - suffix])[2] == _key(new_blocks[-1 - suffix])[2]):
+        _located(new_end - 1 - suffix, _edit_block, doc, old_blocks[-1 - suffix], new_blocks[-1 - suffix],
+                 source[old_end - 1 - suffix])
+        suffix += 1
+    old_blocks = old_blocks[prefix:len(old_blocks) - suffix if suffix else len(old_blocks)]
+    new_blocks = new_blocks[prefix:len(new_blocks) - suffix if suffix else len(new_blocks)]
+    anchor = (blocks[old_end - suffix].elements[0] if suffix else next(
+        (element for block in blocks[old_end:] for element in block.elements
+         if element.getparent() is not None),
+        doc.element.body.sectPr,
+    ))
+    for position, block in enumerate(old_blocks):
+        for element in block.elements:
+            if element.getparent() is not None:
+                try:
+                    _remove_element(element, block.tag.startswith("h"))
+                except ValueError as exc:
+                    removed = " ".join("".join(source[old_start + prefix + position].itertext()).split())
+                    raise _RemoveRefused(str(exc), removed) from None
+    for offset, element in enumerate(new_blocks):
+        _located(new_start + prefix + offset, _insert_block, doc, element, anchor,
+                 image_sources=image_sources, outline_headings=outline_headings)
+        if element.tag == "p" and element.xpath('./img[starts-with(@src,"docx-image:test-")]'):
+            test_pictures.append(anchor.getprevious())
+
+
+def _located(index: int, action, *args, **kwargs) -> None:
+    try:
+        action(*args, **kwargs)
+    except WordEditError:
+        raise
+    except ValueError as exc:
+        raise WordEditError(str(exc), index) from None
+
+
+def _finish_document(doc, test_pictures) -> None:
     # Apply after insertion so later body paragraphs do not inherit this binding.
     for picture in test_pictures:
         preceding = list(picture.itersiblings(preceding=True))[:2]
@@ -697,4 +891,3 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         for cell in header.cells:
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.keep_with_next = True
-    doc.save(output_path)

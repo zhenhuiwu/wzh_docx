@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import base64
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from docx import Document
-    from docx.shared import Pt, RGBColor, Inches
+    from docx.shared import Pt, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.text.paragraph import CT_P
     from docx.oxml.table import CT_Tbl
-    from docx.table import _Cell, Table
+    from docx.table import Table
     from docx.text.paragraph import Paragraph
-    from docx.oxml.ns import qn
 except ImportError:
     Document = None  # type: ignore
 
@@ -136,8 +137,6 @@ def _paragraph_to_markdown(paragraph: Paragraph, *, flat_lists: bool = False, ou
     if not text:
         return ''
 
-    style_name = paragraph.style.name if paragraph.style else 'Normal'
-
     # 标题转换
     if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None:
         return f"{'#' * level} {text}\n"
@@ -192,7 +191,6 @@ def _build_outline(doc: Document, *, outline_headings: bool = False) -> list[dic
     current_path = []  # 用于跟踪当前标题层级
 
     for i, paragraph in enumerate(doc.paragraphs):
-        style_name = paragraph.style.name if paragraph.style else ''
         text = paragraph.text.strip()
 
         if (level := heading_level(paragraph, outline_headings=outline_headings)) is not None and text:
@@ -224,6 +222,9 @@ def parse_docx(file_path: str, *, flat_lists: bool = False, outline_headings: bo
         raise RuntimeError("python-docx 未安装")
 
     doc = Document(file_path)
+    from app.docx_preview import memoize_styles
+
+    memoize_styles(doc)  # 终验 S-7：同上，样式查找缓存
 
     # 构建格式模板
     format_template = _build_format_template(doc, outline_headings=outline_headings)
@@ -345,7 +346,8 @@ def markdown_to_docx(
 
                     # 添加图片到文档
                     doc.add_picture(image_stream, width=Inches(4))
-                except Exception as e:
+                except Exception:
+                    logger.warning("embedding image failed; kept a text placeholder", exc_info=True)
                     # 图片添加失败，添加文本说明
                     doc.add_paragraph(f"[图片: {alt_text}]")
             else:
@@ -429,7 +431,7 @@ def _add_list_item(
 ) -> None:
     """添加列表项"""
     style = 'List Number' if numbered else 'List Bullet'
-    paragraph = doc.add_paragraph(text, style=style)
+    doc.add_paragraph(text, style=style)
 
 
 def _add_markdown_table(doc: Document, table_lines: list[str]) -> None:
@@ -501,4 +503,4 @@ def _apply_paragraph_style(paragraph: Paragraph, style_info: dict[str, Any]) -> 
                 run.font.italic = style_info['italic']
     except Exception:
         # 样式应用失败不影响内容生成
-        pass
+        logger.warning("applying run style failed; content kept without style", exc_info=True)

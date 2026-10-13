@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-from difflib import SequenceMatcher
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
@@ -22,6 +21,7 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 from lxml import etree, html
 
+from app.fast_diff import bounded_opcodes
 from app.docx_export import (
     _html_blocks, _list_items, _word_blocks,
     diagram_images, edit_original_docx,
@@ -33,11 +33,52 @@ _ALLOWED_TAGS = {
     "thead", "tbody", "tr", "th", "td", "br", "strong", "em", "code", "pre",
     "blockquote", "a", "img", "hr", "del", "s", "span",
 }
+_FIELD_LIKE = (
+    ".//w:fldChar|.//w:fldSimple|.//w:hyperlink|.//w:footnoteReference|.//w:endnoteReference"
+    "|.//m:oMath|.//w:sdt|.//w:br[@w:type='page' or @w:type='column']"
+)
+# 测试 L4：Python-Markdown 会把制表符展开成空格，编辑区再存回去时 \t 就变成了空格。
+# 行内（行首非空白之后）的制表符先换成非字符占位，渲染后在文本里还原成 \t（行首缩进不动）。
+# 复审：正文里本来就有的非字符不能被当成 tab 还原——每次从候选里挑一个正文没出现过的；
+# 候选全被占用（几乎不可能）时干脆不替换，退回旧行为（tab 展开为空格），不会改动正文原有字符。
+_TAB_MARK_CANDIDATES = tuple(chr(code) for code in range(0xFDEF, 0xFDCF, -1)) + tuple(
+    chr(plane * 0x10000 + 0xFFFE + low) for plane in range(1, 17) for low in (0, 1)
+)
+
+
+def _pick_tab_mark(markdown_text: str) -> str | None:
+    return next((mark for mark in _TAB_MARK_CANDIDATES if mark not in markdown_text), None)
+
+
+def _hide_inline_tabs(markdown_text: str, mark: str | None) -> str:
+    if mark is None:
+        return markdown_text
+
+    def line(text: str) -> str:
+        stripped = text.lstrip(" \t")
+        lead = text[:len(text) - len(stripped)]
+        return lead + stripped.replace("\t", mark)
+    return "".join(line(part) for part in markdown_text.splitlines(keepends=True))
+
+
+def _restore_inline_tabs(root, mark: str | None) -> None:
+    if mark is None:
+        return
+    for node in root.iter():
+        if isinstance(node.tag, str):
+            if node.text and mark in node.text:
+                node.text = node.text.replace(mark, "\t")
+            if node.tail and mark in node.tail:
+                node.tail = node.tail.replace(mark, "\t")
+
+
 _DROP_TAGS = {"script", "style", "iframe", "object", "embed", "svg", "math", "form", "input", "button"}
 _COLOR = re.compile(r"^[0-9A-Fa-f]{6}$")
 _IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+# Word 单倍行距约等于字号的 1.3 倍（宋体、等线等中文字体的字形高度加行距）；多倍行距按它换算成 CSS 行高
+WORD_SINGLE_LINE = 1.3
 
 
 def _sanitize(root) -> None:
@@ -249,8 +290,10 @@ def _paragraph_css(paragraph: Paragraph, table=None) -> dict[str, str]:
         css["text-indent"] = f"{-value:g}em"
     spacing = properties.get("spacing", {})
     if "line" in spacing:
+        # Word 的“多倍行距”是相对字体自身的单倍行高（中文字体约 1.3 倍字号），不是相对字号；
+        # 直接写成 CSS 的 1.15 会让标题字形压到下一段（21 记录的“概述”重叠）。按 1.3 倍换算。
         css["line-height"] = (_measure(spacing["line"]) if spacing.get("lineRule") in {"exact", "atLeast"}
-                              else f"{_number(spacing['line'], 240) or 1:g}")
+                              else f"{round((_number(spacing['line'], 240) or 1) * WORD_SINGLE_LINE, 3):g}")
         if spacing.get("lineRule") == "atLeast" and css["line-height"]:
             css["line-height"] = f"max({css['line-height']}, 1em)"
     for name, target in (("before", "margin-top"), ("after", "margin-bottom")):
@@ -297,7 +340,8 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
     target = "".join(value for _, _, value in text_nodes)
     fallback = (_run_css(paragraphs[0], None, theme, table) if paragraphs else {}) | {"white-space": "normal"}
     mapped = [fallback] * len(target)
-    for operation, start, end, new_start, new_end in SequenceMatcher(None, source, target, autojunk=False).get_opcodes():
+    # 测试工程师 N7：不再整段 SequenceMatcher（二次方），见 app/fast_diff.py
+    for operation, start, end, new_start, new_end in bounded_opcodes(source, target):
         if operation == "equal":
             mapped[new_start:new_end] = owners[start:end]
         elif operation in {"insert", "replace"}:
@@ -312,10 +356,11 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
                 # This character is Python-Markdown's HTML serialization
                 # whitespace; <br> already displays the native Word break.
                 css = css | {"white-space": "normal"}
-            if groups and groups[-1][1] == css:
-                groups[-1] = (groups[-1][0] + char, css)
+            # 测试工程师 N7：同一样式的字收集成列表再拼接（逐字拼字符串在长段落上是二次方）
+            if groups and (groups[-1][1] is css or groups[-1][1] == css):
+                groups[-1][0].append(char)
             else:
-                groups.append((char, css))
+                groups.append(([char], css))
         offset += len(value)
         setattr(owner, attribute, None)
         if attribute == "text":
@@ -323,9 +368,9 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
         else:
             parent = owner.getparent()
             position = parent.index(owner) + 1
-        for text, css in groups:
+        for chars, css in groups:
             span = html.Element("span")
-            span.text = text
+            span.text = "".join(chars)
             _set_css(span, css)
             parent.insert(position, span)
             position += 1
@@ -470,6 +515,22 @@ def _images(root, supplied: list[dict]) -> None:
             node.attrib.pop("src", None)
 
 
+def memoize_styles(doc) -> None:
+    """终验 S-7：python-docx 每次取段落/字符样式都要线性扫描全部样式找默认样式（styles.default_for），
+    SRS 这样的文档一次预览约 7 s，其中约 6 s 花在这里。一次渲染内样式不变，按 (style_id, type) 缓存。"""
+    part = doc.part
+    original = part.get_style
+    cache: dict[tuple, object] = {}
+
+    def get_style(style_id, style_type):
+        key = (style_id, style_type)
+        if key not in cache:
+            cache[key] = original(style_id, style_type)
+        return cache[key]
+
+    part.get_style = get_style
+
+
 def render_document_html(source_path: str | Path, current_markdown: str, images: list[dict] | None = None, *, outline_headings: bool = False) -> str:
     """Return safe editable body HTML styled from the actual edited Word file.
 
@@ -481,9 +542,12 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
         edited = Path(folder) / "edited.docx"
         edit_original_docx(current_markdown, source_path, edited, image_sources=diagram_images(supplied), outline_headings=outline_headings)
         doc = Document(edited)
+        memoize_styles(doc)
         root = html.Element("div")
-        for block in _html_blocks(current_markdown):
+        tab_mark = _pick_tab_mark(current_markdown)
+        for block in _html_blocks(_hide_inline_tabs(current_markdown, tab_mark)):
             root.append(block)
+        _restore_inline_tabs(root, tab_mark)
         _sanitize(root)
         target = list(root)
         flat = any((_list_info(paragraph) or ("", 0))[1] for paragraph in doc.paragraphs) and not any(
@@ -520,6 +584,13 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
             else:
                 paragraph = Paragraph(block.elements[0], doc)
                 _decorate_paragraph(node, [paragraph], theme)
+                style_name = (paragraph.style.name if paragraph.style is not None else "") or ""
+                # 测试复测 N4：[02][03] 的目录行是静态文字（不含域），但仍是目录（样式 toc N），同样只读
+                if block.elements[0].xpath(_FIELD_LIKE) or re.match(r"(?i)^toc\s*\d", style_name):
+                    # 测试 L3：目录行、域、超链接等写回 Word 会被拒绝，编辑区里直接设为只读并说明。
+                    node.set("contenteditable", "false")
+                    node.set("data-word-protected", "1")
+                    node.set("title", "此段含目录、域或链接等 Word 内容，不能在这里修改；请在原稿中修改。")
                 # Legacy Normal+numPr stays a p in Markdown.  A CSS pseudo
                 # marker can show its native number without changing textContent.
                 numbering_css, marker = _numbering(paragraph, counters)
