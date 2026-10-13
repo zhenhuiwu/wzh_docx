@@ -282,10 +282,12 @@ function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<ty
   else if (!noneMine && noAssignReadonly) { noAssignReadonly = false; readonly.value = false; readonlyReason.value = ""; noAssignNotice.value = ""; }
   if (!prev || prev.revision === next.revision) return;
   const who = owner ? `项目负责人 ${owner}` : "项目负责人";
+  // 29 复验 3：有未保存修改的判断包括保存中、保存失败/被拒还没处理的（多处改动、一处被改派时也要给［只保存我负责的部分］）
+  const unsaved = isDirty.value || saving.value || Boolean(blocked.value) || Boolean(rejected.value) || failures.value > 0 || Boolean(pendingKey);
   if (prev.mode !== next.mode) {
     if (next.mode === "enforced" && next.restricted) assignNotice.value = { tone: "info", text: `${who} 开启了按分工编辑，你只能修改分配给你的部分（${countText(next.order.filter(id => next.editable.has(id)), next.headings)}）。`, locate: next.editable.size > 0 };
     else if (next.mode === "open") assignNotice.value = { tone: "info", text: `${who} 改为开放编辑，你现在可以修改全部内容。` };
-    if (next.mode === "enforced" && next.restricted && isDirty.value) assignNotice.value = { ...assignNotice.value!, tone: "warning", text: `${assignNotice.value!.text}你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
+    if (next.mode === "enforced" && next.restricted && unsaved) assignNotice.value = { ...assignNotice.value!, tone: "warning", text: `${assignNotice.value!.text}你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
     return;
   }
   if (!next.restricted) return;
@@ -293,7 +295,7 @@ function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<ty
   const lostIds = next.order.filter(id => next.locked.has(id) && prev.editable.has(id));
   const gained = gainedIds.length ? countText(gainedIds, next.headings) : "";
   const lost = lostIds.length ? countText(lostIds, next.headings) : "";
-  if (lost && isDirty.value) assignNotice.value = { tone: "warning", text: `分工已调整：有 ${lost}改由他人负责，你现在只能查看。你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
+  if (lost && unsaved) assignNotice.value = { tone: "warning", text: `分工已调整：有 ${lost}改由他人负责，你现在只能查看。你还有未保存的修改，不属于你的部分可以放入暂存。`, saveMine: true };
   else if (lost) assignNotice.value = { tone: "info", text: `分工已调整：有 ${lost}改由他人负责，你现在只能查看。` };
   else if (gained) assignNotice.value = { tone: "info", text: `分工已调整：新分配给你 ${gained}，现在可以修改。`, locate: true };
 }
