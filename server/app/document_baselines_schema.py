@@ -14,7 +14,7 @@ from __future__ import annotations
 BASELINE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS document_baseline_blobs (
   hash TEXT PRIMARY KEY,
-  content TEXT NOT NULL,
+  body TEXT NOT NULL,
   paragraph_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS document_baselines (
