@@ -92,14 +92,7 @@ export function applyAiOperations(operations: AiBlockOp[] | undefined, ids: Set<
   return { applied, skipped };
 }
 
-/** 验收 40 P2-4：编辑稿 HTML 里标了 data-word-heading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
-export function wordHeadingIds(html: string): Set<string> {
-  const ids = new Set<string>();
-  for (const match of html.matchAll(/<[a-z0-9]+\b[^>]*>/gi)) {
-    const tag = match[0];
-    if (!/\sdata-word-heading(?:=|\s|>)/.test(tag)) continue;
-    const id = /\sdata-object-id="([^"]+)"/.exec(tag)?.[1];
-    if (id) ids.add(id);
-  }
-  return ids;
+/** 验收 40 P2-4 / 43：/objects 里标了 isWordHeading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
+export function wordHeadingIds(objects: Array<{ id: string; isWordHeading?: boolean }>): Set<string> {
+  return new Set(objects.filter((item) => item.isWordHeading).map((item) => item.id));
 }

@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
-import { previewDocument, streamDocumentSection } from "../../api/documents";
+import { streamDocumentSection } from "../../api/documents";
 import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
@@ -20,15 +20,8 @@ const drafts = ref<Record<string, string>>({});
 const state = ref<"idle" | "saving" | "saved" | "conflict" | "forbidden" | "failed">("idle");
 const stateText = ref("");
 const placeholders = ref<Record<string, string>>({});
-/** 验收 40 P2-4：Word 正文样式的标题块锁定（服务端 /objects/patch 同样拒绝）。编辑稿到了才知道是哪些块。 */
+/** 验收 40 P2-4 / 43：Word 正文样式的标题块锁定（服务端 /objects/patch 同样拒绝），直接用 /objects 的 isWordHeading，不再取整篇预览。 */
 const lockedHeadings = ref<Set<string>>(new Set());
-async function loadLockedHeadings() {
-  const id = props.doc.id;
-  try {
-    const preview = await previewDocument(id);
-    if (id === props.doc.id) lockedHeadings.value = wordHeadingIds(preview.html);
-  } catch { /* 读不到时不锁；服务端仍会拒绝修改标题块 */ }
-}
 
 const blocks = computed<DocObject[]>(() => fragments.value.flatMap((fragment) => fragment.blocks).filter((block) => !lockedHeadings.value.has(block.id)));
 const ops = computed(() => changedOps(blocks.value, drafts.value));
@@ -40,12 +33,12 @@ async function load() {
   try {
     const [objects, view] = await Promise.all([getAllObjects(props.doc.id), getAssignments(props.doc.id)]);
     revision.value = objects.documentRevision;
+    lockedHeadings.value = wordHeadingIds(objects.objects);
     fragments.value = buildFragments(objects.objects, view.resolved, props.userId);
     // 模板占位文字不放进输入框（显示为占位提示）；不改就不提交
     placeholders.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.filter((b) => isPlaceholderText(b.markdown)).map((b) => [b.id, b.markdown.trim()])));
     drafts.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.map((b) => [b.id, placeholders.value[b.id] ? "" : b.markdown])));
     phase.value = "ready";
-    void loadLockedHeadings();
   } catch (error) {
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
     phase.value = "error";

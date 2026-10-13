@@ -57,8 +57,7 @@ describe("applyAiOperations", () => {
 });
 
 describe("wordHeadingIds", () => {
-  it("collects object ids of Word body-style headings", () => {
-    const html = '<p data-object-id="a" data-word-heading="2">1.1 标识</p><p data-object-id="b">正文</p><h2 data-word-heading="1" data-object-id="c">x</h2>';
-    expect([...wordHeadingIds(html)]).toEqual(["a", "c"]);
+  it("collects object ids flagged isWordHeading by /objects", () => {
+    expect([...wordHeadingIds([{ id: "a", isWordHeading: true }, { id: "b" }, { id: "c", isWordHeading: true }])]).toEqual(["a", "c"]);
   });
 });

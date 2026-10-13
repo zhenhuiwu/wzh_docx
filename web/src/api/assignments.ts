@@ -11,7 +11,7 @@ export interface AssignmentView {
   resolved?: ResolvedObject[];
   editableHeadings?: Array<{ headingId: string; minInsertLevel: number; explicit: boolean }>;
 }
-export interface DocObject { id: string; kind: string; revision: number; markdown: string; editable?: boolean; owners?: Person[] }
+export interface DocObject { id: string; kind: string; revision: number; markdown: string; editable?: boolean; owners?: Person[]; isWordHeading?: boolean; wordHeadingLevel?: number }
 
 export const DOCUMENT_TARGET = "@document";
 
