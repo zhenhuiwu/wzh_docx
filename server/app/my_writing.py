@@ -18,10 +18,6 @@ router = APIRouter()
 _STATUS = {"all", "writing", "baselined"}
 
 
-def _has_baselines(connection) -> bool:
-    return connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_baselines'").fetchone() is not None
-
-
 @router.get("/my-writing")
 def my_writing(request: Request, projectId: str | None = None, q: str | None = None,
                offset: int = 0, limit: int = 20) -> dict:
@@ -42,11 +38,10 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
         where.append("d.name like %s")
         params.append(f"%{q.strip()}%")
     with connect() as connection:
-        baseline = _has_baselines(connection)
-        latest = ("(select max(b.seq) from document_baselines b where b.document_id = d.id)" if baseline else "null")
+        latest = "(select max(b.seq) from document_baselines b where b.document_id = d.id)"
         rows = connection.execute(
             f"""SELECT d.id, d.name, d.status, d.revision, d.updated_at, d.owner_id, d.project_id,
-                       p.name AS project_name, ou.name AS owner_name, d.assignments_enabled,
+                       p.name AS project_name, ou.name AS owner_name, d.assignment_mode,
                        (select count(*) from document_object_assignments a
                          where a.document_id = d.id and a.assignee_id = %s) AS assigned_count,
                        {latest} AS latest_baseline
@@ -66,7 +61,7 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
             "updatedAt": format_timestamp(row["updated_at"]),
             "project": {"id": str(row["project_id"]), "name": row["project_name"]},
             "owner": {"id": str(row["owner_id"]), "name": row["owner_name"]},
-            "myRole": role, "assignmentsEnabled": bool(row["assignments_enabled"]),
+            "myRole": role, "assignmentsEnabled": row["assignment_mode"] == "enforced",
             "assignedBlockCount": row["assigned_count"],
             "latestBaseline": None if row["latest_baseline"] is None else f"B{row['latest_baseline']}",
         })

@@ -4,7 +4,6 @@ import pytest
 
 from app.db import connect
 from app.document_baselines import diff_sections, join_sections, split_sections, _current_sections
-from app.document_baselines_schema import apply_baseline_schema
 from tests.test_document_access import _as, members  # noqa: F401
 from tests.test_document_concurrency import TEXT, current, pair, save, team  # noqa: F401
 from tests.test_documents import document_context  # noqa: F401
@@ -12,8 +11,6 @@ from tests.test_documents import document_context  # noqa: F401
 
 @pytest.fixture
 def bteam(team):  # noqa: F811
-    with connect() as connection:
-        apply_baseline_schema(connection)
     return team
 
 

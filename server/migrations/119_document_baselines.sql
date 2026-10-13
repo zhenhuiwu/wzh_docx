@@ -1,17 +1,4 @@
-"""文档基线（git 式快照）表结构。
-
-迁移编号待 A07 合入后再定（见 PR 说明），这里只保留 DDL，正式迁移文件
-`migrations/1NN_document_baselines.sql` 的内容即 BASELINE_SCHEMA_SQL。
-测试通过 apply_baseline_schema() 在临时库上建表。
-
-存储：章节正文按 sha256 去重存进 document_baseline_blobs，同一章节在多次基线间
-只存一份；document_baseline_sections 只记 (基线, 位置, 哈希, 标题)。几百页的
-文档建基线时只写入有变化的章节正文。
-"""
-
-from __future__ import annotations
-
-BASELINE_SCHEMA_SQL = """
+-- 文档版本（git 式快照，章节内容哈希去重）与项目基线（30 §3.5）。
 CREATE TABLE IF NOT EXISTS document_baseline_blobs (
   hash TEXT PRIMARY KEY,
   body TEXT NOT NULL,
@@ -59,8 +46,3 @@ CREATE TABLE IF NOT EXISTS project_baseline_items (
   document_baseline_id TEXT NOT NULL REFERENCES document_baselines(id),
   PRIMARY KEY (project_baseline_id, document_id)
 );
-"""
-
-
-def apply_baseline_schema(connection) -> None:
-    connection._conn.executescript(BASELINE_SCHEMA_SQL)
