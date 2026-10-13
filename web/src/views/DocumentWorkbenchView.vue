@@ -1346,7 +1346,9 @@ async function applyFastPreview(fastTask: Promise<Awaited<ReturnType<typeof prev
   const top = desk.value?.scrollTop ?? 0;
   showEditorHtml(result.value.html, result.value.objectModel);
   approxLayout.value = false;
-  void nextTick(() => { if (desk.value) desk.value.scrollTop = top; });
+  // 40 R6-2：首次点目录常发生在快速预览期间，整篇版式换上后标题位置会变；用户跳转后没自己滚过，就重新对齐到那一节
+  const jumped = jumpedHeading;
+  void nextTick(() => { if (!desk.value) return; if (jumped !== null && jumpedHeading === jumped) scrollToHeading(jumped); else desk.value.scrollTop = top; });
 }
 /** 正文用的是快速预览（版式近似，Word 制表位/页面设置等要等整篇预览） */
 const approxLayout = ref(false);
@@ -4905,30 +4907,52 @@ function ensureTailRoom(scroller: HTMLElement, delta: number) {
     scroller.style.setProperty("--tail-room", `${tailRoom.value}px`);
   }
 }
+function headingNode(index: number): HTMLElement | null | undefined {
+  return chunks ? chunks.headingElement(index) : editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
+}
 function scrollToHeading(index: number) {
-  const target = chunks ? chunks.headingElement(index) : editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
+  const target = headingNode(index);
   const scroller = desk.value;
   if (!target) return;
+  jumpedHeading = index;
   if (!scroller) { target.scrollIntoView({ block: "start" }); return; }
-  if (!chunkedEditor.value) {
-    const delta = headingTopDelta(target);
-    if (delta !== null) { ensureTailRoom(scroller, delta); scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" }); }
-    return;
-  }
-  // 分段渲染时上方块的高度是估算值：先跳过去，等目标附近渲染出真实高度后再按顶边校正，直到位置稳定（最多 6 帧）
-  let tries = 0;
+  // 小文档也走同一套（字体加载、图表/公共引用挂载同样会在首次跳转后改版式）
+  // 分段渲染时上方块的高度是估算值，字体、分段挂载也会在跳转后改变版式（首次点目录尤甚，40 R6-2）：
+  // 跳转后 JUMP_HOLD_MS 内每帧按顶边校正；用户自己滚动（滚轮/按键/触摸/按下鼠标）就停
+  jumpHold?.();
+  const until = performance.now() + JUMP_HOLD_MS;
+  let frame = 0;
+  let stopped = false;
+  const stop = (event?: Event) => {
+    if (event) jumpedHeading = null; // 用户自己滚了：之后重绘不再拉回这一节
+    if (stopped) return;
+    stopped = true;
+    cancelAnimationFrame(frame);
+    for (const name of USER_SCROLL_EVENTS) scroller.removeEventListener(name, stop);
+    if (jumpHold === stop) jumpHold = null;
+    trackViewHeading();
+  };
+  for (const name of USER_SCROLL_EVENTS) scroller.addEventListener(name, stop, { passive: true });
+  jumpHold = stop;
   const settle = () => {
-    const delta = headingTopDelta(target);
-    if (delta === null) return;
+    if (stopped) return;
+    // 重绘（整篇版式替换快速预览、分段重建）会换掉标题节点：每帧按序号重新取
+    const node = target.isConnected ? target : headingNode(index);
+    if (!node) { stop(); return; }
+    const delta = headingTopDelta(node);
+    if (delta === null) { stop(); return; }
     ensureTailRoom(scroller, delta);
-    const before = scroller.scrollTop;
-    if (Math.abs(delta) >= 1) scroller.scrollTop = before + delta;
-    // 已对齐，或到了文末滚不动了（scrollTop 不再变）：停
-    if (Math.abs(delta) < 1 || (Math.abs(scroller.scrollTop - before) < 1 && tries > 0) || ++tries >= 6) { trackViewHeading(); return; }
-    requestAnimationFrame(settle);
+    if (Math.abs(delta) >= 1) scroller.scrollTop += delta;
+    if (performance.now() >= until) { stop(); return; }
+    frame = requestAnimationFrame(settle);
   };
   settle();
 }
+const JUMP_HOLD_MS = 1500;
+const USER_SCROLL_EVENTS = ["wheel", "keydown", "touchstart", "mousedown"] as const;
+let jumpHold: (() => void) | null = null;
+/** 最近一次显式跳转的章节序号；用户自己滚动后清空 */
+let jumpedHeading: number | null = null;
 async function handleExport() {
   exportMenu.value = false;
   if (!document.value || exporting.value || opBusy.value) return;
