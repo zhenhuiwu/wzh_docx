@@ -800,7 +800,7 @@ const isDirty = computed(() => markdownContent.value !== savedContent.value);
 const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value && !bodyPending.value);
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : assignRestricted.value ? "按分工编辑的文档只有项目负责人能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
-const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
+const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, statsContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
 const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0 || Object.keys(limitedMine.value).length > 0);
 const offline = computed(() => !online.value || (retrying.value && isOffline(failures.value, failingSince, now.value, online.value)));
 // 终验 F-M1：“撤销这一段”要等编辑区重绘完成，胶囊才显示“刚刚保存”
@@ -820,8 +820,19 @@ const capsuleDetail = computed(() => {
   }
   return "";
 });
-const outline = computed(() => documentHeadings(markdownContent.value));
-const outlineInfo = computed(() => outlineEntries(markdownContent.value));
+/**
+ * 复验 P2（输入延迟）：目录、字数、修改处数都要整篇扫 20 万字的 Markdown，并让整个工作台重渲染。
+ * 连续输入时这些统计改为停顿 300ms 后再算（正文本身 markdownContent 仍逐键同步，保存/草稿不受影响）。
+ */
+const statsContent = ref("");
+let statsTimer: number | undefined;
+watch(markdownContent, value => {
+  window.clearTimeout(statsTimer);
+  if (Date.now() - lastInputAt < 1000) statsTimer = window.setTimeout(() => { statsContent.value = markdownContent.value; }, 300);
+  else statsContent.value = value;
+});
+const outline = computed(() => documentHeadings(statsContent.value));
+const outlineInfo = computed(() => outlineEntries(statsContent.value));
 /** 29 M-1：目录按“我的部分”筛选（受限编写人员默认）。目录第 i 个标题对应对象里第 i 个标题。 */
 const outlineMode = computed(() => assignRestricted.value ? outlineFilter.value ?? "mine" : outlineFilter.value === "mine" ? "all" : outlineFilter.value ?? "all");
 const outlineMineFlags = computed(() => outline.value.map((_item, index) => {
@@ -1021,7 +1032,7 @@ function placePublicEmbeds() {
 watch(() => document.value?.id, () => { publicRefs.value = []; publicHosts.value = []; void loadPublicRefs(); });
 
 const pendingSections = computed(() => outlineInfo.value.filter(item => item.todo).length);
-const totalChars = computed(() => countChars(markdownContent.value));
+const totalChars = computed(() => countChars(statsContent.value));
 const sectionChars = computed(() => selectedHeading.value === null ? null : outlineInfo.value[selectedHeading.value]?.chars ?? null);
 const currentSection = computed(() => shownHeading.value === null ? "" : outline.value[shownHeading.value]?.text || "");
 /** 状态栏的页数估算：A4 正文约每页 1500 字 */
@@ -1962,6 +1973,7 @@ function showEditorHtml(html: string, mapped?: boolean) {
     applyLocks();
     placePublicEmbeds();
     incrementalOk = null;
+    if (chunkedEditor.value && !bodyPending.value) scheduleVerify();
     void nextTick(() => { layoutWordTabs(); applyConflictMarks(); });
   }
 }
@@ -3738,6 +3750,35 @@ function incrementalText(copy: HTMLElement): string {
   if (blockMarkdownCache.size > seen.size * 2 + 64) for (const key of [...blockMarkdownCache.keys()]) if (!seen.has(key)) blockMarkdownCache.delete(key);
   return out.join("\n\n");
 }
+let verifyScheduled = false;
+/** 空闲时（输入停下 1.5 秒后）比对逐块与整篇转换；同时把未挂载段与各块的 Markdown 缓存预热，第一次按键不再卡 */
+function scheduleVerify() {
+  if (verifyScheduled) return;
+  verifyScheduled = true;
+  const idle = (window as unknown as { requestIdleCallback?: (fn: () => void, options?: { timeout: number }) => number }).requestIdleCallback;
+  const later = (fn: () => void) => idle ? idle(fn, { timeout: 2000 }) : window.setTimeout(fn, 500);
+  const run = () => {
+    if (Date.now() - lastInputAt < 1500) { window.setTimeout(() => later(run), 1500); return; }
+    verifyScheduled = false;
+    verifyIncremental();
+  };
+  later(run);
+}
+function verifyIncremental() {
+  const root = editor.value;
+  if (!root || incrementalOk !== null || !chunkedEditor.value || Object.keys(frozen.value).length) return;
+  const copy = root.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll(`[data-ai-preview]:not([${CHUNK_ATTR}])`).forEach((node) => node.remove());
+  copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
+    node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
+    if (!node.classList.length) node.removeAttribute("class");
+  });
+  const pieces = incrementalText(copy);
+  chunks?.inflate(copy);
+  const whole = editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+  incrementalOk = pieces === whole;
+  if (!incrementalOk) syncValueFromEditor();
+}
 function wrapNodes(nodes: Element[]): HTMLElement {
   const wrap = window.document.createElement("div");
   for (const node of nodes) wrap.appendChild(node.cloneNode(true));
@@ -3753,7 +3794,7 @@ function editorText(): string {
   const root = editor.value;
   const copy = root.cloneNode(true) as HTMLElement;
   copy.querySelectorAll(`[data-ai-preview]:not([${CHUNK_ATTR}])`).forEach((node) => node.remove());
-  if (Object.keys(frozen.value).length || !chunkedEditor.value || incrementalOk !== true) chunks?.inflate(copy);
+  if (Object.keys(frozen.value).length || !chunkedEditor.value || incrementalOk === false) chunks?.inflate(copy);
   copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
     node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
     if (!node.classList.length) node.removeAttribute("class");
@@ -3764,9 +3805,9 @@ function editorText(): string {
     if (chunkedEditor.value && incrementalOk !== false) {
       const pieces = incrementalText(copy);
       if (incrementalOk === true) return pieces;
-      const whole = editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
-      incrementalOk = pieces === whole;
-      return whole;
+      // 复验 P2：重绘后的那次整篇比对（约 0.7s）不放在按键里做——先用逐块结果，空闲时再比对；对不上就改用整篇转换并重新同步
+      scheduleVerify();
+      return pieces;
     }
     return editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
   }
