@@ -25,6 +25,7 @@ import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdo
 import { ApiError } from "../api/client";
 import { assignBlockIds, splitBlocks, type BaselineObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
+import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
 import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
@@ -169,7 +170,11 @@ const assignInfo = ref<{ revision: number; locked: Map<string, string>; restrict
 /** 29 M-2：只读块气泡（块下方）与暂存（本机，按文档）。 */
 const lockedBubble = ref<{ text: string; top: number; left: number; id: string } | null>(null);
 let lockedHintTimer: number | undefined;
-const lockedStash = ref("");
+/** 28 N-5：暂存列表（只追加）；lockedStash 是全部内容，气泡只显示最后一条（这次输入）。 */
+const stashEntries = ref<StashEntry[]>([]);
+const lockedStash = computed(() => stashAll(stashEntries.value));
+const stashLatest = computed(() => stashEntries.value[stashEntries.value.length - 1]?.text ?? "");
+const stashBarText = computed(() => stashEntries.value.length > 1 ? `暂存里有 ${stashEntries.value.length} 段不归你负责的内容（${stashText(stashLatest.value).replace(/。$/, "")}），复制或放置时一起处理。` : stashText(lockedStash.value));
 /** 29 M-3：保存被拒（SECTION_NOT_ASSIGNED）。 */
 const rejected = ref<{ id: string | null; violations: Violation[]; total: number; content: string } | null>(null);
 const savingMine = ref(false);
@@ -181,28 +186,20 @@ const noAssignNotice = ref("");
 let noAssignReadonly = false;
 // 复验 N-1：暂存按“用户 + 文档”存，只保留本次连续输入（来源块 + 时间），换块或停顿 20 秒后重新开始
 const stashKey = () => `docwb.a07.stash.${account()}.${document.value?.id ?? ""}`;
-let stashSource = "";
-let stashAt = 0;
 function persistStash() {
   try {
-    if (lockedStash.value) localStorage.setItem(stashKey(), JSON.stringify({ text: lockedStash.value, source: stashSource, at: stashAt }));
+    if (stashEntries.value.length) localStorage.setItem(stashKey(), serializeStash(stashEntries.value));
     else localStorage.removeItem(stashKey());
   } catch { /* 存不了就只在本页 */ }
 }
 function addStash(text: string, node: Element | null, fresh = false) {
   if (!text) return;
-  const source = node?.getAttribute("data-object-id") || "";
-  const now = Date.now();
-  lockedStash.value = !fresh && source === stashSource && now - stashAt < 20000 ? lockedStash.value + text : text;
-  stashSource = source; stashAt = now;
+  // 只追加，永远不替换已有的暂存
+  stashEntries.value = addStashEntry(stashEntries.value, text, node?.getAttribute("data-object-id") || "", Date.now(), fresh);
   persistStash();
 }
 function readStash() {
-  try {
-    const raw = localStorage.getItem(stashKey());
-    const item = raw ? JSON.parse(raw) as { text?: string; source?: string; at?: number } : null;
-    lockedStash.value = item?.text || ""; stashSource = item?.source || ""; stashAt = item?.at || 0;
-  } catch { lockedStash.value = ""; }
+  try { stashEntries.value = parseStash(localStorage.getItem(stashKey())); } catch { stashEntries.value = []; }
 }
 let baselineObjects: BaselineObject[] = [];
 let baseSnapshot: { revision: number; objects: BaselineObject[] } | null = null;
@@ -345,7 +342,7 @@ function placeStash() {
   const root = editor.value;
   const text = lockedStash.value;
   if (!root || !text || readonly.value) return;
-  const from = nodeOf(lockedBubble.value?.id || stashSource);
+  const from = nodeOf(lockedBubble.value?.id || stashEntries.value[stashEntries.value.length - 1]?.source);
   const all = [...root.querySelectorAll<HTMLElement>("[data-object-id]")].filter(node => !node.parentElement?.closest("[data-object-id]"));
   const mine = all.filter(node => node.hasAttribute("data-mine"));
   const start = (from ? mine.find(node => from.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -372,9 +369,9 @@ function placeStash() {
   }
   if (!window.document.execCommand("insertText", false, text)) return;
   anchor.scrollIntoView({ block: "center" });
-  lockedStash.value = ""; stashSource = ""; persistStash(); lockedBubble.value = null;
+  stashEntries.value = []; persistStash(); lockedBubble.value = null;
 }
-function clearStash() { lockedStash.value = ""; stashSource = ""; persistStash(); }
+function clearStash() { stashEntries.value = []; persistStash(); }
 /** 把不能修改的顶层块设为只读（列表按条目）。只动本函数加的标记，不碰服务端的 data-word-protected。 */
 function applyLocks() {
   const root = editor.value;
@@ -4229,11 +4226,11 @@ onUnmounted(() => {
         <p v-if="refreshNoticeShown" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNoticeShown }}</span></p>
         <div v-if="lockedBubble" class="locked-bubble" role="status" data-testid="locked-hint" :style="{ top: `${lockedBubble.top}px`, left: `${lockedBubble.left}px` }">
           <p>{{ lockedBubble.text }}</p>
-          <p v-if="lockedStash" class="stash" data-testid="locked-stash"><span>{{ stashText(lockedStash) }}</span>
+          <p v-if="lockedStash" class="stash" data-testid="locked-stash"><span>{{ stashText(stashLatest) }}</span>
             <button type="button" class="ghost sm" @mousedown.prevent @click="copyStash">复制</button>
             <button type="button" class="ghost sm" data-testid="locked-stash-place" :disabled="readonly || !mineStarts.length" @mousedown.prevent @click="placeStash">放到我的下一处</button></p>
         </div>
-        <p v-if="lockedStash && !lockedBubble" class="wb-notice neutral" role="status" data-testid="locked-stash-bar"><span>{{ stashText(lockedStash) }}</span>
+        <p v-if="lockedStash && !lockedBubble" class="wb-notice neutral" role="status" data-testid="locked-stash-bar"><span>{{ stashBarText }}</span>
           <span class="acts"><button type="button" class="ghost sm" @click="copyStash">复制</button><button type="button" class="ghost sm" :disabled="readonly || !mineStarts.length" @mousedown.prevent @click="placeStash">放到我的下一处</button><button type="button" class="ghost sm" @click="clearStash">清除</button></span></p>
         <p v-if="assignNotice" class="wb-notice" :class="assignNotice.tone" role="status" data-testid="assign-notice"><span>{{ assignNotice.text }}</span>
           <span class="acts"><button v-if="assignNotice.locate" type="button" class="ghost sm" @click="locateMine()">定位到第一处</button><button v-if="assignNotice.saveMine" type="button" class="ghost sm" :disabled="savingMine" @click="saveMineOnly">只保存我负责的部分</button><button type="button" class="ghost sm" @click="assignNotice = null">知道了</button></span></p>
