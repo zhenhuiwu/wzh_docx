@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
@@ -31,6 +31,7 @@ import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdo
 import { ApiError } from "../api/client";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -423,6 +424,13 @@ const guidanceChanged = computed(() => Object.keys(guidanceEdits.value).length >
 let guidanceController: AbortController | undefined;
 const aiDraft = ref("");
 const aiEdits = ref<DocumentEdit[]>([]);
+// Spec 30 §4: in-place block suggestions with per-paragraph accept/reject.
+const aiSuggestions = shallowRef<Suggestion[]>([]);
+const aiSuggestionCursor = ref(0);
+const aiSuggestionDropped = ref(0);
+const aiSuggestionAccepted = ref(0);
+const aiSuggestionTick = ref(0);
+const aiPendingSuggestions = computed(() => { void aiSuggestionTick.value; return pendingSuggestions(aiSuggestions.value); });
 const aiComplete = ref(false);
 const aiAllowedModes = ref<("append" | "replace")[]>(["append", "replace"]);
 let draftInstruction = "";
@@ -1976,7 +1984,58 @@ async function addHeading() {
     addingHeading.value = false;
   }
 }
+const suggestionCallbacks: SuggestionCallbacks = {
+  sanitize: html => DOMPurify.sanitize(html, { FORBID_TAGS: ["iframe", "form", "input", "button", "textarea"] }),
+  onResolve: (_item, accepted) => {
+    if (accepted) aiSuggestionAccepted.value += 1;
+    aiSuggestionTick.value += 1;
+    if (!aiPendingSuggestions.value.length) finishSuggestions();
+    else focusSuggestion(Math.min(aiSuggestionCursor.value, aiPendingSuggestions.value.length - 1));
+  },
+};
+function focusSuggestion(position: number) {
+  const items = aiPendingSuggestions.value;
+  if (!items.length) return;
+  aiSuggestionCursor.value = (position + items.length) % items.length;
+  for (const item of aiSuggestions.value) item.control.classList.remove("current");
+  const item = items[aiSuggestionCursor.value];
+  item.control.classList.add("current");
+  item.control.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function resolveAllSuggestions(accepted: boolean) {
+  for (const item of [...aiPendingSuggestions.value]) resolveSuggestion(item, accepted, suggestionCallbacks);
+}
+function resolveCurrentSuggestion(accepted: boolean) {
+  const item = aiPendingSuggestions.value[aiSuggestionCursor.value];
+  if (item) resolveSuggestion(item, accepted, suggestionCallbacks);
+}
+function suggestionKeys(event: KeyboardEvent) {
+  if (!event.altKey || !aiPendingSuggestions.value.length) return;
+  if (event.key === "Enter") resolveCurrentSuggestion(true);
+  else if (event.key === "Backspace") resolveCurrentSuggestion(false);
+  else if (event.key === "ArrowDown") focusSuggestion(aiSuggestionCursor.value + 1);
+  else if (event.key === "ArrowUp") focusSuggestion(aiSuggestionCursor.value - 1);
+  else return;
+  event.preventDefault();
+}
+function finishSuggestions() {
+  window.removeEventListener("keydown", suggestionKeys);
+  const accepted = aiSuggestionAccepted.value;
+  aiSuggestions.value = [];
+  aiSuggestionAccepted.value = 0;
+  clearAiDraft();
+  // Accepted suggestions are now ordinary editor content: the normal save path (blockIds, conflicts) applies.
+  if (accepted) onEditorInput();
+}
 function clearAiDraft() {
+  if (aiPendingSuggestions.value.length) {
+    window.removeEventListener("keydown", suggestionKeys);
+    const items = aiSuggestions.value;
+    aiSuggestions.value = [];
+    for (const item of pendingSuggestions(items)) resolveSuggestion(item, false, { ...suggestionCallbacks, onResolve: () => undefined });
+    if (aiSuggestionAccepted.value) { aiSuggestionAccepted.value = 0; void nextTick(() => onEditorInput()); }
+  }
+  aiSuggestionDropped.value = 0;
   aiController?.abort();
   aiController = undefined;
   aiBusy.value = false;
@@ -2288,6 +2347,11 @@ async function generateSection() {
     draftEditorVersion.value = version;
     placeAiPreview();
     showAiProgress("connecting", "正在连接编写服务");
+    const scopeIds = aiScope.value === "section" && index !== null && editor.value ? (() => {
+      const { heading, blocks } = sectionBlocks(editor.value, index);
+      return [heading, ...blocks].map(node => node?.getAttribute("data-object-id")).filter((value): value is string => Boolean(value));
+    })() : undefined;
+    const headingIndex = index;
     await streamDocumentSection(id, document.value.revision, index, draftInstruction, text, (event) => {
       if (!current() || controller.signal.aborted) return;
       if (editorVersion.value !== version || document.value?.revision !== event.revision || isDirty.value) throw new ApiError(409, "REVISION_CONFLICT", "文档已变化，请重新生成草稿。");
@@ -2306,8 +2370,20 @@ async function generateSection() {
           html = html.replaceAll(`src="${image.ref}"`, `src="data:${image.content_type};base64,${image.data}"`);
         }
       }
+      if (event.type === "done" && event.operations && aiScope.value === "section" && headingIndex !== null && editor.value) {
+        const { suggestions, dropped } = renderSuggestions(editor.value, headingIndex, event.operations, suggestionCallbacks);
+        aiSuggestions.value = suggestions;
+        aiSuggestionDropped.value = dropped;
+        aiSuggestionAccepted.value = 0;
+        aiPreviewHtml.value = "";
+        if (suggestions.length) {
+          window.addEventListener("keydown", suggestionKeys);
+          void nextTick(() => focusSuggestion(0));
+        }
+        return;
+      }
       aiPreviewHtml.value = DOMPurify.sanitize(html, { FORBID_TAGS: [...(aiScope.value === "selection" ? ["img"] : []), "iframe", "form", "input", "button", "textarea"] });
-    }, controller.signal, aiScope.value, draftSelection);
+    }, controller.signal, aiScope.value, draftSelection, scopeIds && scopeIds.length ? scopeIds : undefined);
   } catch (error) {
     if (current() && !aiStopped.value) {
       aiComplete.value = false;
@@ -4296,8 +4372,15 @@ onUnmounted(() => {
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview ai-ghost" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
-              <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiComplete ? 'AI 草稿' : '生成未完成' }}</span>
+              <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiPendingSuggestions.length ? `AI 建议 ${aiPendingSuggestions.length} 处待处理` : aiComplete && aiSuggestions.length === 0 && aiPreviewHtml === '' && aiScope === 'section' ? '本节无需修改' : aiComplete ? 'AI 草稿' : '生成未完成' }}<template v-if="!aiBusy && aiSuggestionDropped">，有 {{ aiSuggestionDropped }} 处超出范围，已忽略</template></span>
               <button v-if="aiBusy" type="button" class="ghost sm" @click="stopAi">停止</button>
+              <template v-else-if="aiPendingSuggestions.length">
+                <button type="button" class="primary sm" title="Alt+Enter 接受当前一处" @click="resolveAllSuggestions(true)">全部接受</button>
+                <button type="button" class="ghost sm" title="Alt+Backspace 拒绝当前一处" @click="resolveAllSuggestions(false)">全部拒绝</button>
+                <button type="button" class="subtle sm" title="Alt+↑" @click="focusSuggestion(aiSuggestionCursor - 1)">上一处</button>
+                <button type="button" class="subtle sm" title="Alt+↓" @click="focusSuggestion(aiSuggestionCursor + 1)">下一处</button>
+              </template>
+              <button v-else-if="aiComplete && aiScope === 'section' && aiPreviewHtml === '' && !aiDraft.trim()" type="button" class="subtle sm" @click="clearAiDraft">关闭</button>
               <template v-else>
                 <button type="button" class="primary sm" :disabled="!canApplyDraft || (aiScope === 'section' && !aiAllowedModes.includes('replace'))" @click="insertSection('replace')">{{ aiInserting ? '写入中…' : aiScope === 'document' ? '应用全文修改' : aiScope === 'selection' ? '替换选中内容' : aiAllowedModes.includes('append') ? '替换本节正文' : '应用本节修改' }}</button>
                 <button v-if="aiScope === 'section'" type="button" class="ghost sm" :disabled="!canApplyDraft || !aiAllowedModes.includes('append')" @click="insertSection('append')">追加到本节</button>
@@ -4559,6 +4642,13 @@ onUnmounted(() => {
 .ai-preview-tools { position:sticky; top:0; z-index:1; display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); padding:var(--space-2) 0; background:var(--brand-50); border-bottom:1px solid var(--brand-200); font-family:var(--font); }
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
+.ai-preview-body:empty { display:none; }
+.paper-content :deep(.ai-del) { text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
+.paper-content :deep(.ai-suggestion) { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
+.paper-content :deep(.ai-suggestion.current) { outline:2px solid var(--stamp); outline-offset:2px; }
+.paper-content :deep(.ai-ins) { flex:1; background:var(--ok-wash); }
+.paper-content :deep(.ai-suggestion-note) { flex:1; color:var(--fault); font-size:var(--text-sm); }
+.paper-content :deep(.ai-suggestion-actions) { display:flex; gap:var(--space-1); font-family:var(--font); }
 .ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--brand-600); }
 
 /* 底部状态栏 */

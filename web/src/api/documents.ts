@@ -227,7 +227,11 @@ export interface DraftEvent {
   stage?: string;
   edits?: DocumentEdit[];
   allowedModes?: ("append" | "replace")[];
+  /** Spec 30 §4: block-ID operations for in-place section editing. */
+  operations?: BlockOperation[];
 }
+
+export interface BlockOperation { op: "replace" | "insertAfter" | "delete"; blockId: string; content: string; html: string }
 
 export interface DocumentEdit { headingIndex: number | null; content: string }
 export interface WritingMemory { instruction: string; scope: "section" | "selection" | "document"; target: string }
@@ -252,10 +256,10 @@ export async function applyDocumentEdits(id: string, expectedRevision: number, e
   return body.data;
 }
 
-export async function streamDocumentSection(id: string, expectedRevision: number, headingIndex: number | null, instruction: string, selectedText: string | undefined, onEvent: (event: DraftEvent) => void, signal: AbortSignal, scope: WritingMemory["scope"] = "section", selection?: DocumentSelection): Promise<void> {
+export async function streamDocumentSection(id: string, expectedRevision: number, headingIndex: number | null, instruction: string, selectedText: string | undefined, onEvent: (event: DraftEvent) => void, signal: AbortSignal, scope: WritingMemory["scope"] = "section", selection?: DocumentSelection, blockIds?: string[]): Promise<void> {
   let completed = false;
   await apiRequest<DraftEvent>(`/documents/${id}/sections/draft?stream=true`, {
-    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection }, timeoutMs: 120000, signal,
+    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection, ...(blockIds ? { blockIds } : {}) }, timeoutMs: 120000, signal,
     onEvent: (event) => {
       if (event.type === "error") throw new ApiError(502, "AI_FAILED", event.message || "AI 编写中断，请重试。");
       if (event.type === "done") completed = true;
