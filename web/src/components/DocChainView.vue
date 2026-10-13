@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 项目首页文档依赖链（30 §3.1）：按阶段分列的卡片 + SVG 连线，可切换列表视图。 */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import { baselineCompareRoute, getProjectChain, type ChainNode, type ProjectChain, type UpstreamBaseline } from "../api/docChain";
@@ -8,6 +8,7 @@ import CreateFromTemplateDialog from "./CreateFromTemplateDialog.vue";
 import StatePanel from "./StatePanel.vue";
 
 const props = defineProps<{ projectId: string; readonly?: boolean }>();
+const emit = defineEmits<{ (event: "state", value: { ready: boolean; hasDocuments: boolean; canCreate: boolean }): void }>();
 const router = useRouter();
 const chain = ref<ProjectChain | null>(null);
 const phase = ref<"loading" | "ready" | "error">("loading");
@@ -89,11 +90,24 @@ const baselineNotices = computed(() => (chain.value?.nodes ?? []).flatMap((node)
 function firstNew(node: ChainNode) { return (node.upstreamBaselines ?? []).find((u) => u.newBaseline); }
 function compare(up: UpstreamBaseline | undefined) { if (up) void router.push(baselineCompareRoute(props.projectId, up)); }
 
+/** 页头［从模板创建］：按依赖顺序挑下一份该写的文档（上游都已创建的第一份未创建文档）。都建好了就去文档页。 */
+const nextMissing = computed(() => {
+  const nodes = chain.value?.nodes ?? [];
+  const created = new Set(nodes.filter((n) => n.created).map((n) => n.key));
+  const missing = nodes.filter((n) => !n.created);
+  return missing.find((n) => n.upstream.every((k) => created.has(k))) ?? missing[0] ?? null;
+});
+function createNext() {
+  if (nextMissing.value && canCreate.value) creating.value = nextMissing.value;
+  else void router.push({ name: "project-documents", params: { id: props.projectId } });
+}
+watch([hasDocuments, canCreate, phase], () => emit("state", { ready: phase.value === "ready", hasDocuments: hasDocuments.value, canCreate: canCreate.value }));
+
 function setView(value: "graph" | "list") { view.value = value; void nextTick(layoutLines); }
 
 onMounted(() => { void load(); window.addEventListener("resize", layoutLines); });
 onBeforeUnmount(() => window.removeEventListener("resize", layoutLines));
-defineExpose({ reload: load });
+defineExpose({ reload: load, createNext });
 </script>
 
 <template>
@@ -116,7 +130,10 @@ defineExpose({ reload: load });
     <div v-if="phase === 'loading'" class="skeleton" role="status" aria-label="正在读取依赖链"><div v-for="i in 3" :key="i" class="sk-col"><span class="sk-card" /><span class="sk-card" /></div></div>
     <StatePanel v-else-if="phase === 'error'" kind="error" title="依赖链加载失败。" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
     <template v-else-if="chain">
-      <p v-if="!hasDocuments" class="empty-hint" data-testid="chain-empty">还没有文档。按模板依赖链，第一份通常是任务计划书。</p>
+      <div v-if="!hasDocuments" class="empty-hint" data-testid="chain-empty">
+        <span>还没有文档。按模板依赖链，第一份通常是任务计划书。</span>
+        <button v-if="canCreate" type="button" class="primary" data-testid="chain-empty-create" @click="createNext">从模板创建</button>
+      </div>
       <div v-if="view === 'graph'" ref="board" class="board" data-testid="doc-chain">
         <svg class="wires" aria-hidden="true"><path v-for="line in lines" :key="line.from + line.to" :d="line.d" :class="{ hot: related.has(line.from) && related.has(line.to) && (hovered === line.from || hovered === line.to) }" /></svg>
         <div v-for="col in columns" :key="col.key" class="col">
@@ -203,6 +220,7 @@ defineExpose({ reload: load });
 .skeleton { display:grid; grid-template-columns:repeat(3, 220px); gap:var(--space-6); padding:var(--space-5); }
 .sk-col { display:grid; gap:var(--space-4); }
 .sk-card { height:calc(var(--space-7) * 2); border-radius:var(--radius-sheet); background:var(--gray-300); opacity:.4; }
+.empty-hint { display:flex; align-items:center; gap:var(--space-3); }
 .empty-hint, .others { margin:0 0 var(--space-3); color:var(--text-secondary); font-size:var(--text-sm); }
 .others { margin-top:var(--space-3); }
 .link { border:0; background:none; padding:0; color:var(--text-link); font:inherit; cursor:pointer; }

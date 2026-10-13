@@ -134,6 +134,8 @@ watch([project, () => route.query.restore], ([value, flag]) => {
   if (value.archivedAt && value.permissions?.canArchive) openArchive("restore");
 }, { immediate: true });
 
+const moreMenu = ref<HTMLDetailsElement | null>(null);
+function closeMenu() { if (moreMenu.value) moreMenu.value.open = false; }
 defineExpose({ openRestore: () => openArchive("restore") });
 </script>
 
@@ -153,14 +155,21 @@ defineExpose({ openRestore: () => openArchive("restore") });
       <!-- 项目不存在时，空态里已有“返回项目列表”，页头不再重复（08 复验 N-S6） -->
       <div v-if="!notFound" class="page-actions">
         <button v-if="project && archived && canArchive" type="button" class="primary" data-testid="project-restore" @click="openArchive('restore')">恢复项目</button>
-        <button v-else-if="project && !archived && canArchive && active === 'overview'" type="button" class="ghost" data-testid="project-archive" @click="openArchive('archive')">归档项目</button>
+        <slot v-if="project && active === 'overview'" name="actions" :project="project" />
+        <details v-if="project && active === 'overview' && ($slots.menu || (!archived && canArchive))" ref="moreMenu" class="more-menu" data-testid="project-more">
+          <summary class="ghost" aria-label="更多操作">…</summary>
+          <div class="menu-pop" role="menu" @click="closeMenu">
+            <slot name="menu" :project="project" />
+            <button v-if="!archived && canArchive" type="button" role="menuitem" class="menu-item" data-testid="project-archive" @click="openArchive('archive')">归档项目</button>
+          </div>
+        </details>
         <router-link class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link>
       </div>
     </header>
     <div class="card frame-card">
       <nav v-if="!notFound" class="tabs subnav" aria-label="项目内导航">
-        <router-link :class="{ on: active === 'overview' }" :aria-current="active === 'overview' ? 'page' : undefined" :to="{ name: 'project', params: { id: projectId } }">项目概述</router-link>
-        <router-link :class="{ on: active === 'documents' }" :aria-current="active === 'documents' ? 'page' : undefined" :to="{ name: 'project-documents', params: { id: projectId } }">文档编写</router-link>
+        <router-link :class="{ on: active === 'overview' }" :aria-current="active === 'overview' ? 'page' : undefined" :to="{ name: 'project', params: { id: projectId } }">首页</router-link>
+        <router-link :class="{ on: active === 'documents' }" :aria-current="active === 'documents' ? 'page' : undefined" :to="{ name: 'project-documents', params: { id: projectId } }">文档</router-link>
         <router-link :class="{ on: active === 'plan' }" :aria-current="active === 'plan' ? 'page' : undefined" :to="{ name: 'project-plan', params: { id: projectId } }">分工</router-link>
         <router-link :class="{ on: active === 'baselines' }" :aria-current="active === 'baselines' ? 'page' : undefined" :to="{ name: 'project-baselines', params: { id: projectId } }">基线</router-link>
       </nav>
@@ -200,6 +209,12 @@ defineExpose({ openRestore: () => openArchive("restore") });
 /* 超长项目名换行，返回按钮不被挤压（02 评审 P1-11） */
 .frame-head { align-items:flex-start; }
 .frame-head .page-actions { padding-top:var(--space-1); }
+.more-menu { position:relative; }
+.more-menu > summary { list-style:none; cursor:pointer; }
+.more-menu > summary::-webkit-details-marker { display:none; }
+.menu-pop { position:absolute; right:0; top:calc(100% + var(--space-1)); z-index:20; display:grid; min-width:calc(var(--space-7) * 4); padding:var(--space-1); border:var(--border); border-radius:var(--radius-sheet); background:var(--bg-surface); box-shadow:var(--shadow-paper); }
+.menu-pop :deep(.menu-item) { display:block; width:100%; padding:var(--space-2) var(--space-3); border:0; border-radius:var(--radius-control); background:none; color:var(--text-primary); font-size:var(--text-sm); text-align:left; cursor:pointer; white-space:nowrap; }
+.menu-pop :deep(.menu-item:hover) { background:var(--bg-hover); }
 .frame-head .page-actions a { flex-shrink:0; white-space:nowrap; }
 .frame-meta { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2) var(--space-4); }
 .archive-body { display:grid; gap:var(--space-4); }
