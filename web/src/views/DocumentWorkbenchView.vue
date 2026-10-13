@@ -1380,18 +1380,22 @@ function findLocalDrafts(record: DocumentRecord) {
   }
   // 方案 C（14 §3.5 第 6 条）：草稿里记着冲突段的续写——冲突仍未处理就追加为快照（不重新提交正文），之后草稿不再带这部分
   void settleDraftConflicts(record, drafts.filter(draft => draft.conflictsEdits?.length));
-  localDrafts.value = drafts;
-  localDraft.value = drafts[0] ?? null;
+  // 复验 P2-1：关页时已发出保存（带 pendingSave 键）的草稿不锁编辑区：后台核对是否落库，落了就删草稿并换成服务器正文，
+  // 最终没落库才放回恢复条（或自动恢复）。原先核对要 1.5–3 秒，期间整篇不能编辑。
+  const verifying = drafts.filter(draft => draft.pendingSave?.clientSaveKey && !draft.conflictsEdits?.length);
+  const shown = drafts.filter(draft => !verifying.includes(draft));
+  localDrafts.value = shown;
+  localDraft.value = shown[0] ?? null;
   checkingDrafts.value = false;
   // 28 N-4'：分工先到、草稿后到（打开时总是这样）——草稿读完后按当前分工拆一次
   if (assignInfo.value?.restricted) settleDraftOwnership();
   void flushLoadTyping();
-  void settlePendingSaves(record);
+  void settlePendingSaves(record, verifying);
   // 复验 5：关掉标签再马上打开同一文档——大文档超过 keepalive 上限（64KB），关页时的修改只留在本机草稿里，
   // 新标签因此被“先处理本机草稿”锁住，看起来像永远不能编辑。草稿基于的修订就是当前修订（期间没人改过）、
   // 没有冲突续写、是最近 30 分钟写的唯一一份时，直接恢复并保存（不需要合并，不会覆盖别人的修改）。
   // 复验 P2-1：关页时已按块发出保存（带 pendingSave 键）的草稿先等 settlePendingSaves 核对落库，不抢着恢复
-  if (!drafts.some(draft => draft.pendingSave)) maybeAutoRestore(record);
+  if (!verifying.length) maybeAutoRestore(record);
 }
 function maybeAutoRestore(record: DocumentRecord) {
   const drafts = localDrafts.value;
@@ -1444,32 +1448,39 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
   if (drafts.length) void refreshConflicts();
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
-async function settlePendingSaves(record: DocumentRecord, retried = false) {
-  let waiting = false;
-  for (const draft of [...localDrafts.value]) {
+async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[], retried = false) {
+  const waiting: DraftV2[] = [];
+  let landedAny = false;
+  for (const draft of drafts) {
     const key = draft.pendingSave?.clientSaveKey;
     if (!key) continue;
     let landed = false;
-    try { landed = await findChangeBySaveKey(record.id, key); } catch { continue; }
+    try { landed = await findChangeBySaveKey(record.id, key); } catch { landed = false; }
     if (!landed) {
       // 审查 S5 / 测试 L7：关页时的 keepalive 保存可能比重新打开还晚落库，或合并后与服务器正文相同（不记键）。
       try {
         const latest = await getDocument(record.id);
         landed = draft.wholeDocument && latest.markdownContent === draft.markdown;
       } catch { /* 查不到就按未落库处理 */ }
-      if (!landed && !retried) { waiting = true; continue; }
     }
-    if (!landed || document.value !== record) continue;
-    if (!removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt })) continue;
+    if (document.value !== record) return;
+    if (!landed) { waiting.push(draft); continue; }
+    removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
     localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
     localDraft.value = localDrafts.value[0] ?? null;
-    noteAction("上次关闭页面前的修改已保存到服务器。");
+    landedAny = true;
   }
-  if (waiting && !retried) window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, true); }, 1500);
-  else if (document.value === record) {
-    // 关页保存最终没落库：服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）。核对期间服务器可能已变，重读修订号
-    try { const latest = await getDocument(record.id); if (latest.revision === record.revision) maybeAutoRestore(record); } catch { /* 留给恢复条 */ }
+  if (landedAny) {
+    // 打开时读到的可能是落库前的正文：换成服务器最新的（正在输入就按“他人更新”的流程稍后提示）
+    const fresh = await refreshFromServer({ yieldToTyping: true }).catch(() => false);
+    if (document.value === record) noteAction(fresh ? "上次关闭页面前的修改已保存到服务器。" : "上次关闭页面前的修改已保存到服务器；编辑区稍后更新为最新正文。");
   }
+  if (!waiting.length || document.value !== record) return;
+  if (!retried) { window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, waiting, true); }, 1500); return; }
+  // 关页保存最终没落库：放回恢复条；服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）
+  localDrafts.value = [...localDrafts.value, ...waiting.filter(draft => !localDrafts.value.some(item => sameDraft(item, draft)))];
+  localDraft.value = localDrafts.value[0] ?? null;
+  try { const latest = await getDocument(record.id); if (latest.revision === record.revision) maybeAutoRestore(record); } catch { /* 留给恢复条 */ }
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
 async function refreshFromServer(options: AcceptOptions = {}, force = false): Promise<boolean> {
@@ -2557,6 +2568,12 @@ function endEditorLock() {
   if (caretSink) { caretSink.value += typed; caretSinkText = caretSinkPrefix + caretSink.value; markSinkPending(); void flushCaretSink(); return; }
   noteAction(`载入期间输入的“${typed.slice(0, 20)}${typed.length > 20 ? "…" : ""}”没能写入正文，请在需要的位置重新输入。`, 10000, "caret");
 }
+/** 复验 P2-1：刷新编辑区用快速预览（按对象，约 0.2–1s），修订号对不上或不可用时才等整篇版式预览（约 10s）。 */
+async function editingHtml(id: string, revision: number): Promise<{ html: string; objectModel?: boolean }> {
+  const fast = await previewBlocks(id).catch(() => null);
+  if (fast && fast.objectModel && fast.documentRevision === revision && fast.blocks.length) return { html: fastBodyHtml(fast.blocks), objectModel: true };
+  return previewDocument(id);
+}
 async function acceptContent(result: DocumentContentResult, options: AcceptOptions = {}): Promise<boolean> {
   const record = document.value;
   if (!record) return false;
@@ -2568,7 +2585,7 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
     const before = options.carryTyping && editor.value ? blockTexts(editor.value) : null;
     const stopReason = reasonLater(options.reason || "正在载入最新内容…");
     let preview: Awaited<ReturnType<typeof previewDocument>>;
-    try { preview = await previewDocument(record.id); }
+    try { preview = await editingHtml(record.id, result.revision); }
     catch { return false; }
     finally { stopReason(); }
     if (document.value !== record || documentId.value !== record.id) return false;
@@ -2623,7 +2640,7 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
   savedContent.value = result.markdownContent;
   persistLocalDraft();
   try {
-    const preview = await previewDocument(record.id);
+    const preview = await editingHtml(record.id, result.revision);
     if (document.value === record && documentId.value === record.id) showEditorHtml(preview.html, preview.objectModel);
     return true;
   } catch (error) {
