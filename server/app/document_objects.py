@@ -21,6 +21,7 @@ from app.db import MAINTENANCE_BUSY_MS, connect
 from app.document_access import document_principal, is_admin, load_document, permissions_of
 from app.document_location import LocItem, compute_locations
 from app.errors import AppError
+from app.patch_inflight import wait_idle
 from app.markdown_blocks import Block, assemble, canonical_key, heading_text, split
 from app.models import format_timestamp
 
@@ -394,6 +395,7 @@ def get_preview_blocks(request: Request, document_id: str, offset: int = Query(d
     from app.fast_preview import blocks
     principal = document_principal(request)
     did = _uuid(document_id, "documentId")
+    wait_idle(did)  # 关页保存进行中：重开先等它落库（见 patch_inflight）
     with connect() as conn:
         load_document(conn, did, principal.user_id, is_admin(principal), "read")
         available = ensure_committed(conn, did)
@@ -410,6 +412,8 @@ def get_preview_blocks(request: Request, document_id: str, offset: int = Query(d
 def get_objects(request: Request, document_id: str, sinceRevision: int | None = Query(default=None, ge=0)) -> dict:
     principal = document_principal(request)
     did = _uuid(document_id, "documentId")
+    if sinceRevision is None:
+        wait_idle(did)  # 打开时的整篇对象读取：关页保存进行中先等它落库（见 patch_inflight）
     with connect() as conn:
         document = load_document(conn, did, principal.user_id, is_admin(principal), "read")
         # A05 B-8：轮询带 permissions（与文档详情同一来源），权限被调整或项目归档后 45 秒内可感知

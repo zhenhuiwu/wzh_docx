@@ -266,7 +266,8 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
         raise AppError(404, "NOT_FOUND", "文档不存在或你无权访问。") from exc
     _validate(body.ops)
     rhash = request_hash({"patch": body.model_dump(exclude={"clientSaveKey"})})
-    with connect() as connection:
+    from app.patch_inflight import saving
+    with saving(did), connect() as connection:
         load_document(connection, did, principal.user_id, is_admin(principal), "edit")
         replayed = replay(connection, did, principal.user_id, body.clientSaveKey, rhash)
         if replayed is not None:

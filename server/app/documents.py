@@ -1738,6 +1738,8 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
 
+    from app.patch_inflight import wait_idle
+    wait_idle(did)  # 关页保存进行中：整篇预览按落库后的正文渲染，不白算旧修订
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
 

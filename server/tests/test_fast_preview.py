@@ -112,3 +112,42 @@ def test_patch_warms_fast_preview_for_new_revision(document_context, monkeypatch
     assert computed == []  # 命中预热结果
     block = next(item for item in page["blocks"] if item["objectId"] == target["id"])
     assert "已改" in block["html"] and block["revision"] == target["revision"] + 1
+
+
+def test_reopen_reads_wait_for_inflight_patch(document_context, monkeypatch):  # noqa: F811
+    """关页保存优先：块级保存进行中时，重开的 /objects 与 /preview/blocks 等它落库，直接读到保存后的正文。"""
+    import threading
+
+    from app import documents
+    client, headers, project, *_ = document_context
+    fast_preview.clear()
+    did = _srs_document(client, headers, project)
+    objects = client.get(f"/api/v1/documents/{did}/objects").json()["data"]["objects"]
+    revision = client.get(f"/api/v1/documents/{did}").json()["data"]["revision"]
+    target = [item for item in objects if item["kind"] == "paragraph" and not item.get("isWordHeading")
+              and len(item["markdown"]) > 40 and not any(mark in item["markdown"] for mark in "[]!<|")][-1]
+    checking, release = threading.Event(), threading.Event()
+    real_check = documents._check_word
+
+    def slow_check(*args, **kwargs):
+        checking.set()
+        release.wait(5)
+        return real_check(*args, **kwargs)
+    monkeypatch.setattr(documents, "_check_word", slow_check)
+    result = {}
+
+    def save():
+        result["patch"] = client.post(f"/api/v1/documents/{did}/objects/patch", headers=headers, json={
+            "clientSaveKey": "inflight-patch-1", "baseDocumentRevision": revision, "atomic": True,
+            "ops": [{"op": "update", "objectId": target["id"], "baseRevision": target["revision"],
+                     "markdown": target["markdown"] + " 关页"}]})
+    saver = threading.Thread(target=save)
+    saver.start()
+    assert checking.wait(5)
+    threading.Timer(0.3, release.set).start()
+    reopened = client.get(f"/api/v1/documents/{did}/objects").json()["data"]
+    page = client.get(f"/api/v1/documents/{did}/preview/blocks?limit=5000").json()["data"]
+    saver.join(10)
+    assert result["patch"].status_code == 200, result["patch"].text
+    assert reopened["documentRevision"] == page["documentRevision"] == revision + 1
+    assert any(item["markdown"].endswith("关页") for item in reopened["objects"])
