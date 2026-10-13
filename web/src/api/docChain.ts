@@ -194,7 +194,7 @@ export async function assignPublicBlock(blockId: string, assigneeId: string | nu
   return body.data;
 }
 
-export interface PublicRef { objectId: string; chapter: string; block: PublicBlock; seenRevision: number; updated: boolean }
+export interface PublicRef { objectId: string; chapter: string; block: PublicBlock; seenRevision: number; updated: boolean; canAck?: boolean }
 
 export async function documentPublicRefs(documentId: string): Promise<PublicRef[]> {
   const body = await apiRequest<{ data: { references: PublicRef[] } }>(`/documents/${documentId}/public-refs`);

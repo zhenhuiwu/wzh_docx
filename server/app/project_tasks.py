@@ -403,7 +403,8 @@ def document_public_refs(request: Request, document_id: str) -> dict:
             block = _public_payload(row, [], str(principal.user_id), role)
             for ref in mine:
                 out.append({"objectId": ref["objectId"], "chapter": ref["chapter"], "block": block,
-                            "seenRevision": seen_rev, "updated": row["revision"] > seen_rev and row["revision"] > 0})
+                            "seenRevision": seen_rev, "updated": row["revision"] > seen_rev and row["revision"] > 0,
+                            "canAck": role in ("owner", "editor") and not doc.archived})
     return {"data": {"references": out}, "requestId": request.state.request_id}
 
 
@@ -413,6 +414,8 @@ def mark_public_seen(request: Request, document_id: str, block_id: str) -> dict:
     did, bid = _id(document_id), _id(block_id)
     with connect() as conn:
         doc = load_document(conn, UUID(did), principal.user_id, is_admin(principal))
+        if not (doc.admin or doc.project_role in ("owner", "editor")) or doc.archived:
+            raise AppError(403, "FORBIDDEN", "只读成员不能标记核对。")
         with write_transaction(conn):
             row = conn.execute("SELECT revision FROM public_blocks WHERE id=%s AND project_id=%s", [bid, str(doc.project_id)]).fetchone()
             if row is None:

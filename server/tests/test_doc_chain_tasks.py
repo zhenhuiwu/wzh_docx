@@ -167,6 +167,7 @@ def test_tasks_write_back_and_public_blocks(document_context):  # noqa: F811
     saved = client.put(f"/api/v1/public-blocks/{runtime['id']}", headers=headers, json={"expectedRevision": 0, "body": "Windows 10"})
     assert saved.status_code == 200, saved.text
     ref = next(r for r in client.get(f"/api/v1/documents/{srs['id']}/public-refs").json()["data"]["references"] if r["block"]["key"] == "runtime")
+    assert ref["canAck"] is True
     assert ref["updated"] and ref["block"]["body"] == "Windows 10"
     assert client.post(f"/api/v1/documents/{srs['id']}/public-refs/{runtime['id']}:seen", headers=headers).status_code == 200
     ref = next(r for r in client.get(f"/api/v1/documents/{srs['id']}/public-refs").json()["data"]["references"] if r["block"]["key"] == "runtime")
