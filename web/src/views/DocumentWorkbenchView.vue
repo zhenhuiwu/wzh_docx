@@ -55,6 +55,13 @@ const savedContent = ref("");
 const phase = ref<"loading" | "ready" | "error">("loading");
 const loadErrorStatus = ref(0);
 const errorText = ref("");
+const orphanDrafts = ref<DraftV2[]>([]);
+const orphanStash = ref("");
+function downloadOrphan() {
+  const parts = orphanDrafts.value.map(draft => draft.markdown);
+  if (orphanStash.value) parts.push(`<!-- 暂存（不归你负责的内容） -->\n\n${orphanStash.value}`);
+  if (parts.length) download(myChangesFileName("本机草稿", new Date()), parts.join("\n\n---\n\n") + "\n");
+}
 const saving = ref(false);
 let savePromise: Promise<void> | undefined;
 let loadVersion = 0;
@@ -885,6 +892,7 @@ async function load() {
   clearAiDraft();
   phase.value = "loading";
   errorText.value = "";
+  orphanDrafts.value = []; orphanStash.value = "";
   loadErrorStatus.value = 0;
   try {
     draftAccount = readSession()?.staffId || draftAccount;
@@ -932,6 +940,13 @@ async function load() {
     phase.value = "error";
     loadErrorStatus.value = error instanceof ApiError ? error.status : 0;
     errorText.value = error instanceof ApiError && error.status === 404 ? accessText(error) : messageOf(error);
+    // 28 I-7：被移出项目（404）时，本机还留着这篇的草稿/暂存——给下载入口，字不困在浏览器里
+    if (loadErrorStatus.value === 404) {
+      try {
+        orphanDrafts.value = listDrafts(window.localStorage, account(), id).filter(draft => draft.markdown);
+        orphanStash.value = stashAll(parseStash(localStorage.getItem(`docwb.a07.stash.${account()}.${id}`)));
+      } catch { orphanDrafts.value = []; orphanStash.value = ""; }
+    }
   }
 }
 function resetSaveState() {
@@ -4177,6 +4192,8 @@ onUnmounted(() => {
   <div class="ws" @keydown="onKeydown">
     <div v-if="phase === 'loading'" class="state" role="status">正在加载文档...</div>
     <div v-else-if="phase === 'error'" class="state" data-testid="load-error"><p>{{ errorText }}</p>
+      <p v-if="loadErrorStatus === 404 && (orphanDrafts.length || orphanStash)" class="muted" data-testid="orphan-draft">这台电脑上还留有你在这篇文档里未保存的内容，可以下载保留。
+        <button type="button" class="ghost sm" data-testid="orphan-draft-download" @click="downloadOrphan">下载未保存的内容</button></p>
       <router-link v-if="loadErrorStatus === 404" class="ghost" :to="{ name: 'projects' }">返回项目列表</router-link>
       <button v-else type="button" class="ghost" @click="load">重试</button></div>
     <template v-else-if="document">
