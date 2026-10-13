@@ -805,6 +805,19 @@ def _failing_index(exc: ValueError, new_start: int, new_end: int, total: int) ->
 
 def _apply_operation(doc, blocks, source, target, old_start, old_end, new_start, new_end,
                      image_sources, outline_headings, test_pictures) -> None:
+    old_tables = [index for index in range(old_start, old_end) if blocks[index].tag == "table"]
+    new_tables = [index for index in range(new_start, new_end) if target[index].tag == "table"]
+    if old_tables and len(old_tables) == len(new_tables):
+        # Changed surrounding paragraphs must not cause a filled table to be recreated.
+        tail_old, tail_new = old_end, new_end
+        for old_index, new_index in reversed(list(zip(old_tables, new_tables))):
+            _apply_operation(doc, blocks, source, target, old_index + 1, tail_old, new_index + 1, tail_new,
+                             image_sources, outline_headings, test_pictures)
+            _located(new_index, _edit_block, doc, blocks[old_index], target[new_index], source[old_index])
+            tail_old, tail_new = old_index, new_index
+        _apply_operation(doc, blocks, source, target, old_start, tail_old, new_start, tail_new,
+                         image_sources, outline_headings, test_pictures)
+        return
     old_blocks = blocks[old_start:old_end]
     new_blocks = target[new_start:new_end]
     if (old_blocks and new_blocks and len(old_blocks) != len(new_blocks)

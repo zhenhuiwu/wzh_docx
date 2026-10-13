@@ -167,6 +167,24 @@ export interface DocumentContentResult {
 }
 
 export interface DocumentSelection { blockId: string; endBlockId?: string; start: number; end: number; text: string }
+export interface WritingGuidanceItem { id: string; heading: string; kind: string; sourceText: string; text: string; overridden: boolean; targetObjectIds?: string[]; targetText?: string }
+export interface WritingGuidanceGroup { headingIndex: number | null; heading: string; headingPath?: string; items: WritingGuidanceItem[] }
+export interface WritingGuidance { revision: number; groups: WritingGuidanceGroup[]; notices?: string[] }
+
+export async function queryWritingGuidance(id: string, expectedRevision: number, scope: WritingMemory["scope"] | "objects", headingIndex: number | null, selection?: DocumentSelection, signal?: AbortSignal, objectIds?: string[]): Promise<WritingGuidance> {
+  const body = await apiRequest<{ data: WritingGuidance }>(`/documents/${id}/writing-guidance/query`, {
+    method: "POST", json: { expectedRevision, scope, headingIndex, selection, ...(objectIds ? { objectIds } : {}) }, signal,
+  });
+  if (!body?.data) throw new Error("编写建议响应不完整。");
+  return body.data;
+}
+export async function updateWritingGuidance(id: string, expectedRevision: number, items: { id: string; text: string | null }[]): Promise<DocumentContentResult> {
+  const body = await apiRequest<{ data: DocumentContentResult }>(`/documents/${id}/writing-guidance`, {
+    method: "PATCH", json: { expectedRevision, items },
+  });
+  if (!body?.data) throw new Error("保存编写建议响应不完整。");
+  return body.data;
+}
 export interface DocumentVersion { revision: number; createdAt: string; kind: string; restoredFromRevision?: number | null; createdBy?: { id: string; name: string } | null; changedObjects?: number | null }
 export interface DocumentVersionPage { items: DocumentVersion[]; hasMore: boolean; currentRevision: number }
 export interface DocumentVersionDetail extends DocumentVersion { html: string; markdownContent: string; formatTemplate: Record<string, any> }
@@ -237,7 +255,7 @@ export async function applyDocumentEdits(id: string, expectedRevision: number, e
 export async function streamDocumentSection(id: string, expectedRevision: number, headingIndex: number | null, instruction: string, selectedText: string | undefined, onEvent: (event: DraftEvent) => void, signal: AbortSignal, scope: WritingMemory["scope"] = "section", selection?: DocumentSelection): Promise<void> {
   let completed = false;
   await apiRequest<DraftEvent>(`/documents/${id}/sections/draft?stream=true`, {
-    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection }, timeoutMs: scope === "document" ? 600000 : 120000, signal,
+    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection }, timeoutMs: 120000, signal,
     onEvent: (event) => {
       if (event.type === "error") throw new ApiError(502, "AI_FAILED", event.message || "AI 编写中断，请重试。");
       if (event.type === "done") completed = true;

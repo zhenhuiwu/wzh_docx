@@ -378,6 +378,14 @@ def validate_selection(source: str, selection: Mapping[str, object]) -> str:
     return text
 
 
+def selection_heading_index(source: str, selection: Mapping[str, object]) -> int | None:
+    """Use the proven selected blocks, never a client supplied heading or text search."""
+    blocks, _start, _end, _text = _resolve(source, selection)
+    headings = list(re.finditer(r"^(#{1,6})[ \t]+([^\n]+)$", source, re.MULTILINE))
+    indices = [index for index, match in enumerate(headings) if match.start() < blocks[0].start]
+    return indices[-1] if indices else None
+
+
 def _resolve(source: str, selection: Mapping[str, object]):
     if (not isinstance(selection, Mapping) or not {"blockId", "start", "end", "text"} <= set(selection)
             or set(selection) - {"blockId", "endBlockId", "start", "end", "text"}):

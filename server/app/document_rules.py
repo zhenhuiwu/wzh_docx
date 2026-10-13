@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 import re
 import markdown
@@ -15,6 +16,123 @@ SKILL_ROOT = Path(__file__).resolve().parents[1] / "workspaces" / "GJB438C-DocSk
 
 class DraftFormatError(ValueError):
     """A safe, user-facing validation error; never contains provider output."""
+
+
+class DraftHeadingError(DraftFormatError):
+    """The generated body changes or repeats document headings."""
+
+
+class DraftMarkupError(DraftFormatError):
+    """Unsupported output markup can be corrected without changing the task."""
+
+
+class DraftTableError(DraftFormatError):
+    """Existing Word tables must be filled in place, not rebuilt by the model."""
+
+
+class DraftProtocolError(DraftFormatError):
+    """The model used a data protocol where this scope requires prose."""
+
+
+def table_writing_notes(content: str) -> str:
+    """Keep table legends visible as scoped advice without clearing them in Word."""
+    from app.docx_export import _inline_chunks
+    notes = []
+    for block in _html_blocks(content):
+        if block.tag != "table":
+            continue
+        for cell in block.xpath(".//th|.//td"):
+            text = "".join(text for text, _bold, _italic in _inline_chunks(cell)).strip()
+            if re.match(r"^(?:注\s*[:：]|(?:编写|填写)(?:说明|要求)\s*[:：])", text) and text not in notes:
+                notes.append(text)
+    return "\n\n".join(notes)
+
+
+_UNSUPPORTED_MARKUP = re.compile(r"</?[a-zA-Z][^>]*>|<!--|<!DOCTYPE|^\s*(?:```|~~~)", re.MULTILINE)
+_WORD_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_EXISTING_BODY_TAG = re.compile(r"</?(?:p|strong|em|ul|ol|li|table|thead|tbody|tr|th|td)\s*>", re.IGNORECASE)
+
+
+def _check_markup(content: str, existing: str = "") -> None:
+    # Word imports use <br> in cells; preserved report tables also use plain HTML.
+    retained = Counter(_EXISTING_BODY_TAG.findall(existing))
+    for match in _UNSUPPORTED_MARKUP.finditer(content):
+        tag = match[0]
+        prefix = content[:match.start()]
+        if tag.startswith("<") and (len(prefix) - len(prefix.rstrip("\\"))) % 2:
+            continue
+        if _WORD_BREAK.fullmatch(tag):
+            continue
+        if retained[tag]:
+            retained[tag] -= 1
+            continue
+        raise DraftMarkupError("AI 正文包含不支持的 HTML 或代码围栏，请调整编写要求后重试。")
+
+
+def generated_body(content: str, *, complete: bool = True, whole_document: bool = False, existing: str = "") -> str:
+    """Unwrap one response envelope and check prose against supported Word markup."""
+    text = content.strip()
+    labels = "json" if whole_document else "markdown|md|text|plaintext"
+    opening = re.match(r"^(```|~~~)[ \t]*(?:" + labels + r")?[ \t]*\r?\n", text, re.IGNORECASE)
+    if opening:
+        text = text[opening.end():]
+        closing = re.search(r"(?:^|\n)[ \t]*" + re.escape(opening[1]) + r"[ \t]*$", text)
+        if closing:
+            text = text[:closing.start()].strip()
+        elif complete:
+            raise DraftFormatError("AI 正文代码围栏未闭合，需要修正输出格式。")
+        else:
+            text = re.sub(r"\n[ \t]*[`~]{1,3}\s*$", "", text).strip()
+    if not complete and (re.match(r"^[`~]{1,3}[^\n]*$", text) or re.search(r"<[/!a-zA-Z][^>]*$", text)):
+        return ""
+    # JSON contains quoted source fragments, not just generated prose. Validate
+    # the resulting body after parsing/applying edits, never the before strings.
+    if whole_document:
+        return text
+    try:
+        _check_markup(text, existing)
+    except DraftMarkupError:
+        if not complete:
+            return ""
+        raise
+    return text
+
+
+def _section_title(text: str) -> tuple[str, str]:
+    text = text.strip().rstrip("：:")
+    number = re.match(r"^(?:(\d+(?:\.\d+)*)(?:[.、．][ \t]*|[ \t]+)|第([一二三四五六七八九十百零〇两\d]+)[章节][ \t]*|[（(]([一二三四五六七八九十百零〇两]+)[）)][ \t]*|([一二三四五六七八九十百零〇两]+)、[ \t]*)", text)
+    prefix = next((value for value in number.groups() if value), "") if number else ""
+    return prefix, re.sub(r"\s+", "", text[number.end():] if number else text).casefold()
+
+
+def generated_section_body(content: str, *, heading: str, complete: bool = True, existing: str = "") -> str:
+    """Remove only a repeated leading heading, preserving every body block."""
+    text = generated_body(content, complete=complete, existing=existing)
+    if not text or not heading:
+        return text
+    lines = text.splitlines(keepends=True)
+    first = lines[0].rstrip("\r\n")
+    atx = re.fullmatch(r"[ \t]{0,3}#{1,6}[ \t]+(.+?)\s*", first)
+    expected_number, expected_title = _section_title(heading)
+    if not complete and len(lines) == 1:
+        # Until the next token arrives, this can still be a wrapper or Setext title.
+        if re.match(r"^#{1,6}(?:[ \t]|$)", first):
+            return ""
+        _, candidate = _section_title(first)
+        if candidate and expected_title.startswith(candidate):
+            return ""
+    consumed = 0
+    if atx:
+        candidate = re.sub(r"[ \t]+#+[ \t]*$", "", atx[1])
+        consumed = 1
+    elif len(lines) > 1 and re.fullmatch(r"[ \t]{0,3}(?:=+|-+)[ \t]*", lines[1].rstrip("\r\n")):
+        candidate, consumed = first, 2
+    else:
+        return text
+    number, title = _section_title(candidate)
+    if title and title == expected_title and (not number or not expected_number or number == expected_number):
+        return "".join(lines[consumed:]).strip()
+    return text
 
 
 def _title(text: str) -> str:
@@ -132,8 +250,7 @@ def validate_draft(content: str, rules: dict, *, selected_only: bool = False,
     content = content.strip()
     if len(content) > 20000 or (complete and not content):
         raise DraftFormatError("AI 正文为空或超过 20000 字，请缩小编写范围后重试。")
-    if re.search(r"</?[a-zA-Z][^>]*>|<!--|<!DOCTYPE|^\s*(?:```|~~~)", content, re.MULTILINE):
-        raise DraftFormatError("正文不能包含 HTML 或代码围栏，请重新生成。")
+    _check_markup(content, existing)
     if content.startswith(("{", "[")):
         try:
             value = json.loads(content)
@@ -141,10 +258,10 @@ def validate_draft(content: str, rules: dict, *, selected_only: bool = False,
             pass
         else:
             if isinstance(value, (dict, list)):
-                raise DraftFormatError("AI 返回了数据结构，应只输出正文。")
+                raise DraftProtocolError("AI 返回了数据结构，应只输出正文。")
     blocks = _html_blocks(content)
     if any(node.tag in {"h1", "h2", "h3", "h4", "h5", "h6"} for block in blocks for node in block.iter()):
-        raise DraftFormatError("草稿只能包含正文；请通过大纲添加标题。")
+        raise DraftHeadingError("草稿只能包含正文；请通过大纲添加标题。")
     allowed = {"p", "strong", "em", "br", "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td"}
     if preserve_images:
         allowed.add("img")
@@ -161,10 +278,21 @@ def validate_draft(content: str, rules: dict, *, selected_only: bool = False,
     if selected_only and any(node.tag not in {"p", "br"} for block in blocks for node in block.iter()):
         raise DraftFormatError("选中文字改写应为纯文本，不能添加 Markdown 格式。")
     if complete and heading and blocks and _title(_text(blocks[0]).rstrip("：:")) == _title(heading):
-        raise DraftFormatError("正文重复了当前标题，请重新生成。")
+        raise DraftHeadingError("正文重复了当前标题，请重新生成。")
     if complete:
         validate_constraints(content, rules)
     if complete and not selected_only:
+        original_tables = [block for block in _html_blocks(existing) if block.tag == "table"]
+        current_tables = [block for block in blocks if block.tag == "table"]
+        if original_tables:
+            if table_writing_notes(existing) != table_writing_notes(content):
+                raise DraftTableError("请保留原表的注释和填写说明，只填写数据单元格。")
+            if len(current_tables) != len(original_tables):
+                raise DraftTableError("请在已有表格内填写，不能新增、删除表格或将表格改成正文。")
+            for original, current in zip(original_tables, current_tables):
+                shape = lambda table: [len(row.xpath("./th|./td")) for row in table.xpath(".//tr")]
+                if shape(original) != shape(current):
+                    raise DraftTableError("请使用已有表格的行列填写，不能重新创建表格或改变行列结构。")
         # Use the installed Markdown parser's splitter: it understands escaped pipes.
         processor = markdown.Markdown(extensions=["tables"]).parser.blockprocessors["table"]
         for chunk in re.split(r"\n\s*\n", content):

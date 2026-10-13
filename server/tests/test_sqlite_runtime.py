@@ -57,6 +57,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             "115_document_conflict_mine_snapshots.sql",
             "116_project_members_v2.sql",
             "117_template_versions.sql",
+            "118_document_assignments.sql",
         ]
         assert migrate() == []
         admin_id = create_user(
@@ -350,22 +351,20 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
                 json={"expectedRevision": replaced.json()["data"]["revision"]},
                 headers={"X-CSRF-Token": csrf},
             ).status_code == 422
-            # Whole-document edits read exact sections, retain the outline and commit atomically.
+            # Whole-document edits use separate module agents, retain the outline and commit atomically.
             plan = {"edits": [{"headingIndex": 0, "content": "文档工作台的新正文。"}, {"headingIndex": 2, "content": "文档工作台的其他节。"}]}
-            whole_model = FakeAgentModel(responses=[
-                AIMessage(content="", tool_calls=[
-                    {"name": "read_project_overview", "args": {}, "id": "whole-overview"},
-                    {"name": "read_document_section", "args": {"index": 0}, "id": "whole-first"},
-                    {"name": "read_document_section", "args": {"index": 1}, "id": "whole-child"},
-                    {"name": "read_document_section", "args": {"index": 2}, "id": "whole-other"},
-                ]),
+            whole_models = [FakeAgentModel(responses=[
                 AIMessage(content="", tool_calls=[{"name": "prepare_document_edit",
-                    "args": {"objective": "统一术语，保留子节。", "sections": [0, 2]}, "id": "whole-prepare"}]),
-                AIMessage(content=json.dumps(plan, ensure_ascii=False)),
-            ])
+                    "args": {"objective": "统一术语，保留子节。", "sections": [index]}, "id": f"whole-prepare-{index}"}]),
+                AIMessage(content=json.dumps({"replacements": replacements}, ensure_ascii=False)),
+            ]) for index, replacements in enumerate([
+                [{"before": "新正文", "after": plan["edits"][0]["content"]}], [],
+                [{"before": "保留其他节", "after": plan["edits"][1]["content"]}],
+            ])]
+            module_models = iter(whole_models)
             from app.document_agent import draft_section_text as real_draft
             with monkeypatch.context() as whole_patch:
-                whole_patch.setattr("app.document_agent.ChatOpenAI", lambda **kwargs: whole_model)
+                whole_patch.setattr("app.document_agent.ChatOpenAI", lambda **kwargs: next(module_models))
                 whole_patch.setattr("app.documents.draft_section_text", real_draft)
                 whole_draft = client.post(
                     f"/api/v1/documents/{document_id}/sections/draft?stream=true",
@@ -375,20 +374,22 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
                 whole_events = [json.loads(line) for line in whole_draft.text.splitlines()]
                 assert whole_events[-1]["type"] == "done", whole_draft.text
                 assert whole_events[-1]["edits"] == plan["edits"]
-                assert any("术语统一使用文档工作台。" in str(message.content) for message in whole_model.observed_messages)
+                assert len(whole_models) == 3 and all(model.observed_messages for model in whole_models)
+                assert any("术语统一使用文档工作台。" in str(message.content)
+                           for model in whole_models for message in model.observed_messages)
                 assert "统一术语，保留子节。" not in client.get(f"/api/v1/documents/{document_id}/memory").json()["data"]["summary"]
-                # Complete reads alone do not authorize chapters outside the prepared plan.
+                # A module cannot return whole-document JSON to edit another module.
                 outside_model = FakeAgentModel(responses=[
-                    whole_model.responses[0],
                     AIMessage(content="", tool_calls=[{"name": "prepare_document_edit",
                         "args": {"objective": "只修改第一节", "sections": [0]}, "id": "prepare-bounds"}]),
+                    AIMessage(content=json.dumps({"edits": [plan["edits"][1]]}, ensure_ascii=False)),
                     AIMessage(content=json.dumps({"edits": [plan["edits"][1]]}, ensure_ascii=False)),
                 ])
                 whole_patch.setattr("app.document_agent.ChatOpenAI", lambda **kwargs: outside_model)
                 outside = client.post(f"/api/v1/documents/{document_id}/sections/draft",
                     json={"expectedRevision": replaced.json()["data"]["revision"], "scope": "document", "instruction": "只修改第一节"},
                     headers={"X-CSRF-Token": csrf})
-                assert outside.status_code == 502 and "超出了本次计划" in outside.json()["error"]["message"]
+                assert outside.status_code == 502 and "replacements" in outside.json()["error"]["message"]
                 assert client.get(f"/api/v1/documents/{document_id}").json()["data"]["revision"] == replaced.json()["data"]["revision"]
             whole_applied = client.post(
                 f"/api/v1/documents/{document_id}/edits",

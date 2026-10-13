@@ -59,6 +59,7 @@ build.ps1 生成的是私有迁移包：.env 已包含当前 AI 地址、模型�
 已有测试截图与文档可继续查看；被测项目的源码、Python/Node 单元测试环境需自行准备。
 需要 AI 编写时，电脑须能访问 .env 中的 AI 服务。
 AI_REASONING_EFFORT 配置思考强度；留空使用模型默认值。可选 none、minimal、low、medium、high、xhigh、max，支持范围以模型服务为准。
+AI_READ_TIMEOUT_SECONDS 默认 600，表示单次模型请求无响应的等待秒数；不限制整份文档的总编写时长。
 修改 .env 后须关闭程序并重新启动。
 精确 Word 版式预览需安装 Microsoft Word；Visio 原生生成需安装 Microsoft Visio。
 
@@ -365,7 +366,7 @@ def snapshot(database: Path, files: Path, env_file: Path, target: Path, *, execu
                 from dotenv import dotenv_values
 
                 keys = ("DATABASE_URL", "FILE_DATA_DIR", "FILE_MAX_BYTES", "AI_BASE_URL", "AI_MODEL",
-                        "AI_CONTEXT_TOKENS", "AI_REASONING_EFFORT", "AI_API_KEY")
+                        "AI_CONTEXT_TOKENS", "AI_REASONING_EFFORT", "AI_READ_TIMEOUT_SECONDS", "AI_API_KEY")
                 values = dotenv_values(env_file)
                 updates = {**{key: values[key] for key in keys if key in values}, **updates}
                 private_config = "# 私有迁移配置：包含 AI 密钥，请勿外传或提交到 Git。\n" + "".join(
@@ -422,6 +423,7 @@ def main() -> int:
                               "AI_API_KEY": settings.ai_api_key,
                               "AI_CONTEXT_TOKENS": str(settings.ai_context_tokens),
                               "AI_REASONING_EFFORT": settings.ai_reasoning_effort,
+                              "AI_READ_TIMEOUT_SECONDS": str(settings.ai_read_timeout_seconds),
                               "FILE_MAX_BYTES": str(settings.file_max_bytes),
                           })
         result.pop("files_sha256", None)

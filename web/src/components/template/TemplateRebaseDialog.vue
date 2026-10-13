@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from "vue";
 import { useDialogFocus } from "../../dialogFocus";
 import { ApiError } from "../../api/client";
 import { rebaseTemplateDraft, type DraftPayload, type RebaseConflict, type RebaseResult } from "../../api/templates";
-import { EDITOR_KIND_LABELS, conflictFieldLabel, existsText, summaryText, valueLabel } from "../../templateEditing";
+import { EDITOR_KIND_LABELS, conflictFieldLabel, existsText, guidanceScopeText, summaryText, valueLabel } from "../../templateEditing";
 import { revisionConflictText } from "../../saveModel";
 import { diffWords } from "../../textDiff";
 
@@ -35,6 +35,7 @@ function display(item: RebaseConflict, value: any): string {
   if (item.field === "kind") return EDITOR_KIND_LABELS[value] ?? String(value);
   if (item.field === "headingLevel") return `标题 ${value}`;
   if (item.field === "headingId") return value ? "已绑定章节" : "不绑定";
+  if (item.field === "targetBlockIds") return guidanceScopeText(value, value === item.mine ? item.mineTargetTexts : value === item.theirs ? item.theirsTargetTexts : item.baseTargetTexts);
   const style = /^style:.+:([^:]+)$/.exec(item.field);
   if (style) return valueLabel(style[1], value);
   return String(value);

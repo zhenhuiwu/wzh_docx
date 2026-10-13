@@ -27,6 +27,8 @@ from app.ai_capability import router as capabilities_router
 from app.documents import router as documents_router
 from app.document_diagrams import router as document_diagrams_router
 from app.document_plans import router as document_plans_router
+from app.document_assignments import router as document_assignments_router
+from app.document_references import router as document_references_router
 from app.facts import router as facts_router
 from app.templates import router as templates_router
 from app.template_versions import router as template_versions_router
@@ -130,6 +132,8 @@ def create_app() -> FastAPI:
     api.include_router(documents_router)
     api.include_router(document_diagrams_router)
     api.include_router(document_plans_router)
+    api.include_router(document_assignments_router)
+    api.include_router(document_references_router)
     api.include_router(facts_router)
     api.include_router(workbench_router)
     api.include_router(knowledge_router)

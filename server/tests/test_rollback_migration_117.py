@@ -64,6 +64,8 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
             assert client.put(f"/api/v1/template-documents/{td['id']}/draft", json={"structure": draft, "expectedDraftRevision": 0}, headers=headers).status_code == 200
             published = client.post(f"/api/v1/template-documents/{td['id']}/versions", json={"draftRevision": 1, "note": "第二版"}, headers=headers)
             assert published.status_code == 201, published.text
+        from app.rollback_migration_118 import rollback as rollback_118
+        assert rollback_118(path, apply=True) == 0
         assert _recorded(path) == 1
         assert rollback(path, apply=False) == 0
         assert rollback(path, apply=True) == 3   # 有第 2 版：默认拒绝
@@ -92,7 +94,7 @@ def test_rollback_117_writes_back_latest_published_and_restores_116_schema(tmp_p
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
         # 重新迁移：117 再建回来，第 1 版 = 写回的结构
-        assert migrate() == ["117_template_versions.sql"]
+        assert migrate() == ["117_template_versions.sql", "118_document_assignments.sql"]
         from app.migrate_template_versions import backfill
         report = backfill(backup=False)
         assert report["published"] == 1

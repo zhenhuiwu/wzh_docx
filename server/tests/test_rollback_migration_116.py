@@ -52,6 +52,8 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
         assert _recorded(path) == 1
         # 回滚顺序 117 → 116（A06 的 117 在 116 之后）
         from app.rollback_migration_117 import rollback as rollback_117
+        from app.rollback_migration_118 import rollback as rollback_118
+        assert rollback_118(path, apply=True) == 0
         assert rollback_117(path, apply=True) == 0
         assert rollback(path, apply=False) == 0  # 只检查
         assert _recorded(path) == 1 and _schema(path) != expected
@@ -69,7 +71,7 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
             assert connection.execute("select role from project_members where project_id = ?", (str(project),)).fetchone()[0] == "owner"
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql"]
         assert _recorded(path) == 1
         with sqlite3.connect(path) as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
@@ -94,7 +96,7 @@ def test_migration_116_on_a_115_database_keeps_old_rows(tmp_path, monkeypatch):
             connection.execute("insert into projects(id, name, owner_id) values (%s, %s, %s)", (project, "旧项目", owner))
             connection.execute("insert into project_members(project_id, user_id, role) values (%s, %s, 'owner')", (project, owner))
             connection.commit()
-        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql"]
         assert migrate() == []
         with sqlite3.connect(tmp_path / "app.db") as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
@@ -116,6 +118,8 @@ def test_rollback_116_refuses_while_a_newer_migration_is_recorded(tmp_path, monk
     try:
         migrate()
         from app.rollback_migration_117 import rollback as _rollback_117
+        from app.rollback_migration_118 import rollback as rollback_118
+        assert rollback_118(path, apply=True) == 0
         assert _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         with sqlite3.connect(path) as connection:
             connection.execute("insert into schema_migrations(version) values ('117_future_probe')")

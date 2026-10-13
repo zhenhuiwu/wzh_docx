@@ -102,7 +102,7 @@ const html = computed(() => {
 const actor = (item: DocumentVersion) => item.createdBy
   ? `${item.createdBy.name}${item.changedObjects ? ` · ${item.changedObjects} 处` : ""}`
   : (item.kind === "baseline" || item.kind === "created" ? "" : "修改人未记录");
-const label = (item: DocumentVersion) => ({ created: "新建文档", baseline: "开始记录", edit: "正文修改", restore: "恢复版本", heading: "添加标题", diagram: "插入图表", test_results: "补充测试结果", ai_section: "章节编写", selection: "选区编写", ai_selection: "选区编写", ai_document: "全文编写", ai_undo: "撤回 AI 修改", skill_settings: "编写规范", conflict_resolution: "处理冲突", backfill: "开始记录", realign: "对齐记录" }[item.kind] || "保存文档");
+const label = (item: DocumentVersion) => ({ created: "新建文档", baseline: "开始记录", edit: "正文修改", restore: "恢复版本", heading: "添加标题", diagram: "插入图表", test_results: "补充测试结果", ai_section: "章节编写", selection: "选区编写", ai_selection: "选区编写", ai_document: "全文编写", ai_undo: "撤回 AI 修改", skill_settings: "编写规范", writing_guidance: "修改编写建议", references: "修改参考资料", conflict_resolution: "处理冲突", backfill: "开始记录", realign: "对齐记录" }[item.kind] || "保存文档");
 const time = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 const message = (e: unknown) => e instanceof Error ? e.message : "读取失败，请重试。";
 async function select(item: DocumentVersion) {

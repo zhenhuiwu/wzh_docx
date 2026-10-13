@@ -98,6 +98,36 @@ def test_srs_paragraph_edit_keeps_cover_table(page):
     assert _tables_xml(edited)[0] == _tables_xml(original)[0]
 
 
+def test_merged_table_roundtrip_keeps_word_and_edits_plain_cells(page, tmp_path):
+    from docx import Document
+    doc = Document()
+    table = doc.add_table(rows=4, cols=3, style="Table Grid")
+    table.cell(0, 0).merge(table.cell(1, 1)).text = "合并表头"
+    table.cell(0, 2).text = "内容"
+    table.cell(1, 2).text = "可修改"
+    table.cell(3, 0).merge(table.cell(3, 2)).text = "跨列说明\n换行说明"
+    source = tmp_path / "merged.docx"
+    doc.save(source)
+    parsed, html = _editor_html(source)
+    actual = page.evaluate("([h]) => window.roundtrip(h, [])", [html])
+    assert actual == parsed.markdown
+    assert _tables_xml(_check(actual, source, [])) == _tables_xml(source)
+    header = page.locator('th[colspan="2"][rowspan="2"]')
+    below = page.get_by_text("可修改", exact=True).locator("..")
+    assert header.bounding_box()["height"] >= below.bounding_box()["height"]
+    edited = page.evaluate("""() => {
+      const root = document.body.firstElementChild;
+      const cell = [...root.querySelectorAll('td')].find(x => x.textContent === '可修改');
+      cell.textContent = '修改后';
+      return window.editorRoundtrip(root, []);
+    }""")
+    exported = Document(_check(edited, source, []))
+    assert exported.tables[0].cell(1, 2).text == "修改后"
+    assert exported.tables[0].cell(0, 0)._tc.grid_span == 2
+    assert exported.tables[0].cell(0, 0)._tc.vMerge == "restart"
+    assert exported.tables[0].cell(3, 0)._tc.grid_span == 3
+
+
 @pytest.mark.parametrize("html,expected", [
     ("<table><thead><tr><th>密&nbsp; 级：</th><th>x</th></tr></thead><tbody><tr><td>a|b</td><td>c<br>d</td></tr></tbody></table>",
      "| 密\u00a0 级： | x |\n|---|---|\n| a\\|b | c<br>d |"),

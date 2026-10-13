@@ -28,7 +28,7 @@ from lxml import etree, html
 
 from app.docx_export import _PROTECTED_EDIT, _edit_paragraph, _insert_block, _removal_reason
 from app.docx_parser import heading_level
-from app.template_import import _elements, parse_template
+from app.template_import import _elements, cleaned_guidance_paths, parse_template, validate_guidance_targets
 
 # ---------------------------------------------------------------- 常量
 
@@ -1073,6 +1073,12 @@ def build_version(out_path: str | Path, draft: dict, revision: int) -> dict:
                               "headingLevel": None, "headingId": None, "tableId": block["id"]})
                 result.append(entry)
     _rebind_headings(result)
+    draft_by_id = {block["id"]: block for block in draft["blocks"]}
+    for block in result:
+        original = draft_by_id.get(block["id"], {})
+        if "targetBlockIds" in original:
+            block["targetBlockIds"] = deepcopy(original["targetBlockIds"])
+    validate_guidance_targets(result)
     return {"schemaVersion": 1, "revision": revision, "reviewed": True, "sourceHash": sha256_bytes(content), "blocks": result}
 
 
@@ -1098,9 +1104,10 @@ def _rebind_headings(blocks: list[dict]) -> None:
 
 # ---------------------------------------------------------------- 新建文档：清掉指导
 
-def clean_version(path: str | Path, structure: dict) -> bytes:
+def clean_version(path: str | Path, structure: dict, *, target_paths: dict[str, str] | None = None) -> bytes:
     """与 clean_template 同一做法（只清编写指导/示例/填写位置，其余 ZIP 原样），按版本结构里的 path 定位。"""
     path = Path(path)
+    validate_guidance_targets(structure["blocks"])
     document = Document(path)
     locations = {location: element for location, element, _ in _elements(document)}
     samples, current_heading = set(), None
@@ -1141,6 +1148,10 @@ def clean_version(path: str | Path, structure: dict) -> bytes:
                 outline = etree.Element(qn("w:outlineLvl"))
                 insert_ordered(properties, outline)
                 outline.set(qn("w:val"), str(level - 1 if level is not None else 9))
+    if target_paths is not None or any(block.get("targetBlockIds") for block in structure["blocks"]):
+        paths = cleaned_guidance_paths(document, structure, locations)
+        if target_paths is not None:
+            target_paths.update(paths)
     output = BytesIO()
     with ZipFile(path) as source, ZipFile(output, "w") as target:
         for entry in source.infolist():
@@ -1166,6 +1177,7 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
     new_top = [block for block in new_structure["blocks"] if not block["tableId"]]
     old_keys = [(_class(block), _norm(block["sourceText"])) for block in old_top]
     new_keys = [(_class(block), _norm(block["text"])) for block in new_top]
+    bound_targets = {target for block in parent["blocks"] for target in block.get("targetBlockIds", [])}
     pairs: dict[int, int] = {}
     for op, a0, a1, b0, b1 in SequenceMatcher(None, old_keys, new_keys, autojunk=False).get_opcodes():
         if op == "equal":
@@ -1182,6 +1194,14 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
                         pointer = i + 1
                         break
     id_map: dict[str, str] = {}
+    # A fuzzy/ambiguous upload match must not silently move a local writing constraint.
+    for new_index_, old_index_ in list(pairs.items()):
+        if old_top[old_index_]["id"] not in bound_targets:
+            continue
+        key = old_keys[old_index_]
+        if (key != new_keys[new_index_] or old_keys.count(key) != new_keys.count(key)
+                or (parent.get("sourceHash") != new_structure.get("sourceHash") and old_keys.count(key) > 1)):
+            del pairs[new_index_]
     result = deepcopy(new_structure)
     old_children: dict[str, dict] = {}
     for block in parent["blocks"]:
@@ -1205,6 +1225,8 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
                     block["headingLevel"] = block["headingLevel"] or old["headingLevel"]
                 if old["kind"] == "guidance" and _norm(old["sourceText"]) == _norm(block["text"]):
                     block["text"] = old["text"]
+                if old["kind"] == "guidance" and "targetBlockIds" in old:
+                    block["targetBlockIds"] = deepcopy(old["targetBlockIds"])
         else:
             block["id"] = new_block_id()
         id_map[original_id] = block["id"]
@@ -1218,6 +1240,8 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
                 child["kind"] = previous["kind"]
                 if previous["kind"] == "guidance":
                     child["text"] = previous["text"]
+                    if "targetBlockIds" in previous:
+                        child["targetBlockIds"] = deepcopy(previous["targetBlockIds"])
             else:
                 child["id"] = new_block_id()
             out.append(child)
@@ -1237,6 +1261,14 @@ def align_upload(new_structure: dict, parent: dict) -> tuple[dict, dict]:
                          "headingLevel": None, "headingId": None, "tableId": None, "protected": False, "isTable": False,
                          "virtual": True, "unplaced": True})
     _rebind_headings(out)
+    previous_by_id = {block["id"]: block for block in parent["blocks"]}
+    current_ids = {block["id"] for block in out}
+    for block in unplaced + out:
+        previous = previous_by_id.get(block["id"], {})
+        if block["kind"] == "guidance" and "targetBlockIds" in previous:
+            block["targetBlockIds"] = deepcopy(previous["targetBlockIds"])
+            if any(target not in current_ids for target in block["targetBlockIds"]):
+                block["unplaced"] = True
     result["blocks"] = unplaced + out
     alignment = {"matched": len(pairs), "total": len(new_top),
                  "unmatched": [{"blockId": block["id"], "text": block["text"][:200]} for block in unplaced]}

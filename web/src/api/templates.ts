@@ -35,6 +35,7 @@ export interface TemplateImportBlock {
   sourceText: string;
   headingLevel: number | null;
   headingId: string | null;
+  targetBlockIds?: string[];
   tableId: string | null;
   protected: boolean;
   isTable: boolean;
@@ -208,13 +209,13 @@ export interface DraftPayload {
 }
 export interface DraftState { draft: DraftPayload | null; base: DraftPayload | null; reviewRequired: boolean; current: VersionRef | null; templateName: string; documentName: string; templateId: string }
 export interface DiffItem { blockId: string; change: "added" | "removed" | "modified" | "moved"; category: "headings" | "body" | "tables" | "guidance"; heading: string;
-  before: { kind: string; text: string; headingLevel: number | null; cells?: string[][] } | null;
-  after: { kind: string; text: string; headingLevel: number | null; cells?: string[][] } | null; fields: string[] }
+  before: { kind: string; text: string; headingLevel: number | null; cells?: string[][]; targetBlockIds?: string[]; targetTexts?: string[] } | null;
+  after: { kind: string; text: string; headingLevel: number | null; cells?: string[][]; targetBlockIds?: string[]; targetTexts?: string[] } | null; fields: string[] }
 export interface StyleDiff { style: string; prop: string; label: string; before: any; after: any }
 export interface DiffSummary { headings: number; body: number; tables: number; guidance: number; format: number }
 export interface VersionDiff { summary: DiffSummary; blocks: DiffItem[]; styles: StyleDiff[] }
 export interface ImpactItem { style: string; prop: string; before: any; after: any; affectedParagraphs: number; directFormatParagraphs: number; willClear: number; blockIds: string[]; directBlockIds: string[]; truncated: boolean }
-export interface RebaseConflict { blockId: string | null; field: string; base: any; theirs: any; mine: any; heading: string; text: string; category: string; resolved: string | null }
+export interface RebaseConflict { blockId: string | null; field: string; base: any; theirs: any; mine: any; heading: string; text: string; category: string; resolved: string | null; baseTargetTexts?: string[]; theirsTargetTexts?: string[]; mineTargetTexts?: string[] }
 export interface RebaseResult { merged: { blocks: EditorBlock[] } | null; conflicts: RebaseConflict[]; theirsChanges: VersionDiff; currentVersion: TemplateVersionItem; notes: { blockId: string | null; message: string }[] }
 
 export interface TemplateDocumentVersionSummary {

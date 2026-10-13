@@ -5,7 +5,7 @@ import { useDialogFocus } from "../../dialogFocus";
 import StatePanel from "../StatePanel.vue";
 import { diffTemplateVersions, type DiffItem, type VersionDiff } from "../../api/templates";
 import { diffWords } from "../../textDiff";
-import { EDITOR_KIND_LABELS, STYLE_PROP_LABELS, cellChanges, summaryText, valueLabel } from "../../templateEditing";
+import { EDITOR_KIND_LABELS, STYLE_PROP_LABELS, cellChanges, guidanceScopeText, summaryText, valueLabel } from "../../templateEditing";
 
 const props = defineProps<{ documentId: string; from: string; to: string; title: string; fromLabel: string; toLabel: string }>();
 const emit = defineEmits<{ close: []; locate: [blockId: string] }>();
@@ -77,6 +77,7 @@ onMounted(() => { void load(); });
               <span v-if="item.before.kind !== item.after.kind || item.before.headingLevel !== item.after.headingLevel" class="hint">（{{ describe(item.before) }} → {{ describe(item.after) }}）</span>
             </p>
             <p v-else class="text-diff" :class="{ removed: item.change === 'removed' }">{{ textOf(item.after || item.before) }}</p>
+            <p v-if="item.fields.includes('targetBlockIds')" class="text-diff">适用范围：{{ guidanceScopeText(item.before?.targetBlockIds, item.before?.targetTexts) }} → {{ guidanceScopeText(item.after?.targetBlockIds, item.after?.targetTexts) }}</p>
           </article>
           <table v-if="showStyles" class="style-table" data-testid="tpl-compare-styles">
             <thead><tr><th>样式</th><th>属性</th><th>{{ fromLabel }}</th><th>{{ toLabel }}</th></tr></thead>

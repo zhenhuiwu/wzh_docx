@@ -4,6 +4,12 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type Rout
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
+import DocumentAssignments from "../components/DocumentAssignments.vue";
+import DocumentBlockGuidance from "../components/DocumentBlockGuidance.vue";
+import DocumentReferences from "../components/DocumentReferences.vue";
+import type { DocumentReferencesState } from "../api/documentReferences";
+import { useGuidanceBrowser } from "../useGuidanceBrowser";
+import { getDocumentAssignments, type DocumentAssignmentsState } from "../api/documentAssignments";
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
@@ -19,13 +25,13 @@ import { revertBlock } from "../blockRevert";
 import { frozenMark, looksLikePinyin, nextSeq, noteYields, substituteFrozen, type NoteKind } from "../frozenConflict";
 import { flash } from "../flash";
 import DOMPurify from "dompurify";
-import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
-import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
+import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
 const router = useRouter();
@@ -37,10 +43,11 @@ const paperStyle = ref<Record<string, string>>({});
 const mode = ref<"original" | "edit" | "layout">("edit");
 const originalPhase = ref<"loading" | "ready" | "error">("loading");
 const originalError = ref("");
-const pageCanvas = ref<HTMLCanvasElement | null>(null);
-const pageNumber = ref(1);
-const pageCount = ref(0);
-const renderingPage = ref(false);
+const pdfScroll = ref<HTMLElement | null>(null);
+const pdfPages = ref<{ number: number; width: number; height: number; ready: boolean }[]>([]);
+let pageObserver: IntersectionObserver | undefined;
+const visiblePages = new Set<HTMLCanvasElement>();
+const pageRenders = new Map<HTMLCanvasElement, { cancelled: boolean; task?: RenderTask }>();
 let pdfDocument: PDFDocumentProxy | null = null;
 let pdfTask: PDFDocumentLoadingTask | null = null;
 let originalController: AbortController | undefined;
@@ -55,10 +62,28 @@ let loadVersion = 0;
 const diagrams = ref<InstanceType<typeof DocumentDiagrams> | null>(null);
 const diagramBusy = ref(false);
 // 界面验收 M7：写作助手、版本记录、冲突面板互斥，统一由 rightPanel 管理（02 §3.4 “与版本记录、写作助手互斥”）。
-type RightPanel = "ai" | "history" | "conflict" | null;
+type RightPanel = "ai" | "history" | "conflict" | "assignments" | "references" | null;
 const rightPanel = ref<RightPanel>(null);
 const historyBusy = ref(false);
+const assignmentsPanel = ref<InstanceType<typeof DocumentAssignments> | null>(null);
+const blockGuidancePanel = ref<InstanceType<typeof DocumentBlockGuidance> | null>(null);
+const assignmentState = ref<DocumentAssignmentsState | null>(null);
+const assignmentsBusy = ref(false);
+const blockGuidanceBusy = ref(false);
+const blockGuidanceDirty = ref(false);
+const referencesPanel = ref<InstanceType<typeof DocumentReferences> | null>(null);
+const referencesBusy = ref(false);
+const referencesDirty = ref(false);
+const assignmentRestricted = computed(() => Boolean(assignmentState.value?.enabled && !assignmentState.value.canManage));
 function openPanel(name: RightPanel) {
+  if (rightPanel.value === "references" && name !== "references") {
+    if (referencesBusy.value) return;
+    if (referencesDirty.value) { referencesPanel.value?.requestClose(); return; }
+  }
+  if (rightPanel.value === "assignments" && name !== "assignments") {
+    if (blockGuidanceDirty.value) { assignmentsPanel.value?.showGuidance(); blockGuidancePanel.value?.requestClose(); return; }
+    if (assignmentsPanel.value?.isDirty) { assignmentsPanel.value.requestClose(); return; }
+  }
   // 版本记录正在恢复时不切走，避免恢复结果丢失
   if (rightPanel.value === "history" && historyBusy.value && name !== "history") return;
   rightPanel.value = name;
@@ -72,6 +97,57 @@ function panelFlag(name: Exclude<RightPanel, null>) {
 const historyOpen = panelFlag("history");
 const aiOpen = panelFlag("ai");
 const conflictOpen = panelFlag("conflict");
+const assignmentsOpen = panelFlag("assignments");
+const referencesOpen = panelFlag("references");
+const referenceCount = computed(() => document.value?.formatTemplate?.references?.length || 0);
+
+function acceptReferences(state: DocumentReferencesState) {
+  if (!document.value) return;
+  document.value.revision = state.revision;
+  document.value.formatTemplate.references = state.items.map(item => item.kind === "document"
+    ? { id: item.id, kind: item.kind, documentId: item.documentId, sourceRevision: item.sourceRevision, note: item.note }
+    : { id: item.id, kind: item.kind, name: item.name, content: item.content, note: item.note });
+  referencesDirty.value = false;
+  aiUndo.value = null;
+  clearAiDraft();
+}
+
+function applyAssignmentLocks() {
+  const root = editor.value;
+  if (!root) return;
+  const blocked = new Set(assignmentState.value?.items.filter(item => !item.canEdit).map(item => item.objectId) || []);
+  for (const node of root.querySelectorAll<HTMLElement>("[data-object-id]")) {
+    if (assignmentRestricted.value && blocked.has(node.dataset.objectId || "")) {
+      node.setAttribute("contenteditable", "false");
+      node.dataset.assignmentLocked = "true";
+    } else if (node.dataset.assignmentLocked) {
+      delete node.dataset.assignmentLocked;
+      if (!node.hasAttribute("data-word-protected") && !node.hasAttribute("data-frozen")) node.removeAttribute("contenteditable");
+    }
+  }
+}
+function acceptAssignments(state: DocumentAssignmentsState) {
+  assignmentState.value = state;
+  applyAssignmentLocks();
+}
+function locateAssignment(objectId: string) {
+  editor.value?.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(objectId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function closeAssignments() {
+  if (blockGuidanceDirty.value) { assignmentsPanel.value?.showGuidance(); blockGuidancePanel.value?.requestClose(); return; }
+  rightPanel.value = null;
+}
+async function acceptBlockGuidance(result: DocumentContentResult) {
+  if (!document.value) return;
+  if (result.formatTemplate) document.value.formatTemplate = result.formatTemplate;
+  document.value.revision = result.revision;
+  aiUndo.value = null;
+  blockGuidanceDirty.value = false;
+  clearAiDraft();
+  await assignmentsPanel.value?.reload();
+  try { assignmentState.value = await getDocumentAssignments(document.value.id); }
+  catch (error) { noteAction(messageOf(error)); }
+}
 const skillOpen = ref(false);
 const skillBusy = ref(false);
 const refreshingEditor = ref(false);
@@ -329,6 +405,22 @@ let targetVersion = 0;
 const editorVersion = ref(0);
 const draftEditorVersion = ref(-1);
 const aiInstruction = ref("");
+const guidanceGroups = ref<WritingGuidanceGroup[]>([]);
+const {
+  search: guidanceSearch, available: guidanceAvailable, matches: guidanceMatches,
+  group: guidanceGroup, selectedKey: guidanceGroupKey, item: guidanceItem,
+  itemIndex: guidanceItemIndex, keyOf: guidanceKeyOf, moveItem: moveGuidanceItem,
+  revealItem: revealGuidanceItem, reset: resetGuidanceBrowser,
+} = useGuidanceBrowser(guidanceGroups);
+watch([aiScope, selectedHeading], resetGuidanceBrowser);
+const guidanceNotices = ref<string[]>([]);
+const guidancePhase = ref<"idle" | "loading" | "ready" | "error">("idle");
+const guidanceError = ref("");
+const guidanceSaving = ref(false);
+const guidanceEdits = ref<Record<string, { text: string | null; base: string; heading: string }>>({});
+const guidanceConflicts = ref<Record<string, string>>({});
+const guidanceChanged = computed(() => Object.keys(guidanceEdits.value).length > 0);
+let guidanceController: AbortController | undefined;
 const aiDraft = ref("");
 const aiEdits = ref<DocumentEdit[]>([]);
 const aiComplete = ref(false);
@@ -356,8 +448,8 @@ let autoSaveTimer: number | undefined;
 let layoutNeedsRefresh = false;
 
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
-const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
-const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
+const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value && !(assignmentRestricted.value && !previewModel.value));
+const historyRestoreBlocked = computed(() => assignmentRestricted.value ? "分工文档请由负责人恢复完整历史版本。" : readonly.value ? "你没有修改正文的权限，不能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
 const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
 const hasUnsaved = computed(() => isDirty.value || frozenUnsaved.value > 0 || Boolean(sinkUnsaved.value) || sinkBacklog.value.length > 0 || leftovers.value.length > 0 || Object.keys(limitedMine.value).length > 0);
@@ -390,10 +482,10 @@ const totalChars = computed(() => countChars(markdownContent.value));
 const sectionChars = computed(() => selectedHeading.value === null ? null : outlineInfo.value[selectedHeading.value]?.chars ?? null);
 const currentSection = computed(() => selectedHeading.value === null ? "" : outline.value[selectedHeading.value]?.text || "");
 // 重塑：右侧面板（原稿/版式预览时只保留版本记录）
-const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value)));
+const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value || assignmentsOpen.value || referencesOpen.value)));
 const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
 const aiTargetHint = computed(() => {
-  if (aiScope.value === "document") return "按全文给出逐处修改，确认后应用";
+  if (aiScope.value === "document") return "按章节修改现有内容，确认后应用";
   if (aiScope.value === "selection") return `已选 ${countChars(selectedText.value)} 字，生成后替换选中内容`;
   const info = outlineInfo.value[selectedHeading.value ?? -1];
   return info?.empty ? "当前为空章节，将按模板要求生成正文" : `本节约 ${info?.chars ?? 0} 字，生成后可替换或追加`;
@@ -447,20 +539,36 @@ watch(exportMenu, (open) => {
   window.document.removeEventListener("pointerdown", onExportMenuOutside, true);
   if (open) window.document.addEventListener("pointerdown", onExportMenuOutside, true);
 });
-// S17：编辑区比纸张窄时（1366 打开右侧面板）按比例缩小纸张，不出现横向滚动
+// 编辑稿跟随原稿既有的 PDF 显示比例，CSS 的 pt 则按 96 px/in 换算。
+const wordDisplayZoom = 1.5 / (96 / 72);
 const desk = ref<HTMLElement | null>(null);
-const paperZoom = ref(1);
+const paperZoom = ref(wordDisplayZoom);
 let deskObserver: ResizeObserver | undefined;
 function fitPaper() {
   const host = desk.value;
   if (!host || !host.clientWidth) return;
   // 纸张自然宽度：Word 页面宽 + 左右页边距（pt），没有页面信息时用 --paper-w（794px）
-  const pt = (value?: string) => value ? parseFloat(value) * 4 / 3 : 0;
+  const pt = (value?: string) => value ? parseFloat(value) * 96 / 72 : 0;
   const style = paperStyle.value;
   const natural = style.width ? pt(style.width) + pt(style.paddingLeft) + pt(style.paddingRight) : 794;
   const room = host.clientWidth - 32;
-  const zoom = natural > 0 && room < natural ? Math.max(0.6, Math.floor((room / natural) * 100) / 100) : 1;
-  if (zoom !== paperZoom.value) { paperZoom.value = zoom; scheduleMarks(); }
+  const zoom = natural > 0 && room < natural * wordDisplayZoom ? Math.max(0.6, Math.floor((room / natural) * 100) / 100) : wordDisplayZoom;
+  if (zoom !== paperZoom.value) { paperZoom.value = zoom; scheduleMarks(); void nextTick(layoutWordTabs); }
+}
+function layoutWordTabs() {
+  if (!editor.value || mode.value !== "edit") return;
+  const zoom = paperZoom.value;
+  for (const paragraph of editor.value.querySelectorAll<HTMLElement>("[data-word-tab-stop]")) {
+    const step = parseFloat(paragraph.dataset.wordTabStop || "") * 96 / 72;
+    if (!(step > 0)) continue;
+    const origin = paragraph.getBoundingClientRect().left - parseFloat(getComputedStyle(paragraph).marginLeft) * zoom;
+    for (const tab of paragraph.querySelectorAll<HTMLElement>("[data-word-tab]")) {
+      if (tab.textContent !== "\t") { tab.style.width = "auto"; continue; }
+      tab.style.width = "0px";
+      const offset = (tab.getBoundingClientRect().left - origin) / zoom;
+      tab.style.width = `${(Math.floor((offset + 0.05) / step) + 1) * step - offset}px`;
+    }
+  }
 }
 watch(desk, (host) => {
   deskObserver?.disconnect();
@@ -486,15 +594,15 @@ const templateVersion = computed(() => {
 });
 const canGenerate = computed(() => aiScope.value === "document" ? Boolean(markdownContent.value.trim()) : aiScope.value === "selection" ? Boolean(selectedText.value) : selectedHeading.value !== null);
 const aiProgressLabel = computed(() => aiStopped.value ? "已停止" : aiBusy.value ? aiProgress.value.at(-1)?.message || "正在连接编写服务" : aiComplete.value ? "草稿已完成" : aiError.value ? "编写失败" : "生成未完成");
-const canApplyDraft = computed(() => aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
+const canApplyDraft = computed(() => !readonly.value && aiComplete.value && !aiBusy.value && !aiInserting.value && !isDirty.value && editorVersion.value === draftEditorVersion.value && aiRevision.value === document.value?.revision && Boolean(aiDraft.value.trim()) && (aiScope.value !== "document" || aiEdits.value.length > 0));
 // 8.2 第 7 条：aiLocked 仍是“编辑区锁”（版本记录打开、AI 预览、本机草稿未处理、重绘中都不能编辑正文），只锁编辑区与格式工具栏。
 // 终验回归 H1：打开文档后、查完本机草稿之前编辑区不可输入（否则新输入会覆盖本标签的旧草稿）
 const checkingDrafts = ref(false);
-const aiLocked = computed(() => checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value) || Boolean(restorePending.value));
+const aiLocked = computed(() => referencesOpen.value || referencesBusy.value || assignmentsOpen.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value) || Boolean(restorePending.value));
 // 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
-const opBusy = computed(() => skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
+const opBusy = computed(() => referencesBusy.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
 const canUndoAi = computed(() => Boolean(aiUndo.value) && aiUndo.value?.id === document.value?.id && aiUndo.value?.revision === document.value?.revision && !isDirty.value && !aiLocked.value && !saving.value && !addingHeading.value);
-const canStartAi = computed(() => !skillOpen.value && !skillBusy.value && !historyOpen.value && !historyBusy.value && !aiBusy.value && !aiInserting.value && !saving.value && !refreshingEditor.value && !undoingAi.value && !addingHeading.value && !diagramBusy.value && !localDraft.value);
+const canStartAi = computed(() => !referencesOpen.value && !referencesBusy.value && !referencesDirty.value && !readonly.value && !guidanceSaving.value && !skillOpen.value && !skillBusy.value && !historyOpen.value && !historyBusy.value && !aiBusy.value && !aiInserting.value && !saving.value && !refreshingEditor.value && !undoingAi.value && !addingHeading.value && !diagramBusy.value && !localDraft.value);
 const turndown = createTurndown(storedImageRule(() => document.value?.formatTemplate.images || []));
 function messageOf(error: unknown) {
   return error instanceof ApiError || error instanceof Error ? error.message : "暂时不能连接服务。";
@@ -537,10 +645,7 @@ async function load() {
   localDrafts.value = [];
   checkingDrafts.value = true;
   resetSaveState();
-  originalController?.abort();
-  void pdfTask?.destroy();
-  pdfTask = null;
-  pdfDocument = null;
+  stopOriginal();
   mode.value = "edit";
   selectedHeading.value = null;
   aiOpen.value = false;
@@ -550,6 +655,13 @@ async function load() {
   writingMemory.value = "";
   aiScope.value = "section";
   aiInstruction.value = "";
+  guidanceController?.abort();
+  guidanceGroups.value = [];
+  resetGuidanceBrowser();
+  guidanceEdits.value = {};
+  guidanceConflicts.value = {};
+  guidancePhase.value = "idle";
+  guidanceError.value = "";
   clearAiDraft();
   phase.value = "loading";
   errorText.value = "";
@@ -561,8 +673,10 @@ async function load() {
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const fetched = await getDocument(id);
     const preview = await previewDocument(id);
+    const assignments = await getDocumentAssignments(id);
     if (id !== documentId.value || version !== loadVersion) return;
     document.value = fetched;
+    assignmentState.value = assignments;
     // 界面复验 N3：document 是深层 ref，之后的 “document.value === record” 比较要用它返回的代理对象，
     // 否则加载时取到的 objectModel（整篇保存标签）、草稿落库核对等都会被当成“文档已切换”而丢掉。
     const record = document.value!;
@@ -1204,6 +1318,7 @@ function showEditorHtml(html: string, mapped?: boolean) {
     const kept = detachFrozen(editor.value);
     // 测试 L3：服务端把目录/域段落标成 contenteditable=false（data-word-protected）。
     editor.value.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["contenteditable"] });
+    applyAssignmentLocks();
     reattachFrozen(editor.value, kept);
     paperStyle.value = {};
     try {
@@ -1213,7 +1328,7 @@ function showEditorHtml(html: string, mapped?: boolean) {
       }
       if (paperStyle.value.width) paperStyle.value.boxSizing = "content-box";
     } catch { /* Local drafts without page metadata keep the default paper. */ }
-    void nextTick(() => applyConflictMarks());
+    void nextTick(() => { layoutWordTabs(); applyConflictMarks(); });
   }
 }
 /** yieldToTyping：不锁编辑区，先在后台取版式，期间用户一输入就放弃重绘（返回 false）；
@@ -1273,7 +1388,7 @@ function noteCaretMark(root: HTMLElement, range: Range) {
   let block: HTMLElement | null = item;
   while (block && block.parentElement !== root) block = block.parentElement;
   const ordinal = item && block ? [block, ...block.querySelectorAll<HTMLElement>(CARET_ITEMS)].filter(el => el.matches(CARET_ITEMS)).indexOf(item) : -1;
-  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const zoom = paperZoom.value;
   const base = paper.getBoundingClientRect();
   caretMark = { top: (rect.bottom - base.top) / zoom + 4, left: (rect.left - base.left) / zoom, ordinal: ordinal >= 0 ? ordinal : null, at: Date.now() };
 }
@@ -1493,7 +1608,7 @@ function caretSinkAnchorOf(root: HTMLElement, item: ConflictItem | undefined, ex
 function nearestToCaret(hits: HTMLElement[]): HTMLElement {
   const paper = editor.value?.parentElement;
   if (hits.length === 1 || !caretSinkFallback || !paper) return hits[0];
-  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const zoom = paperZoom.value;
   const top = paper.getBoundingClientRect().top;
   const want = caretSinkFallback.top;
   return hits.reduce((best, el) => {
@@ -1511,7 +1626,7 @@ function placeCaretSink() {
   const paper = root?.parentElement;
   if (!sink || !root || !paper) return;
   if (!caretSinkAnchor || !caretSinkAnchor.isConnected || !root.contains(caretSinkAnchor)) caretSinkAnchor = caretSinkAnchorOf(root, caretSinkItem, false, caretSinkOrdinal);
-  const zoom = paperZoom.value < 1 ? paperZoom.value : 1;
+  const zoom = paperZoom.value;
   const base = paper.getBoundingClientRect();
   let top: number, left: number;
   if (caretSinkAnchor) {
@@ -1832,6 +1947,7 @@ async function acceptContent(result: DocumentContentResult, options: AcceptOptio
   }
 }
 async function addHeading() {
+  if (assignmentRestricted.value) { noteAction("文档结构请由项目负责人调整。"); return; }
   if (!document.value || addingHeading.value || aiLocked.value) return;
   headingError.value = "";
   const title = headingTitle.value.trim();
@@ -1924,6 +2040,104 @@ function selectionParts(range: Range) {
   const text = selected.map((block, index) => (block.textContent || "").slice(index === 0 ? start : 0, index === selected.length - 1 ? end : undefined)).join("\n\n");
   return { blocks, firstIndex, lastIndex, start, end, text };
 }
+function guidanceText(item: WritingGuidanceItem): string {
+  const edit = guidanceEdits.value[item.id];
+  return edit ? edit.text ?? item.sourceText : item.text;
+}
+function editGuidance(item: WritingGuidanceItem, text: string | null) {
+  const effective = text ?? item.sourceText;
+  const edits = { ...guidanceEdits.value };
+  if (effective === item.text) delete edits[item.id];
+  else edits[item.id] = { text, base: edits[item.id]?.base ?? item.text, heading: item.heading };
+  guidanceEdits.value = edits;
+  guidanceError.value = "";
+}
+function checkGuidanceChanges(groups: WritingGuidanceGroup[]) {
+  const conflicts: Record<string, string> = {};
+  for (const group of groups) for (const item of group.items) {
+    const edit = guidanceEdits.value[item.id];
+    if (edit && edit.base !== item.text) conflicts[item.id] = item.text;
+  }
+  guidanceConflicts.value = { ...guidanceConflicts.value, ...conflicts };
+}
+function resolveGuidanceChange(item: WritingGuidanceItem, keepMine: boolean) {
+  const latest = guidanceConflicts.value[item.id];
+  if (latest === undefined) return;
+  const edits = { ...guidanceEdits.value };
+  if (keepMine && edits[item.id]) edits[item.id] = { ...edits[item.id], base: latest };
+  else delete edits[item.id];
+  guidanceEdits.value = edits;
+  const conflicts = { ...guidanceConflicts.value };
+  delete conflicts[item.id];
+  guidanceConflicts.value = conflicts;
+}
+async function loadGuidance(force = false): Promise<boolean> {
+  if (!document.value || !canGenerate.value || (!force && (!aiOpen.value || aiBusy.value || aiPreviewHost.value || aiInserting.value || refreshingEditor.value || guidanceSaving.value))) return false;
+  guidanceController?.abort();
+  const controller = new AbortController();
+  guidanceController = controller;
+  const id = document.value.id, revision = document.value.revision;
+  const scope = aiScope.value, heading = selectedHeading.value, target = targetVersion;
+  const current = () => !controller.signal.aborted && guidanceController === controller && document.value?.id === id && document.value?.revision === revision && targetVersion === target && aiScope.value === scope && selectedHeading.value === heading;
+  guidancePhase.value = "loading";
+  guidanceError.value = "";
+  try {
+    if (isDirty.value) throw new Error("请先保存正文，再读取当前范围的编写建议。");
+    const selection = scope === "selection" ? await resolveSelection() : undefined;
+    const result = await queryWritingGuidance(id, revision, scope, scope === "document" ? null : heading, selection, controller.signal);
+    if (!current()) return false;
+    checkGuidanceChanges(result.groups);
+    guidanceGroups.value = result.groups;
+    guidanceNotices.value = result.notices || [];
+    guidancePhase.value = "ready";
+    return true;
+  } catch (error) {
+    if (current()) { guidancePhase.value = "error"; guidanceError.value = messageOf(error); }
+    return false;
+  }
+}
+async function saveGuidance(forGeneration = false): Promise<boolean> {
+  if (!document.value || readonly.value || guidanceSaving.value || (!forGeneration && !canStartAi.value)) return false;
+  if (!guidanceChanged.value) return true;
+  guidanceSaving.value = true;
+  guidanceError.value = "";
+  let saved = false;
+  window.clearTimeout(autoSaveTimer);
+  try {
+    if (isDirty.value) await save();
+    if (isDirty.value) throw new Error("正文尚未保存，请保存后重试。");
+    const record = document.value;
+    const all = await queryWritingGuidance(record.id, record.revision, "document", null);
+    checkGuidanceChanges(all.groups);
+    if (Object.keys(guidanceConflicts.value).length) throw new Error("编写建议已被更新，请核对变更后再保存。");
+    const items = Object.entries(guidanceEdits.value).map(([id, value]) => ({ id, text: value.text }));
+    if (items.some(item => item.text !== null && (!item.text.trim() || item.text.length > 20000))) throw new Error("编写建议不能为空，且不能超过 20000 字。");
+    const result = await updateWritingGuidance(record.id, all.revision, items);
+    if (document.value !== record) return false;
+    if (result.formatTemplate) record.formatTemplate = result.formatTemplate;
+    record.revision = result.revision;
+    aiUndo.value = null;
+    guidanceEdits.value = {};
+    guidanceConflicts.value = {};
+    saved = true;
+    noteAction("编写建议已保存到本篇文档。");
+    return true;
+  } catch (error) {
+    guidanceError.value = messageOf(error);
+    return false;
+  } finally {
+    guidanceSaving.value = false;
+    if (!forGeneration && saved) void loadGuidance();
+  }
+}
+function discardGuidance() {
+  guidanceEdits.value = {};
+  guidanceConflicts.value = {};
+  guidanceError.value = "";
+}
+watch([aiOpen, aiScope, selectedHeading, selectedText, () => document.value?.revision, isDirty, aiBusy, aiPreviewHost, aiInserting, refreshingEditor], () => {
+  if (aiOpen.value && canGenerate.value && !aiBusy.value && !aiPreviewHost.value && !aiInserting.value && !refreshingEditor.value && !guidanceSaving.value) void loadGuidance();
+});
 function captureEditorTarget() {
   if (aiLocked.value) return;
   const selection = window.getSelection();
@@ -2020,6 +2234,9 @@ function stopAi() {
   aiController?.abort();
 }
 function showAiProgress(stage: string, message: string) {
+  const moduleStart = aiProgress.value.map(step => step.stage).lastIndexOf("module");
+  const repeated = aiProgress.value.findIndex((step, index) => index > moduleStart && step.stage === stage && step.message === message);
+  if (repeated >= 0) aiProgress.value.splice(repeated, 1);
   const last = aiProgress.value.at(-1);
   if (last?.stage === stage) last.message = message;
   else aiProgress.value.push({ stage, message });
@@ -2034,11 +2251,11 @@ function aiTouchesFrozen(): boolean {
   if (aiScope.value === "selection") return Boolean(selectedRange && blocks.some(block => selectedRange!.intersectsNode(block)));
   const heading = root.querySelectorAll("h1,h2,h3,h4,h5,h6")[selectedHeading.value ?? -1] as HTMLElement | undefined;
   if (!heading) return false;
-  const level = Number(heading.tagName.slice(1));
   let top: Element | null = heading;
   while (top && top.parentElement !== root) top = top.parentElement;
   for (let next = top?.nextElementSibling; next; next = next.nextElementSibling) {
-    if (/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level) break;
+    // 与服务端编写范围一致：当前标题正文在下一个标题前结束。
+    if (/^H[1-6]$/.test(next.tagName)) break;
     if (next.hasAttribute("data-frozen")) return true;
   }
   return false;
@@ -2048,7 +2265,7 @@ async function generateSection() {
   if (aiTouchesFrozen()) { aiError.value = "本节有未处理的冲突，请先处理冲突再让 AI 改写。"; return; }
   clearAiDraft();
   const id = document.value.id;
-  const index = aiScope.value === "document" ? null : selectedHeading.value;
+  let index = aiScope.value === "document" ? null : selectedHeading.value;
   const text = aiScope.value === "selection" ? selectedText.value : undefined;
   const target = targetVersion;
   const version = editorVersion.value;
@@ -2064,13 +2281,16 @@ async function generateSection() {
   try {
     if (isDirty.value) await save();
     if (isDirty.value) throw new Error("文档尚未保存，请保存后重试。");
+    if (!await saveGuidance(true)) throw new Error(guidanceError.value || "编写建议未保存，请重试。");
+    if (!await loadGuidance(true)) throw new Error(guidanceError.value || "无法确认当前范围的编写建议，请重试。");
+    if (aiScope.value === "selection") index = guidanceGroups.value[0]?.headingIndex ?? null;
     if (aiScope.value === "selection") draftSelection = await resolveSelection();
     draftEditorVersion.value = version;
     placeAiPreview();
     showAiProgress("connecting", "正在连接编写服务");
     await streamDocumentSection(id, document.value.revision, index, draftInstruction, text, (event) => {
       if (!current() || controller.signal.aborted) return;
-      if (editorVersion.value !== version || document.value?.revision !== event.revision || isDirty.value) throw new Error("文档已变化，请重新生成草稿。");
+      if (editorVersion.value !== version || document.value?.revision !== event.revision || isDirty.value) throw new ApiError(409, "REVISION_CONFLICT", "文档已变化，请重新生成草稿。");
       if (event.type === "progress") {
         showAiProgress(event.stage || "writing", event.message);
         return;
@@ -2110,6 +2330,7 @@ async function generateSection() {
 }
 async function insertSection(insertMode: "append" | "replace") {
   if (!document.value || aiInserting.value) return;
+  if (readonly.value) { aiError.value = readonlyReason.value || "你没有修改正文的权限。"; return; }
   aiError.value = "";
   if (!aiComplete.value) { aiError.value = "草稿尚未完整生成，不能直接写入。"; return; }
   if (!aiDraft.value.trim()) {
@@ -2187,9 +2408,21 @@ async function undoAiChange() {
     if (editor.value) editor.value.contentEditable = String(editable.value);
   }
 }
+function stopOriginal() {
+  originalController?.abort();
+  pageObserver?.disconnect();
+  pageObserver = undefined;
+  visiblePages.clear();
+  for (const render of pageRenders.values()) { render.cancelled = true; render.task?.cancel(); }
+  pageRenders.clear();
+  pdfPages.value = [];
+  void pdfTask?.destroy();
+  pdfTask = null;
+  pdfDocument = null;
+}
 async function loadOriginal(retried = false): Promise<void> {
   if (!document.value) return;
-  originalController?.abort();
+  stopOriginal();
   const controller = new AbortController();
   originalController = controller;
   originalPhase.value = "loading";
@@ -2210,57 +2443,85 @@ async function loadOriginal(retried = false): Promise<void> {
     }
     const blob = await response.blob();
     const { getDocument: openPdf, GlobalWorkerOptions } = await import("pdfjs-dist");
+    if (controller.signal.aborted) return;
     GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
     const task = openPdf({ data: new Uint8Array(await blob.arrayBuffer()) });
+    if (controller.signal.aborted) { void task.destroy(); return; }
+    pdfTask = task;
     const pdf = await task.promise;
     if (controller.signal.aborted) {
       void task.destroy();
       return;
     }
-    void pdfTask?.destroy();
-    pdfTask = task;
     pdfDocument = pdf;
-    pageNumber.value = 1;
-    pageCount.value = pdf.numPages;
+    const pages: typeof pdfPages.value = [];
+    for (let number = 1; number <= pdf.numPages; number += 1) {
+      const page = await pdf.getPage(number);
+      if (controller.signal.aborted) return;
+      const viewport = page.getViewport({ scale: 1.5 });
+      pages.push({ number, width: viewport.width, height: viewport.height, ready: false });
+    }
+    pdfPages.value = pages;
     originalPhase.value = "ready";
     await nextTick();
-    await renderPage();
+    if (controller.signal.aborted || !pdfScroll.value) return;
+    pageObserver = new IntersectionObserver(entries => {
+      if (controller.signal.aborted) return;
+      for (const entry of entries) {
+        const canvas = entry.target as HTMLCanvasElement;
+        if (entry.isIntersecting) {
+          visiblePages.add(canvas);
+          void renderPage(canvas, controller);
+        } else {
+          visiblePages.delete(canvas);
+          const render = pageRenders.get(canvas);
+          if (render) { render.cancelled = true; render.task?.cancel(); pageRenders.delete(canvas); }
+          pdfPages.value[Number(canvas.dataset.page) - 1].ready = false;
+          // 离开附近页面时释放画布，长文档不累积整份 PDF 的像素内存。
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      }
+    }, { root: pdfScroll.value, rootMargin: `${pdfScroll.value.clientHeight}px 0px` });
+    pdfScroll.value.querySelectorAll<HTMLCanvasElement>("canvas").forEach(canvas => pageObserver!.observe(canvas));
   } catch (error) {
     if (controller.signal.aborted) return;
+    stopOriginal();
     originalError.value = messageOf(error);
     originalPhase.value = "error";
   }
 }
-async function renderPage() {
-  if (!pdfDocument || !pageCanvas.value || mode.value === "edit") return;
-  renderingPage.value = true;
+async function renderPage(canvas: HTMLCanvasElement, controller: AbortController) {
+  if (!pdfDocument || controller.signal.aborted || !visiblePages.has(canvas) || pageRenders.has(canvas)) return;
+  const pdf = pdfDocument;
+  const frame = pdfPages.value[Number(canvas.dataset.page) - 1];
+  if (frame.ready) return;
+  const render: { cancelled: boolean; task?: RenderTask } = { cancelled: false };
+  pageRenders.set(canvas, render);
   try {
-    const page = await pdfDocument.getPage(pageNumber.value);
+    const page = await pdf.getPage(frame.number);
+    if (controller.signal.aborted || render.cancelled) return;
     const viewport = page.getViewport({ scale: 1.5 });
-    const canvas = pageCanvas.value;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("无法绘制 Word 页面。");
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.floor(viewport.width * ratio);
     canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
-    await page.render({ canvas, canvasContext: context, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] }).promise;
+    render.task = page.render({ canvas, canvasContext: context, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
+    await render.task.promise;
+    if (!controller.signal.aborted && !render.cancelled) frame.ready = true;
   } catch (error) {
+    if (controller.signal.aborted || render.cancelled) return;
+    stopOriginal();
     originalError.value = messageOf(error);
     originalPhase.value = "error";
   } finally {
-    renderingPage.value = false;
+    if (pageRenders.get(canvas) === render) pageRenders.delete(canvas);
   }
-}
-async function goPage(change: number) {
-  if (renderingPage.value || pageNumber.value + change < 1 || pageNumber.value + change > pageCount.value) return;
-  pageNumber.value += change;
-  await renderPage();
-  pageCanvas.value?.parentElement?.scrollTo({ top: 0 });
 }
 async function switchMode(next: "original" | "edit" | "layout") {
   if (opBusy.value) return;
+  if (next !== "edit" && referencesDirty.value) { referencesPanel.value?.requestClose(); return; }
   if (next !== "edit" && isDirty.value) await save();
   if (next !== "edit" && isDirty.value) return;
   mode.value = next;
@@ -2269,6 +2530,7 @@ async function switchMode(next: "original" | "edit" | "layout") {
   aiScope.value = "section";
   clearAiDraft();
   if (next !== "edit") await loadOriginal();
+  else stopOriginal();
 }
 /** 按编辑区文字更新正文（冻结区已换成正文版本）；有平移关系时把编辑区的改动平移到正文上。 */
 function syncValueFromEditor() {
@@ -2287,6 +2549,7 @@ function syncValueFromEditor() {
 }
 function onEditorInput(event?: Event) {
   if (!editor.value) return;
+  layoutWordTabs();
   lastInputAt = Date.now();
   aiUndo.value = null;
   syncValueFromEditor();
@@ -3258,8 +3521,12 @@ async function openHistory() {
   openPanel("history");
 }
 /** 文档栏的面板按钮：再点一次收起；有操作进行时不切换。 */
-function togglePanel(name: "ai" | "history") {
-  if (rightPanel.value === name) { rightPanel.value = null; return; }
+function togglePanel(name: "ai" | "history" | "assignments" | "references") {
+  if (rightPanel.value === name) {
+    if (name === "assignments") { assignmentsPanel.value?.requestClose(); return; }
+    if (name === "references") { referencesPanel.value?.requestClose(); return; }
+    rightPanel.value = null; return;
+  }
   if (opBusy.value) return;
   openPanel(name);
 }
@@ -3410,6 +3677,20 @@ async function acceptDiagram(result: DocumentContentResult & { formatTemplate: R
 }
 async function leaveDocument(to?: RouteLocationNormalized) {
   if (leaveBypass) { leaveBypass = false; return true; }
+  if (referencesDirty.value || referencesBusy.value) {
+    referencesPanel.value?.requestClose();
+    noteAction("参考资料尚未保存或正在处理，请完成后再离开。");
+    return false;
+  }
+  if (blockGuidanceDirty.value || assignmentsPanel.value?.isDirty || assignmentsBusy.value || blockGuidanceBusy.value) {
+    noteAction("分工或段落建议尚未保存，请先保存或明确放弃修改。");
+    return false;
+  }
+  if (guidanceChanged.value || guidanceSaving.value) {
+    openPanel("ai");
+    noteAction("编写建议尚未保存，请保存或放弃修改后再离开。");
+    return false;
+  }
   if (to && sessionEnded(to)) {
     // 会话失效或需要改密（G1）：保存已不可能。草稿写入并读回校验通过就放行跳转，重新登录后由恢复条提示；
     // 校验失败只给“下载后离开 / 留在本页”。
@@ -3457,7 +3738,7 @@ function confirmLeave(downloadFirst: boolean) {
   void router.push(target).finally(() => { leaveBypass = false; });
 }
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (skillBusy.value || hasUnsaved.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
+  if (referencesDirty.value || referencesBusy.value || blockGuidanceDirty.value || assignmentsPanel.value?.isDirty || assignmentsBusy.value || blockGuidanceBusy.value || guidanceChanged.value || guidanceSaving.value || skillBusy.value || hasUnsaved.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
     persistLocalDraft();
     event.preventDefault();
     event.returnValue = "";
@@ -3632,6 +3913,7 @@ onMounted(() => {
   void load();
 });
 onUnmounted(() => {
+  guidanceController?.abort();
   stopTabWatch();
   loadVersion += 1;
   window.removeEventListener("beforeunload", beforeUnload);
@@ -3663,8 +3945,7 @@ onUnmounted(() => {
   deskObserver?.disconnect();
   clearAiDraft();
   window.clearTimeout(autoSaveTimer);
-  originalController?.abort();
-  void pdfTask?.destroy();
+  stopOriginal();
   closePresence();
 });
 </script>
@@ -3697,6 +3978,8 @@ onUnmounted(() => {
         <span class="divider-v" aria-hidden="true"></span>
         <button v-if="mode === 'edit' && conflictEntry" type="button" class="conflict-toggle" :class="[conflictEntry.tone, { on: conflictOpen }]" data-testid="conflict-toggle" :aria-expanded="conflictOpen" @click="conflictOpen ? (conflictOpen = false) : openConflicts(conflictEntry.tab)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19z" /><path d="M12 10v4.5M12 17.5v.01" /></svg><span>{{ conflictEntry.name }}</span> <span v-if="conflictEntry.count" class="count">{{ conflictEntry.count }}</span></button>
         <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: historyOpen }" :aria-pressed="historyOpen" :disabled="opBusy && !historyOpen" @click="togglePanel('history')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" /><path d="M3 4v4h4" /><path d="M12 8v4.5l3 2" /></svg>版本记录</button>
+        <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: assignmentsOpen }" :aria-pressed="assignmentsOpen" :disabled="opBusy || isDirty || guidanceChanged || Boolean(aiDraft)" :title="isDirty ? '请先保存正文' : ''" @click="togglePanel('assignments')">分工与指导</button>
+        <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: referencesOpen }" :aria-pressed="referencesOpen" :disabled="opBusy || isDirty || guidanceChanged || Boolean(aiDraft)" :title="isDirty ? '请先保存正文' : ''" @click="togglePanel('references')">参考资料<span v-if="referenceCount" class="count">{{ referenceCount }}</span></button>
         <button v-if="mode === 'edit' && aiUndo" type="button" class="subtle" :disabled="!canUndoAi" @click="undoAiChange">{{ undoingAi ? '撤回中…' : '撤回 AI 修改' }}</button>
         <button v-if="mode === 'edit'" type="button" class="subtle" :class="{ on: aiOpen }" :aria-pressed="aiOpen" :disabled="readonly || Boolean(aiUnavailable('writing')) || (opBusy && !aiOpen)" :title="aiUnavailable('writing') || undefined" @mousedown.prevent @click="togglePanel('ai')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></svg>写作助手</button>
         <a v-if="mode === 'original' && document.originalDocxFileId" class="primary" :href="`/api/v1/files/${document.originalDocxFileId}/content`" download><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 20h14" /></svg>下载原稿</a>
@@ -3814,12 +4097,12 @@ onUnmounted(() => {
             <button type="button" class="ghost" @click="loadOriginal()">重试预览</button>
           </div>
           <div v-else class="pdf-viewer">
-            <div class="page-controls" aria-label="Word 翻页">
-              <button type="button" class="ghost sm" :disabled="pageNumber <= 1 || renderingPage" @click="goPage(-1)">上一页</button>
-              <span>第 {{ pageNumber }} / {{ pageCount }} 页</span>
-              <button type="button" class="ghost sm" :disabled="pageNumber >= pageCount || renderingPage" @click="goPage(1)">下一页</button>
+            <div ref="pdfScroll" class="pdf-scroll" tabindex="0" role="region" :aria-label="`Word ${mode === 'layout' ? '编辑稿' : '原稿'}`">
+              <div v-for="page in pdfPages" :key="page.number" class="pdf-page" :style="{ width: `${page.width}px`, height: `${page.height}px`, zoom: String(paperZoom / wordDisplayZoom) }">
+                <canvas :data-page="page.number" width="0" height="0" role="img" :aria-busy="!page.ready" :aria-label="`Word ${mode === 'layout' ? '编辑稿' : '原稿'}第 ${page.number} 页`"></canvas>
+                <span v-if="!page.ready" class="pdf-page-loading" role="status">正在显示第 {{ page.number }} 页…</span>
+              </div>
             </div>
-            <div class="pdf-scroll"><canvas ref="pageCanvas" role="img" :aria-label="`Word ${mode === 'layout' ? '编辑稿' : '原稿'}第 ${pageNumber} 页`"></canvas></div>
           </div>
         </div>
 
@@ -3882,7 +4165,7 @@ onUnmounted(() => {
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
           <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
-          <div ref="desk" class="desk page-scroll"><div class="paper" :style="paperZoom < 1 ? { ...paperStyle, zoom: String(paperZoom) } : paperStyle"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <div ref="desk" class="desk page-scroll"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -3909,12 +4192,60 @@ onUnmounted(() => {
                 <span class="flabel">编写规范</span>
                 <div class="skill-row"><span>{{ skillLabel }}</span><button type="button" class="text" :disabled="readonly || !canStartAi || Boolean(aiDraft)" @click="openSkillSettings">修改</button></div>
               </div>
+              <div class="field">
+                <span class="flabel">参考资料</span>
+                <div class="skill-row"><span>{{ referenceCount ? `已选 ${referenceCount} 份` : '未添加' }}</span><button type="button" class="text" :disabled="opBusy || isDirty || guidanceChanged || Boolean(aiDraft)" @click="openPanel('references')">{{ referenceCount ? '查看与修改' : '添加' }}</button></div>
+              </div>
+              <section class="writing-guidance" aria-label="当前范围编写建议" :aria-busy="guidancePhase === 'loading' || guidanceSaving">
+                <h3>编写建议</h3>
+                <p v-if="guidancePhase === 'loading'" class="hint" role="status">正在读取当前范围的建议…</p>
+                <template v-else-if="guidancePhase === 'ready'">
+                  <p v-if="!guidanceAvailable.length" class="hint">本范围暂无模板建议，可在下方补充要求。</p>
+                  <div v-if="guidanceAvailable.length > 1" class="guidance-browse">
+                    <div class="field"><label for="guidance-search">查找章节</label><input id="guidance-search" v-model="guidanceSearch" class="control" type="search" placeholder="输入章节名称" /></div>
+                    <div v-if="guidanceMatches.length" class="field"><label for="guidance-group">查看章节</label><select id="guidance-group" v-model="guidanceGroupKey" class="control"><option v-for="group in guidanceMatches" :key="guidanceKeyOf(group)" :value="guidanceKeyOf(group)">{{ group.headingPath || group.heading }}（{{ group.items.length }} 项）</option></select></div>
+                    <p v-else class="hint" role="status">未找到匹配章节。<button type="button" class="text" @click="guidanceSearch = ''">清除查找</button></p>
+                  </div>
+                  <div v-if="guidanceGroup && guidanceItem" class="guidance-group" data-testid="guidance-current">
+                    <h4>{{ guidanceGroup.headingPath || guidanceGroup.heading }}</h4>
+                    <nav v-if="guidanceGroup.items.length > 1" class="guidance-pager" aria-label="章节编写建议分页">
+                      <button type="button" class="ghost sm" :disabled="guidanceItemIndex <= 0" @click="moveGuidanceItem(-1)">上一项</button>
+                      <span role="status">{{ guidanceItemIndex + 1 }} / {{ guidanceGroup.items.length }}</span>
+                      <button type="button" class="ghost sm" :disabled="guidanceItemIndex >= guidanceGroup.items.length - 1" @click="moveGuidanceItem(1)">下一项</button>
+                    </nav>
+                    <div class="field guidance-item">
+                      <label for="guidance-current-text">{{ guidanceItem.kind === 'guidance' ? '编写建议' : guidanceItem.kind === 'example' ? '编写示例' : '填写要求' }}<template v-if="guidanceItem.heading !== guidanceGroup.heading"> · 来自{{ guidanceItem.heading }}</template></label>
+                      <textarea id="guidance-current-text" :key="guidanceItem.id" :value="guidanceText(guidanceItem)" class="control" rows="5" maxlength="20000" :disabled="!canStartAi || Boolean(aiDraft)" @input="editGuidance(guidanceItem, ($event.target as HTMLTextAreaElement).value)"></textarea>
+                      <details v-if="guidanceItem.targetText" class="guidance-source"><summary>适用内容</summary><pre>{{ guidanceItem.targetText }}</pre></details>
+                      <div class="guidance-source" v-if="guidanceText(guidanceItem) !== guidanceItem.sourceText">
+                        <details v-if="guidanceItem.sourceText"><summary>模板原文</summary><pre>{{ guidanceItem.sourceText }}</pre></details>
+                        <button type="button" class="text" :disabled="!canStartAi || Boolean(aiDraft)" @click="editGuidance(guidanceItem, null)">{{ guidanceItem.id.startsWith('object:') ? (guidanceItem.sourceText ? '恢复原表说明' : '清除本段建议') : '恢复模板' }}</button>
+                      </div>
+                      <div v-if="guidanceConflicts[guidanceItem.id] !== undefined" class="notice" role="alert">
+                        <p>此建议已由他人更新：</p><pre>{{ guidanceConflicts[guidanceItem.id] }}</pre>
+                        <button type="button" class="ghost sm" :disabled="!canStartAi" @click="resolveGuidanceChange(guidanceItem, false)">采用最新建议</button>
+                        <button type="button" class="ghost sm" :disabled="!canStartAi" @click="resolveGuidanceChange(guidanceItem, true)">保留我的修改</button>
+                      </div>
+
+                    </div>
+                  </div>
+                  <div v-if="Object.keys(guidanceConflicts).length" class="notice" role="alert"><span>{{ Object.keys(guidanceConflicts).length }} 项建议有冲突</span><button type="button" class="text" @click="revealGuidanceItem(Object.keys(guidanceConflicts)[0]!)">查看冲突</button></div>
+                  <p v-for="notice in guidanceNotices" :key="notice" class="notice" role="status">{{ notice }}</p>
+                </template>
+                <p v-if="guidanceError" class="field-error" role="alert">{{ guidanceError }}</p>
+                <button v-if="guidancePhase === 'error'" type="button" class="ghost sm" :disabled="!canStartAi" @click="loadGuidance()">重新读取建议</button>
+                <div v-if="guidanceChanged" class="guidance-actions">
+                  <span class="hint">{{ Object.keys(guidanceEdits).length }} 项修改待保存</span>
+                  <button type="button" class="ghost sm" :disabled="!canStartAi" @click="saveGuidance()">{{ guidanceSaving ? '保存中…' : '保存本篇建议' }}</button>
+                  <button type="button" class="text" :disabled="!canStartAi" @click="discardGuidance">放弃修改</button>
+                </div>
+              </section>
               <form class="ai-form" @submit.prevent="generateSection">
                 <div class="field">
                   <label for="ai-instruction">补充要求（选填）</label>
                   <textarea id="ai-instruction" v-model="aiInstruction" class="control" rows="3" maxlength="2000" :disabled="!canStartAi"></textarea>
                 </div>
-                <button type="submit" class="primary" :disabled="!canStartAi">{{ aiBusy ? "正在编写…" : aiDraft ? "重新生成" : "生成草稿" }}</button>
+                <button type="submit" class="primary" :disabled="!canStartAi || guidancePhase === 'loading' || (guidancePhase !== 'ready' && !isDirty) || Boolean(Object.keys(guidanceConflicts).length)">{{ aiBusy ? "正在编写…" : aiDraft ? "重新生成" : "生成草稿" }}</button>
               </form>
               <section v-if="aiProgress.length || aiDraft" class="draft ai-progress" aria-label="编写进度">
                 <div class="dh"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg><strong role="status" aria-live="polite">{{ aiDraft && aiComplete && !aiBusy ? '草稿已生成' : aiProgressLabel }}</strong><span>用时 {{ aiElapsed }} 秒<template v-if="aiDraft"> · 约 {{ countChars(aiDraft) }} 字</template></span></div>
@@ -3952,6 +4283,16 @@ onUnmounted(() => {
           :initial-tab="conflictTab" :mine-count="mineConflicts" :member-count="memberConflicts" :approx-keys="approxConflicts" :live-mine="liveMine" :local-pending="conflictLocalPending"
           @close="conflictOpen = false" @resolved="acceptResolution" @adopt="adoptLatest" @count="onConflictCount" @locate="locateConflict" />
         <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
+        <DocumentReferences v-if="mode === 'edit' && referencesOpen" ref="referencesPanel" :document-id="document.id" :revision="document.revision"
+          :disabled="readonly || isDirty" @saved="acceptReferences" @close="referencesOpen = false" @busy="referencesBusy = $event" @dirty="referencesDirty = $event" />
+        <DocumentAssignments v-if="mode === 'edit' && assignmentsOpen" ref="assignmentsPanel" :document-id="document.id" :revision="document.revision"
+          :disabled="isDirty || blockGuidanceDirty || blockGuidanceBusy" @busy="assignmentsBusy = $event" @changed="acceptAssignments" @locate="locateAssignment" @close="closeAssignments">
+          <template #default="{ objectIds, state }">
+            <DocumentBlockGuidance ref="blockGuidancePanel" :document-id="document.id" :revision="document.revision"
+              :object-ids="objectIds.filter((id: string) => state.items.some((item: { objectId: string; kind: string; canEdit: boolean }) => item.objectId === id && ['paragraph', 'list_item', 'table'].includes(item.kind) && item.canEdit))"
+              :disabled="readonly || isDirty || Boolean(assignmentsPanel?.isDirty) || assignmentsBusy" @dirty="blockGuidanceDirty = $event" @busy="blockGuidanceBusy = $event" @saved="acceptBlockGuidance" />
+          </template>
+        </DocumentAssignments>
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview ai-ghost" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
@@ -3982,6 +4323,23 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.writing-guidance { display:grid; gap:var(--space-2); min-width:0; }
+.writing-guidance h3 { margin:0; font-size:var(--text-md); font-weight:var(--weight-medium); }
+.guidance-group { border:1px solid var(--border-default); border-radius:var(--radius-control); padding:var(--space-3); min-width:0; }
+.guidance-group h4 { margin:0; font-size:var(--text-sm); font-weight:var(--weight-medium); overflow-wrap:anywhere; line-height:var(--leading-md); }
+.guidance-browse { display:grid; gap:var(--space-2); min-width:0; }
+.guidance-browse .field { margin:0; min-width:0; }
+.guidance-browse .control { width:100%; min-width:0; }
+.guidance-pager { display:flex; justify-content:space-between; align-items:center; gap:var(--space-2); margin-top:var(--space-2); }
+.guidance-pager span { color:var(--text-secondary); font-size:var(--text-sm); }
+.guidance-item { margin-top:var(--space-3); }
+.writing-guidance textarea { width:100%; line-height:var(--leading-md); resize:vertical; }
+.guidance-source, .guidance-actions { display:flex; gap:var(--space-2); align-items:flex-start; flex-wrap:wrap; }
+.guidance-source > details { flex:1; min-width:0; }
+.guidance-source summary { cursor:pointer; color:var(--text-secondary); }
+.writing-guidance pre { margin:var(--space-2) 0; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font); font-size:var(--text-sm); line-height:var(--leading-sm); }
+.guidance-actions { align-items:center; }
+.guidance-actions .hint { flex-basis:100%; }
 /* 工作台重塑（12 §8.1）：对照 mockups/文档编辑工作台*.html；只用 base.css 的语义变量。 */
 .ws { display:grid; grid-template-rows:auto auto minmax(0,1fr) var(--status-h); height:calc(100vh - var(--topbar-h)); min-width:0; min-height:0; background:var(--bg-page); color:var(--text-primary); font-family:var(--font); }
 .ws > .state { grid-row:1 / -1; }
@@ -4076,9 +4434,12 @@ onUnmounted(() => {
 .original-viewer { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--bg-sunken); }
 .preview-state { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:var(--space-3); color:var(--text-secondary); }
 .pdf-viewer { display:flex; flex:1; flex-direction:column; min-height:0; }
-.page-controls { display:flex; align-items:center; justify-content:center; gap:var(--space-3); height:var(--etool-h); background:var(--bg-surface); border-bottom:1px solid var(--border-default); color:var(--text-secondary); font-size:var(--text-sm); }
 .pdf-scroll { flex:1; min-height:0; overflow:auto; padding:var(--space-5); text-align:center; }
-.pdf-scroll canvas { display:block; max-width:100%; height:auto; margin:0 auto; background:var(--bg-surface); box-shadow:var(--shadow-paper); }
+.pdf-scroll:focus-visible { outline:2px solid var(--brand-600); outline-offset:-2px; }
+.pdf-page { position:relative; margin:0 auto var(--space-5); background:var(--bg-surface); box-shadow:var(--shadow-paper); }
+.pdf-page:last-child { margin-bottom:0; }
+.pdf-page canvas { display:block; width:100%; height:100%; }
+.pdf-page-loading { position:absolute; inset:0; display:grid; place-items:center; color:var(--text-secondary); font-size:var(--text-sm); }
 
 /* 目录 */
 .outline { position:relative; display:flex; flex-direction:column; min-height:0; background:var(--bg-surface); border-right:1px solid var(--border-default); }
@@ -4134,11 +4495,11 @@ onUnmounted(() => {
 .paper-content :deep(p) { margin:0 0 6px; }
 .paper-content :deep(ul),.paper-content :deep(ol) { padding-left:var(--space-5); margin:0 0 6px; }
 .paper-content :deep(table) { width:100%; border-collapse:collapse; margin:var(--space-2) 0 var(--space-3); table-layout:fixed; font-size:calc(var(--doc-text) * 0.875); line-height:1.5; }
-.paper-content :deep(th),.paper-content :deep(td) { padding:var(--space-1) var(--space-2); border:1px solid var(--text-primary); vertical-align:top; overflow-wrap:anywhere; }
+.paper-content :deep(th),.paper-content :deep(td) { padding:var(--space-1) var(--space-2); border:1px solid var(--text-primary); vertical-align:top; overflow-wrap:anywhere; color:inherit; background:transparent; font-size:inherit; white-space:normal; }
 .paper-content :deep(th) { font-weight:700; }
 .paper-content :deep(img) { display:block; max-width:100%; max-height:calc(var(--space-7) * 14); width:auto; height:auto; object-fit:contain; margin:var(--space-4) auto; }
 .paper-content :deep(a) { color:var(--text-link); }
-.paper-content :deep([data-word-protected]) { cursor:not-allowed; color:var(--text-secondary); background:var(--bg-subtle); }
+.paper-content :deep([data-word-protected]) { cursor:not-allowed; }
 .paper-content :deep([data-word-marker])::before { content:attr(data-word-marker); display:inline-block; margin-right:var(--space-2); }
 /* 块标记：冲突（红线浅红底）、他人更新（蓝线）、定位闪烁 */
 .paper-content :deep(.blk-conflict) { margin-left:-12px; margin-right:-12px; padding:6px 12px; border-radius:2px; background:var(--danger-50); box-shadow:inset 3px 0 0 var(--danger-600); }
@@ -4159,7 +4520,7 @@ onUnmounted(() => {
 .phead { display:flex; align-items:center; gap:var(--space-2); height:var(--etool-h); flex:none; padding:0 var(--space-2) 0 var(--space-4); border-bottom:1px solid var(--border-subtle); }
 .phead h2 { margin:0; font-size:var(--text-md); font-weight:var(--weight-semibold); }
 .phead .icon-btn { margin-left:auto; }
-.pbody { flex:1; min-height:0; overflow:auto; display:grid; align-content:start; gap:var(--space-4); padding:var(--space-4); font-size:var(--text-sm); }
+.pbody { flex:1; min-height:0; overflow:auto; display:grid; grid-auto-rows:max-content; align-content:start; gap:var(--space-4); padding:var(--space-4); font-size:var(--text-sm); }
 .pnote { margin:0; padding:10px var(--space-3); border-radius:var(--radius-control); background:var(--gray-50); color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
 .scope { display:grid; grid-template-columns:repeat(3, 1fr); }
 .target { display:grid; gap:2px; padding:10px var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-subtle); }

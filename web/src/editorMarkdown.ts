@@ -101,6 +101,32 @@ export function protectWhitespace(root: HTMLElement): void {
 
 /** root 必须是副本：会被就地修改。 */
 export function editorMarkdown(turndown: TurndownService, root: HTMLElement): string {
+  // 原生段落之间已有显式 br，拆掉样式包装，避免 Turndown 再为段落添加换行。
+  root.querySelectorAll("td > p[data-word-cell-paragraph],th > p[data-word-cell-paragraph]")
+    .forEach(paragraph => paragraph.replaceWith(...paragraph.childNodes));
+  // 显示保留 Word 合并格；保存时恢复 docx_parser 使用的展开网格，保持旧文档逐字往返。
+  for (const table of root.querySelectorAll<HTMLTableElement>("table")) {
+    table.querySelectorAll(":scope > colgroup").forEach(group => group.remove());
+    if (!table.querySelector("[colspan],[rowspan]")) continue;
+    const rows = [...table.rows];
+    const grid: HTMLTableCellElement[][] = rows.map(() => []);
+    rows.forEach((row, r) => {
+      let column = 0;
+      for (const cell of row.cells) {
+        while (grid[r][column]) column += 1;
+        const height = Math.min(cell.rowSpan || rows.length - r, rows.length - r);
+        for (let y = r; y < r + height; y += 1) {
+          for (let x = column; x < column + cell.colSpan; x += 1) grid[y][x] = cell;
+        }
+        column += cell.colSpan;
+      }
+    });
+    rows.forEach((row, r) => row.replaceChildren(...grid[r].map(cell => {
+      const copy = root.ownerDocument.createElement(r === 0 ? "th" : "td");
+      copy.innerHTML = cell.innerHTML;
+      return copy;
+    })));
+  }
   protectWhitespace(root);
   return finishMarkdown(turndown.turndown(root));
 }

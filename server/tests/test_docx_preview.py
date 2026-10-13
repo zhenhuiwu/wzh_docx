@@ -6,6 +6,7 @@ import json
 
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from lxml import etree
 from docx.oxml import OxmlElement
@@ -66,6 +67,62 @@ def test_preview_character_indents_line_units_and_minimum_line_height(tmp_path):
     assert css['line-height'] == 'max(12pt, 1em)'
     assert css['font-size'] == '14pt'
     assert css['margin-top'] == 'calc(0.5 * max(12pt, 1em))'
+
+
+@pytest.mark.parametrize('attributes,expected', [
+    ({'left':'2438','leftChars':'0','hanging':'1378','firstLineChars':'0'},
+     {'margin-left':'121.9pt','text-indent':'-68.9pt'}),
+    ({'left':'2438','leftChars':'100','firstLine':'120','firstLineChars':'0'},
+     {'margin-left':'1em','text-indent':'6pt'}),
+    ({'right':'500','rightChars':'0','hanging':'400','hangingChars':'0'},
+     {'margin-right':'25pt','text-indent':'-20pt'}),
+    ({'leftChars':'0','firstLineChars':'0'},
+     {'margin-left':'0em','text-indent':'0em'}),
+])
+def test_preview_zero_character_indent_preserves_word_physical_indent(tmp_path, attributes, expected):
+    source = tmp_path / 'signature-indent.docx'
+    doc = Document()
+    paragraph = doc.add_paragraph('签字栏')
+    indent = OxmlElement('w:ind')
+    for key, value in attributes.items():
+        indent.set(qn('w:' + key), value)
+    paragraph._p.get_or_add_pPr().append(indent)
+    doc.save(source)
+    css = _css(_root(source)[0])
+    for key, value in expected.items():
+        assert css[key] == value
+
+
+def test_preview_uses_native_default_tab_stops_without_changing_text(tmp_path):
+    source = tmp_path / 'signature-tabs.docx'
+    doc = Document()
+    doc.add_paragraph('编制：          \t\t日期：')
+    tabs = doc.settings.element.find(qn('w:defaultTabStop'))
+    tabs.set(qn('w:val'), '420')
+    doc.save(source)
+    root = _root(source)
+    assert _css(root[0])['tab-size'] == '21pt'
+    assert root[0].get('data-word-tab-stop') == '21pt'
+    assert [tab.text for tab in root.xpath('.//span[@data-word-tab]')] == ['\t', '\t']
+    assert root.text_content() == doc.paragraphs[0].text
+
+    tabs.set(qn('w:val'), '0')
+    doc.save(source)
+    assert _root(source)[0].get('data-word-tab-stop') == '36pt'
+    tabs.set(qn('w:val'), '420')
+    paragraph = doc.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    doc.save(source)
+    assert not _root(source).xpath('.//*[@data-word-tab]')
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    custom_tabs = OxmlElement('w:tabs')
+    tab = OxmlElement('w:tab')
+    tab.set(qn('w:val'), 'right')
+    tab.set(qn('w:pos'), '3000')
+    custom_tabs.append(tab)
+    paragraph._p.get_or_add_pPr().append(custom_tabs)
+    doc.save(source)
+    assert not _root(source).xpath('.//*[@data-word-tab]')
 
 
 def test_preview_mixed_east_asian_and_latin_fonts_in_same_run(tmp_path):
@@ -196,9 +253,125 @@ def test_preview_projects_native_table_cell_typography_and_shading(tmp_path):
     assert root.xpath(".//td")[-1].text_content() == "新值"
     assert _css(root[0])["border-collapse"] == "collapse"
     assert _css(root.xpath(".//th")[0])["background-color"] == "#DDEEFF"
-    assert _css(root.xpath(".//th")[0])["text-align"] == "right"
+    assert _css(root.xpath(".//th/p")[0])["text-align"] == "right"
     assert _css(root.xpath(".//th")[0])["border-top"] == "0.5pt solid #000000"
     assert _css(_span(root, "新值"))["font-size"] == "9pt"
+
+
+@pytest.mark.parametrize('alignment,margin', [
+    (WD_TABLE_ALIGNMENT.LEFT, '-7.75pt'),
+    (WD_TABLE_ALIGNMENT.CENTER, 'calc((100% - 300pt) / 2)'),
+    (WD_TABLE_ALIGNMENT.RIGHT, 'calc(100% - 300pt)'),
+])
+def test_preview_positions_table_border_from_native_text_indent(tmp_path, alignment, margin):
+    source = tmp_path / 'table-indent.docx'
+    doc = Document()
+    table = doc.add_table(rows=1, cols=1, style='Table Grid')
+    table.columns[0].width = Pt(300)
+    table.cell(0, 0).text = '边框位置'
+    table.alignment = alignment
+    indent = OxmlElement('w:tblInd')
+    indent.set(qn('w:w'), '-42')
+    indent.set(qn('w:type'), 'dxa')
+    table._tbl.tblPr.append(indent)
+    doc.save(source)
+    root = _root(source)
+    assert _css(root[0])['margin-left'] == margin
+    cell = root.xpath('.//th')[0]
+    assert _css(cell)['padding-left'] == '5.4pt'
+    assert _css(cell)['padding-top'] == '0pt'
+
+
+def test_preview_keeps_merged_note_across_unequal_columns(tmp_path):
+    source = tmp_path / "merged-note.docx"
+    doc = Document()
+    table = doc.add_table(rows=3, cols=5, style="Table Grid")
+    widths = [100, 190, 54, 38, 37]
+    for column, width in zip(table.columns, widths):
+        column.width = Pt(width)
+    for cell, text in zip(table.rows[0].cells, ("需求名称", "唯一标识", "章节号", "方法", "级别")):
+        cell.text = text
+    note = table.cell(2, 0).merge(table.cell(2, 4))
+    note.text = "注：合格性方法说明应占满整行。"
+    note.paragraphs[0].paragraph_format.left_indent = Pt(30)
+    note.paragraphs[0].paragraph_format.first_line_indent = Pt(-15)
+    note.add_paragraph("第二段说明。")
+    doc.save(source)
+    before = source.read_bytes()
+    root = _root(source)
+    rows = root.xpath(".//tr")
+    cells = rows[-1].xpath("./td")
+    assert len(cells) == 1
+    assert cells[0].get("colspan") == "5"
+    assert cells[0].get("contenteditable") == "false"
+    assert root.text_content().count("合格性方法说明") == 1
+    assert root.text_content().count("第二段说明") == 1
+    assert _css(cells[0])["width"] == "419pt"
+    assert _css(cells[0][0])["margin-left"] == "30pt"
+    assert _css(cells[0][0])["text-indent"] == "-15pt"
+    assert "margin-left" not in _css(cells[0].xpath("./p")[1])
+    assert _css(rows[1].xpath("./td/p")[0])["min-height"] == "1lh"
+    assert [_css(col)["width"] for col in root.xpath(".//colgroup/col")] == [f"{w}pt" for w in widths]
+    assert source.read_bytes() == before
+
+
+def test_preview_keeps_rectangular_vertical_merge(tmp_path, monkeypatch):
+    source = tmp_path / "merged-rectangle.docx"
+    doc = Document()
+    table = doc.add_table(rows=3, cols=3, style="Table Grid")
+    for row in table.rows:
+        for cell in row.cells:
+            cell.text = ""
+    table.cell(0, 0).merge(table.cell(1, 1)).text = "合并区域"
+    table.cell(0, 2).text = "右上"
+    table.cell(1, 2).text = "右下"
+    table.cell(2, 0).text = "可编辑"
+    doc.save(source)
+    root = _root(source)
+    rows = root.xpath(".//tr")
+    first = rows[0].xpath("./th")[0]
+    assert first.get("colspan") == "2"
+    assert first.get("rowspan") == "2"
+    assert first.get("contenteditable") == "false"
+    assert len(rows[0].xpath("./th")) == 2
+    assert len(rows[1].xpath("./td")) == 1
+    assert root.text_content().count("合并区域") == 1
+    assert rows[1].xpath("./td")[0].text_content() == "右下"
+    assert rows[2].xpath("./td")[0].get("contenteditable") is None
+    from uuid import uuid4
+    from app import document_objects
+    object_id = uuid4()
+    monkeypatch.setattr(document_objects, "live_objects", lambda *_: [
+        {"id": object_id, "revision": 3, "body": parse_docx(str(source)).markdown},
+    ])
+    decorated, mapped = document_objects.decorate_object_ids(None, uuid4(), html.tostring(root[0], encoding="unicode"))
+    assert mapped
+    assert str(object_id) in decorated
+
+
+def test_preview_cancelled_numbered_style_does_not_leak_indent_into_cell(tmp_path):
+    doc = Document()
+    style = doc.styles.add_style("Numbered note", WD_STYLE_TYPE.PARAGRAPH)
+    style.paragraph_format.left_indent = Pt(87)
+    style.paragraph_format.first_line_indent = Pt(-21)
+    numpr = OxmlElement("w:numPr")
+    number = OxmlElement("w:numId")
+    number.set(qn("w:val"), "4")
+    numpr.append(number)
+    style.element.get_or_add_pPr().append(numpr)
+    p = doc.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+    p.style = style
+    p.text = "注：不使用编号。"
+    number = OxmlElement("w:numId")
+    number.set(qn("w:val"), "0")
+    numpr = OxmlElement("w:numPr")
+    numpr.append(number)
+    p._p.get_or_add_pPr().append(numpr)
+    source = tmp_path / "cancelled-list.docx"
+    doc.save(source)
+    css = _css(_root(source).xpath(".//th/p")[0])
+    assert "margin-left" not in css
+    assert "text-indent" not in css
 
 
 def test_preview_resolves_theme_color_and_first_row_table_style(tmp_path):

@@ -74,7 +74,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
   const method = options.method ?? "GET";
   const headers = new Headers();
   const timeout = new AbortController();
-  const timer = window.setTimeout(() => timeout.abort(), options.timeoutMs ?? 15000);
+  let timer: number | undefined;
+  const resetTimeout = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => timeout.abort(), options.timeoutMs ?? 15000);
+  };
+  resetTimeout();
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeout.signal])
     : timeout.signal;
@@ -97,6 +102,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
     });
     if (response.status === 204) return undefined;
     if (response.ok && options.onEvent) {
+      resetTimeout();
       if (!response.body) throw new ApiError(502, "AI_FAILED", "AI 响应不完整。");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -109,6 +115,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
       try {
         while (true) {
           const { value, done } = await reader.read();
+          if (value?.byteLength) resetTimeout();
           buffer += decoder.decode(value, { stream: !done });
           emitLines();
           if (done) break;
@@ -140,9 +147,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions<T> = {
     return payload as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new ApiError(0, "INTERNAL_ERROR", "请求超时或已取消。");
-    }
+    if (options.signal?.aborted) throw new ApiError(0, "REQUEST_CANCELLED", "请求已取消。");
+    if (timeout.signal.aborted) throw new ApiError(0, "REQUEST_TIMEOUT", options.onEvent
+      ? "与编写服务的连接长时间没有响应，请检查网络和服务状态。"
+      : "请求超时，请重试。");
     throw new ApiError(0, "DEPENDENCY_UNAVAILABLE", "暂时不能连接服务。");
   } finally {
     window.clearTimeout(timer);

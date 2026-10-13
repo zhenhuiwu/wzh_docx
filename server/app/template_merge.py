@@ -13,7 +13,7 @@ import json
 from copy import deepcopy
 from difflib import SequenceMatcher
 
-from app.template_import import KINDS
+from app.template_import import KINDS, validate_guidance_targets
 from app.template_word import (MAX_BLOCKS, NEW_ID, NEW_KINDS, PROP_LABELS, STYLE_PROPS, TemplateEditError, _rebind_headings,
                                validate_value)
 
@@ -52,6 +52,7 @@ def fields(block: dict) -> dict:
     result = {"kind": block["kind"], "text": block["text"], "headingLevel": block.get("headingLevel")}
     if block["kind"] == "guidance":
         result["headingId"] = block.get("headingId")
+        result["targetBlockIds"] = block.get("targetBlockIds", [])
     for r, row in enumerate(block.get("cells") or []):
         for c, value in enumerate(row):
             result[f"cell:{r}:{c}"] = value
@@ -159,6 +160,8 @@ def validate_draft(candidate, reference: dict, analysis: dict) -> list[dict]:
                 errors.append(_error(block_id, _PROTECTED_KIND))
                 continue
             block["kind"] = kind
+            if "targetBlockIds" in item:
+                block["targetBlockIds"] = deepcopy(item["targetBlockIds"])
             block["headingLevel"] = level if kind == "heading" else None
             block["headingId"] = item.get("headingId") if kind == "guidance" and isinstance(item.get("headingId"), str) else None
             if block["isTable"]:
@@ -217,6 +220,8 @@ def validate_draft(candidate, reference: dict, analysis: dict) -> list[dict]:
             block["virtual"] = True
             if item.get("unplaced"):
                 block["unplaced"] = True
+        if "targetBlockIds" in item:
+            block["targetBlockIds"] = deepcopy(item["targetBlockIds"])
         top.append(block)
     # 单元格段落随表格：必须齐全，顺序以模板为准
     present = {block["path"] for block in top if block.get("path")}
@@ -252,6 +257,10 @@ def validate_draft(candidate, reference: dict, analysis: dict) -> list[dict]:
         unsupported = any(problem["message"] not in {_STALE, "模板块标识重复或不正确。"} for problem in errors)
         raise TemplateEditError("TEMPLATE_EDIT_UNSUPPORTED" if unsupported else "TEMPLATE_STRUCTURE_INVALID", errors[:50])
     _rebind_headings(result)
+    try:
+        validate_guidance_targets(result)
+    except ValueError as error:
+        raise TemplateEditError("TEMPLATE_STRUCTURE_INVALID", [_error(None, str(error))]) from None
     return result
 
 
@@ -288,8 +297,17 @@ def category(block: dict) -> str:
     return "body"
 
 
-def _view(block: dict) -> dict:
+def _target_texts(targets: list[str], blocks: dict) -> list[str]:
+    positions = {key: index + 1 for index, key in enumerate(blocks)}
+    return [f"第 {positions[target]} 块 · {blocks[target]['text'][:120]}" if target in blocks
+            else "已移除的段落或表格" for target in targets]
+
+
+def _view(block: dict, blocks: dict) -> dict:
     view = {"kind": block["kind"], "text": block["text"], "headingLevel": block.get("headingLevel")}
+    if block.get("targetBlockIds"):
+        view["targetBlockIds"] = block["targetBlockIds"]
+        view["targetTexts"] = _target_texts(block["targetBlockIds"], blocks)
     if block.get("cells") is not None:
         view["cells"] = block["cells"]
     return view
@@ -339,7 +357,7 @@ def diff(a: dict, b: dict, a_styles: dict, b_styles: dict) -> dict:
         before = old.get(block["id"])
         if before is None:
             items.append({"blockId": block["id"], "change": "added", "category": category(block), "heading": new_names.get(block["id"], ""),
-                          "before": None, "after": _view(block), "fields": []})
+                          "before": None, "after": _view(block, new), "fields": []})
             continue
         changed = [key for key in sorted(set(fields(before)) | set(fields(block))) if fields(before).get(key) != fields(block).get(key)]
         if block["id"] in moved:
@@ -347,11 +365,11 @@ def diff(a: dict, b: dict, a_styles: dict, b_styles: dict) -> dict:
         if changed:
             change = "moved" if changed == ["order"] else "modified"
             items.append({"blockId": block["id"], "change": change, "category": category(block), "heading": new_names.get(block["id"], ""),
-                          "before": _view(before), "after": _view(block), "fields": changed})
+                          "before": _view(before, old), "after": _view(block, new), "fields": changed})
     for block in a["blocks"]:
         if _listed(block) and block["id"] not in new:
             items.append({"blockId": block["id"], "change": "removed", "category": category(block), "heading": old_names.get(block["id"], ""),
-                          "before": _view(block), "after": None, "fields": []})
+                          "before": _view(block, old), "after": None, "fields": []})
     styles = style_diff(a_styles, b_styles)
     summary = {"headings": 0, "body": 0, "tables": 0, "guidance": 0, "format": len(styles)}
     for item in items:
@@ -389,6 +407,9 @@ def merge3(base: dict, theirs: dict, mine: dict, styles: tuple[dict, dict, dict]
         conflicts.append({"blockId": block_id, "field": field, "base": b, "theirs": t, "mine": m,
                           "heading": names.get(block_id, ""), "text": (source["text"] if source else "")[:40],
                           "category": category(source) if source else "body", "resolved": take})
+        if field == "targetBlockIds":
+            conflicts[-1].update(baseTargetTexts=_target_texts(b or [], B),
+                                 theirsTargetTexts=_target_texts(t or [], T), mineTargetTexts=_target_texts(m or [], M))
         return take
 
     ids = list(dict.fromkeys([*T, *M, *B]))
@@ -470,6 +491,8 @@ def merge3(base: dict, theirs: dict, mine: dict, styles: tuple[dict, dict, dict]
                      "tableId": None, "protected": False, "isTable": False}
             if kind == "guidance":
                 block["virtual"] = True
+                if values.get("targetBlockIds"):
+                    block["targetBlockIds"] = deepcopy(values["targetBlockIds"])
                 if source.get("unplaced"):
                     block["unplaced"] = True
             blocks.append(block)
@@ -479,6 +502,7 @@ def merge3(base: dict, theirs: dict, mine: dict, styles: tuple[dict, dict, dict]
         block["headingLevel"] = values.get("headingLevel") if values["kind"] == "heading" else None
         if values["kind"] == "guidance":
             block["headingId"] = values.get("headingId")
+            block["targetBlockIds"] = deepcopy(values.get("targetBlockIds", []))
         if block.get("isTable"):
             grid = deepcopy(T[block_id].get("cells") or [])
             for r, row in enumerate(grid):
@@ -498,6 +522,11 @@ def merge3(base: dict, theirs: dict, mine: dict, styles: tuple[dict, dict, dict]
                 if item["kind"] == "guidance" and m is not None and m["kind"] == "guidance":
                     if b is None or b["text"] != m["text"]:
                         item["text"] = m["text"]
+                    bv = b.get("targetBlockIds", []) if b else []
+                    tv, mv = child.get("targetBlockIds", []), m.get("targetBlockIds", [])
+                    if mv != bv and mv != tv:
+                        if tv == bv or conflict(child["id"], "targetBlockIds", bv, tv, mv) == "mine":
+                            item["targetBlockIds"] = deepcopy(mv)
                 blocks.append(item)
     # 样式（每个“样式 · 属性”）
     base_styles, theirs_styles, mine_styles = styles

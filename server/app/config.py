@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     ai_model: str = Field(default="", validation_alias="AI_MODEL")
     ai_api_key: str = Field(default="", validation_alias="AI_API_KEY")
     ai_context_tokens: int = Field(default=32000, ge=8000, validation_alias="AI_CONTEXT_TOKENS")
+    ai_read_timeout_seconds: int = Field(default=600, gt=0, validation_alias="AI_READ_TIMEOUT_SECONDS")
     ai_reasoning_effort: Literal["", "none", "minimal", "low", "medium", "high", "xhigh", "max"] = Field(
         default="", validation_alias="AI_REASONING_EFFORT"
     )

@@ -23,7 +23,7 @@ import { hasPermission, readSession } from "../session";
 import { rememberCrumb } from "../crumbs";
 import { restoreFocus } from "../dialogFocus";
 import { revisionConflictText, shortTime, type Capsule } from "../saveModel";
-import { EDITOR_KIND_LABELS, changesMarkdown, chapterIds, styleDisplayName, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
+import { EDITOR_KIND_LABELS, canTargetGuidance, guidanceTargetError, changesMarkdown, chapterIds, styleDisplayName, createBlock, deleteCheck, forSave, insertAfter, lockTag, moveBlock, moveChapter, rebindHeadings, removeBlocks } from "../templateEditing";
 
 const route = useRoute();
 const router = useRouter();
@@ -59,6 +59,8 @@ let saveTimer = 0;
 let retryTimer = 0;
 
 const selectedId = ref("");
+const specificGuidanceIds = ref<string[]>([]);
+const targetSearch = ref("");
 const rightTab = ref<"edit" | "format" | "versions">("edit");
 const highlight = ref<string[]>([]);
 const blockErrors = ref<Record<string, string>>({});
@@ -81,6 +83,14 @@ const topBlocks = computed(() => blocks.value.filter(block => !block.tableId && 
 const unplaced = computed(() => blocks.value.filter(block => block.unplaced));
 const headings = computed(() => blocks.value.filter(block => block.kind === "heading" && !block.tableId));
 const selected = computed(() => blocks.value.find(block => block.id === selectedId.value) ?? null);
+const guidanceIsSpecific = computed(() => Boolean(selected.value?.targetBlockIds?.length || specificGuidanceIds.value.includes(selectedId.value)));
+const guidanceTargets = computed(() => blocks.value.filter(block => canTargetGuidance(block)
+  && (!targetSearch.value.trim() || block.text.toLocaleLowerCase().includes(targetSearch.value.trim().toLocaleLowerCase()))));
+function targetError(block: EditorBlock) {
+  if (specificGuidanceIds.value.includes(block.id) && !block.targetBlockIds?.length) return "请至少选择一处适用内容，或改为本章节通用。";
+  return guidanceTargetError(block, blocks.value);
+}
+const invalidGuidance = computed(() => blocks.value.filter(block => block.kind === "guidance" && targetError(block)));
 const guidanceCount = computed(() => {
   const counts: Record<string, number> = {};
   for (const block of blocks.value) if (block.kind === "guidance" && block.headingId) counts[block.headingId] = (counts[block.headingId] ?? 0) + 1;
@@ -90,6 +100,7 @@ const currentSeq = computed(() => current.value?.seq ?? 0);
 const publishBlock = computed(() => {
   if (!hasDraft.value && !dirty.value) return "还没有修改，无需发布。";
   if (unplaced.value.length) return `还有 ${unplaced.value.length} 条编写指导没有指定位置。`;
+  if (invalidGuidance.value.length) return "编写指导的适用内容无效，请重新选择。";
   if (conflict.value) return "草稿有冲突，请先刷新。";
   return "";
 });
@@ -138,6 +149,7 @@ function adopt(payload: DraftPayload, isDraft: boolean) {
   saveError.value = "";
   conflict.value = "";
   blockErrors.value = {};
+  specificGuidanceIds.value = [];
   if (!blocks.value.some(block => block.id === selectedId.value)) selectedId.value = "";
 }
 
@@ -182,6 +194,11 @@ async function save(): Promise<boolean> {
   window.clearTimeout(saveTimer);
   window.clearTimeout(retryTimer);
   if (!dirty.value) return true;
+  if (invalidGuidance.value.length) {
+    saveError.value = "请修正编写指导的适用内容后再保存。";
+    blockErrors.value = Object.fromEntries(invalidGuidance.value.map(block => [block.id, targetError(block)]));
+    return false;
+  }
   saving.value = true;
   const number = changeNumber;
   try {
@@ -385,6 +402,7 @@ function setKind(event: Event) {
   if (!block) return;
   update(() => {
     block.kind = kind;
+    if (kind !== "guidance") { delete block.targetBlockIds; specificGuidanceIds.value = specificGuidanceIds.value.filter(id => id !== block.id); }
     block.headingLevel = kind === "heading" ? block.headingLevel ?? 2 : null;
     if (kind === "guidance" && !block.path) block.virtual = true;
     if (kind === "guidance" && !block.headingId) block.headingId = [...blocks.value.slice(0, blocks.value.indexOf(block))].reverse().find(item => item.kind === "heading")?.id ?? null;
@@ -393,6 +411,37 @@ function setKind(event: Event) {
 function setLevel(event: Event) { const block = selected.value; if (block) update(() => { block.headingLevel = Number((event.target as HTMLSelectElement).value); }); }
 function setText(event: Event) { const block = selected.value; if (block) { block.text = (event.target as HTMLTextAreaElement).value; delete blockErrors.value[block.id]; update(() => undefined); } }
 function setGuidanceHeading(event: Event) { const block = selected.value; if (block) update(() => { block.headingId = (event.target as HTMLSelectElement).value || null; }); }
+function setGuidanceScope(event: Event) {
+  const block = selected.value;
+  if (!block || block.kind !== "guidance" || readonly.value) return;
+  const specific = (event.target as HTMLSelectElement).value === "targets";
+  specificGuidanceIds.value = specificGuidanceIds.value.filter(id => id !== block.id);
+  if (specific) specificGuidanceIds.value.push(block.id);
+  else { block.targetBlockIds = []; if (block.headingId) block.unplaced = false; }
+  delete blockErrors.value[block.id];
+  changed();
+}
+function setGuidanceTarget(id: string, event: Event) {
+  const block = selected.value;
+  if (!block || block.kind !== "guidance" || readonly.value) return;
+  const checked = (event.target as HTMLInputElement).checked;
+  if (checked && !blocks.value.some(item => item.id === id && canTargetGuidance(item))) return;
+  const targets = (block.targetBlockIds ?? []).filter(value => value !== id);
+  if (checked) targets.push(id);
+  block.targetBlockIds = targets;
+  if (!specificGuidanceIds.value.includes(block.id)) specificGuidanceIds.value.push(block.id);
+  if (!targetError(block)) block.unplaced = false;
+  delete blockErrors.value[block.id];
+  changed();
+}
+function clearInvalidTargets() {
+  const block = selected.value;
+  if (!block || readonly.value) return;
+  block.targetBlockIds = (block.targetBlockIds ?? []).filter(id => blocks.value.some(item => item.id === id && canTargetGuidance(item)));
+  if (!specificGuidanceIds.value.includes(block.id)) specificGuidanceIds.value.push(block.id);
+  if (!targetError(block)) block.unplaced = false;
+  changed();
+}
 function setCells(block: EditorBlock, cells: string[][]) { block.cells = cells; delete blockErrors.value[block.id]; update(() => undefined); }
 const textLocked = computed(() => Boolean(selected.value?.lock?.text) && selected.value?.kind !== "guidance");
 function setStyleValue(style: string, prop: string, value: any) {
@@ -615,6 +664,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
                 </template>
                 <template v-else-if="!readonly">
                   <button type="button" class="text sm" data-testid="tpl-unplaced-place" @click="placing = block.id">指定位置</button>
+                  <button v-if="block.targetBlockIds?.length" type="button" class="text sm" @click="select(block.id)">修改适用内容</button>
                   <button type="button" class="text sm danger" data-testid="tpl-unplaced-drop" @click="dropUnplaced(block)">删除</button>
                 </template>
               </div>
@@ -630,7 +680,7 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
                 <span v-if="!block.path && block.kind !== 'guidance'" class="tag info">新增</span>
               </div>
               <component :is="`h${Math.min(6, (block.headingLevel ?? 1) + 1)}`" v-if="block.kind === 'heading'" class="blk-heading" :class="`lv${block.headingLevel}`">{{ block.text || '（空标题）' }}</component>
-              <div v-else-if="block.kind === 'guidance'" class="guide"><span class="guide-label">编写指导</span><span v-if="block.headingId" class="hint">· {{ headingText(block.headingId) }}</span><p>{{ block.text }}</p></div>
+              <div v-else-if="block.kind === 'guidance'" class="guide"><span class="guide-label">编写指导</span><span v-if="block.targetBlockIds?.length" class="hint">· 指定 {{ block.targetBlockIds.length }} 处内容</span><span v-else-if="block.headingId" class="hint">· {{ headingText(block.headingId) }}</span><p>{{ block.text }}</p></div>
               <TemplateTableGrid v-else-if="block.isTable" :block="block" :readonly="readonly" @change="setCells(block, $event)" @upload="openUpload" />
               <p v-else class="blk-text">{{ block.text || '（空段落）' }}</p>
               <p v-if="blockErrors[block.id]" class="field-error" role="alert">{{ blockErrors[block.id] }}</p>
@@ -666,6 +716,26 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
                       <option value="">不绑定章节</option>
                       <option v-for="heading in headings" :key="heading.id" :value="heading.id">{{ '　'.repeat((heading.headingLevel ?? 1) - 1) }}{{ heading.text }}</option>
                     </select></label>
+                  <template v-if="selected.kind === 'guidance'">
+                    <label class="field"><span>适用范围</span>
+                      <select class="control" :value="guidanceIsSpecific ? 'targets' : 'chapter'" :disabled="readonly" data-testid="tpl-guidance-scope" @change="setGuidanceScope">
+                        <option value="chapter">本章节通用</option><option value="targets">指定内容</option>
+                      </select>
+                    </label>
+                    <div v-if="guidanceIsSpecific" class="guidance-targets">
+                      <label class="field"><span>查找适用内容</span><input v-model="targetSearch" type="search" class="control" :disabled="readonly" /></label>
+                      <p v-if="targetError(selected)" class="field-error" role="alert">{{ targetError(selected) }}</p>
+                      <div v-if="guidanceTargetError(selected, blocks)" class="notice" role="alert">
+                        <p>已有绑定失效，请清除后重新选择。</p>
+                        <button type="button" class="ghost sm" :disabled="readonly" @click="clearInvalidTargets">清除失效绑定</button>
+                      </div>
+                      <StatePanel v-if="!guidanceTargets.length" kind="empty" title="没有可选内容" text="仅能选择非空正文段落或整张表格。" />
+                      <label v-for="target in guidanceTargets" :key="target.id" class="guidance-target">
+                        <input type="checkbox" :checked="selected.targetBlockIds?.includes(target.id)" :disabled="readonly" @change="setGuidanceTarget(target.id, $event)" />
+                        <span><span class="hint">{{ target.isTable ? '表格' : '正文' }}<template v-if="target.headingId"> · {{ headingText(target.headingId) }}</template></span><span class="guidance-target-text">{{ target.text }}</span></span>
+                      </label>
+                    </div>
+                  </template>
                   <label class="field"><span>文字</span>
                     <textarea id="tpl-block-text" class="control" rows="8" :value="selected.text" :disabled="readonly || textLocked || selected.kind === 'toc'" data-testid="tpl-edit-text" @input="setText"></textarea>
                     <span v-if="textLocked" class="hint">{{ selected.lock?.text }}</span>
@@ -749,6 +819,10 @@ const headingText = (id: string | null | undefined) => headings.value.find(item 
 .edit-form { display:grid; gap:var(--space-4); padding:var(--space-4); }
 .edit-form .control { width:100%; }
 .edit-form textarea { resize:vertical; }
+.guidance-targets { display:grid; gap:var(--space-3); min-width:0; }
+.guidance-target { display:flex; align-items:flex-start; gap:var(--space-2); padding:var(--space-2) 0; border-bottom:var(--border); }
+.guidance-target > span { min-width:0; }
+.guidance-target-text { display:block; white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--text-sm); line-height:var(--leading-sm); }
 .edit-head { display:flex; align-items:center; gap:var(--space-2); margin:0; }
 .reasons { margin:0; padding-left:var(--space-5); color:var(--text-secondary); font-size:var(--text-sm); }
 </style>

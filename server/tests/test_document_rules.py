@@ -2,7 +2,78 @@
 
 import pytest
 
-from app.document_rules import DraftFormatError, section_rules, validate_draft
+from app.document_rules import DraftFormatError, section_rules, validate_draft, generated_body
+
+
+@pytest.mark.parametrize("marker,label", [("```", "markdown"), ("```", "md"), ("~~~", "text"), ("```", "")])
+def test_generated_body_unwraps_only_one_prose_envelope(marker, label):
+    source = f"{marker}{label}\n正常正文。\n\n| 项目 |\n|---|\n| 数据 |\n{marker}"
+    body = "正常正文。\n\n| 项目 |\n|---|\n| 数据 |"
+    assert generated_body(source) == body
+    for end in range(1, len(source) + 1):
+        partial = generated_body(source[:end], complete=False)
+        assert marker not in partial and not partial.startswith(label + "\n")
+    assert validate_draft(body, {}) == body
+    # Manual/API adoption still rejects fences instead of loosening the Word validator.
+    with pytest.raises(DraftFormatError):
+        validate_draft(source, {})
+
+
+@pytest.mark.parametrize("source", ["```xml\n<p>正文</p>\n```", "<p>正文</p>", "正文\n```\n代码\n```", "```markdown\n正文", "```markdown\n<p>正文</p>\n```"])
+def test_generated_body_does_not_bypass_html_inner_code_or_unclosed_fences(source):
+    assert generated_body(source, complete=False) == "" or "<p>" not in generated_body(source, complete=False)
+    with pytest.raises(DraftFormatError):
+        generated_body(source)
+
+
+def test_generated_whole_document_envelope_keeps_json_protocol():
+    assert generated_body('```json\n{"edits":[]}\n```', whole_document=True) == '{"edits":[]}'
+    with pytest.raises(DraftFormatError):
+        generated_body('```json\n{"edits":[]}\n```')
+
+
+@pytest.mark.parametrize('br', ['<br>', '<br/>', '<br />', '<BR>'])
+def test_native_word_breaks_remain_valid_through_generation_and_adoption(br):
+    body = f'| 要求 |\n| --- |\n| 第一行{br}第二行 |'
+    assert generated_body(body) == validate_draft(body, {}) == body
+    from app.documents import DocumentEdit, _validate_edits
+    row = [None] * 16
+    row[2], row[7], row[6] = '通用说明', '# 目标\n\n' + body, {}
+    edited = body.replace('第二行', '更新行')
+    assert _validate_edits(row, [DocumentEdit(headingIndex=0, content=edited)])[0].content == edited
+
+
+@pytest.mark.parametrize('unsafe', ['<br onclick="run()">', '<br style="display:none">', '<script>run()</script>',
+                                    '<img src="x" onerror="run()">', '<!--hidden-->', '```python\nrun()\n```'])
+def test_preserved_markup_never_allows_attributes_scripts_comments_or_code(unsafe):
+    with pytest.raises(DraftFormatError):
+        validate_draft(unsafe, {}, existing=unsafe)
+
+
+def test_word_literal_xml_names_are_not_treated_as_html():
+    literal = r'接口参数为 \<request\>，保留原文。'
+    assert validate_draft(generated_body(literal), {}) == literal
+
+
+def test_imported_multiline_word_table_can_be_validated_and_exported(tmp_path):
+    from docx import Document
+    from app.docx_parser import parse_docx
+    from app.docx_export import edit_original_docx
+    word = Document()
+    word.add_heading('目标', 1)
+    table = word.add_table(rows=2, cols=2)
+    table.cell(0, 0).text, table.cell(0, 1).text = '功能', '要求'
+    table.cell(1, 0).text, table.cell(1, 1).text = '查询', '保留第一行\n超时30秒'
+    original, exported = tmp_path / 'original.docx', tmp_path / 'edited.docx'
+    word.save(original)
+    source = parse_docx(str(original)).markdown
+    body = source[source.index('|'):].strip()
+    assert '<br>' in body
+    result = validate_draft(generated_body(body.replace('30秒', '60秒')), {}, existing=body)
+    edit_original_docx(source.replace(body, result), original, exported)
+    saved = Document(exported)
+    assert saved.tables[0].cell(1, 1).text == '保留第一行\n超时60秒'
+    assert len(saved.tables[0].rows) == len(saved.tables[0].columns) == 2
 
 
 def test_skill_rules_guard_word_body_and_tables():

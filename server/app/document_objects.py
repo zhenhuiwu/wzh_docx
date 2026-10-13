@@ -523,8 +523,27 @@ def decorate_object_ids(connection, document_id: UUID, html: str) -> tuple[str, 
     def bare(text: str) -> str:
         return "".join(text.split())
 
+    def node_text(node) -> str:
+        if node.tag != "table" or not node.xpath(".//*[@colspan or @rowspan]"):
+            return "".join(node.itertext())
+        # 与存储的展开表格比较，合并显示不应让整份文档退回整篇保存。
+        rows = node.xpath("./thead/tr|./tbody/tr|./tr")
+        grid = [{} for _ in rows]
+        for r, tr in enumerate(rows):
+            column = 0
+            for cell in tr.xpath("./th|./td"):
+                while column in grid[r]:
+                    column += 1
+                width = int(cell.get("colspan", "1"))
+                height = int(cell.get("rowspan", "1"))
+                for y in range(r, min(r + height, len(rows))):
+                    for x in range(column, column + width):
+                        grid[y][x] = "".join(cell.itertext())
+                column += width
+        return "".join(row[x] for row in grid for x in sorted(row))
+
     for node, row in zip(nodes, rows):
-        if bare("".join(node.itertext())) != bare(plain_text(row["body"])):
+        if bare(node_text(node)) != bare(plain_text(row["body"])):
             return html, False
     for node, row in zip(nodes, rows):
         node.set("data-object-id", str(row["id"]))

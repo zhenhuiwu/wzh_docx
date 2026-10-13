@@ -111,7 +111,12 @@ class _Doc:
         return position + len(blocks)
 
     def markdown(self, prefix: str) -> str:
-        return assemble(prefix, [item[1] for item in self.items])
+        blocks = [item[1] for item in self.items]
+        # 末段移到中间时需要分隔，否则后续标题会粘进表格并导致对象身份失效。
+        for index, block in enumerate(blocks[:-1]):
+            if not block.gap_after:
+                blocks[index] = Block(block.kind, block.body, "\n\n", block.heading_level)
+        return assemble(prefix, blocks)
 
 
 def _object(connection, document_id: UUID, object_id: str):

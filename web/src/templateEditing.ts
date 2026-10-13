@@ -23,6 +23,23 @@ export function newBlockId(): string {
 
 export function isTop(block: EditorBlock) { return !block.tableId; }
 
+export function canTargetGuidance(block: EditorBlock) {
+  return ["body", "table"].includes(block.kind) && !block.tableId && !block.protected && Boolean(block.text.trim());
+}
+
+export function guidanceTargetError(block: EditorBlock, blocks: EditorBlock[]): string {
+  const targets = block.targetBlockIds ?? [];
+  if (new Set(targets).size !== targets.length) return "编写指导的适用内容重复，请重新选择。";
+  if (targets.some(id => !blocks.some(item => item.id === id && canTargetGuidance(item)))) {
+    return "已绑定的内容被删除、变为空白或不可编辑，请重新选择适用内容，或改为章节通用。";
+  }
+  return "";
+}
+
+export function guidanceScopeText(ids?: string[], texts?: string[]): string {
+  return ids?.length ? `指定 ${ids.length} 处${texts?.length ? `：${texts.join("；")}` : ""}` : "本章节通用";
+}
+
 /** 顶层块（含它的单元格段落）组成的单元。 */
 function units(blocks: EditorBlock[]): EditorBlock[][] {
   const result: EditorBlock[][] = [];
@@ -196,6 +213,7 @@ export function conflictFieldLabel(field: string, theirsName: string): string {
   if (field === "kind") return "类型";
   if (field === "headingLevel") return "标题级别";
   if (field === "headingId") return "指导";
+  if (field === "targetBlockIds") return "指导适用内容";
   if (field === "exists") return "存在";
   const cell = /^cell:(\d+):(\d+)$/.exec(field);
   if (cell) return `单元格（第 ${Number(cell[1]) + 1} 行第 ${Number(cell[2]) + 1} 列）`;
@@ -270,6 +288,10 @@ export function changesMarkdown(input: {
       items.push(`- 修改${label(block)} ${where}`, "  原文：", quote(before.text), "  改后：", quote(block.text), "");
     }
     if (before.kind === "guidance" && before.headingId !== block.headingId) parts.push("所属章节已调整");
+    if (JSON.stringify(before.targetBlockIds ?? []) !== JSON.stringify(block.targetBlockIds ?? [])) {
+      const targetText = (ids: string[] | undefined, list: Map<string, EditorBlock>) => ids?.map(id => list.get(id)?.text ?? "已移除的段落或表格");
+      parts.push(`适用范围：${guidanceScopeText(before.targetBlockIds, targetText(before.targetBlockIds, old))} → ${guidanceScopeText(block.targetBlockIds, targetText(block.targetBlockIds, now))}`);
+    }
     if (parts.length) items.push(`- ${label(block)} ${where}“${(block.text || "").slice(0, 30)}”：${parts.join("；")}`, "");
   }
   for (const block of top(input.base)) {

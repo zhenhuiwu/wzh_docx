@@ -194,6 +194,26 @@ def test_auto_additional_requirements_are_pinned_in_real_agent_without_438_libra
         assert any(isinstance(message, SystemMessage) and "本篇说明异常恢复。" in message.content for message in messages)
 
 
+@pytest.mark.parametrize("kind", ["general", "srs", "sdd"])
+def test_selected_skill_is_supplied_without_model_file_read_roundtrips(monkeypatch, kind):
+    model = OfflineModel(responses=[tool_call("prepare_document_edit", objective="只编写当前组件。"),
+                                   AIMessage(content="组件需要保留。")])
+    agent, inputs, prepared = build(monkeypatch, model, profile(kind), heading="普通说明",
+                                    full_markdown="# 普通说明\n\n原始组件。")
+    result = agent.invoke(inputs, config={"recursion_limit": 32})
+    assert result["messages"][-1].content == "组件需要保留。" and prepared["ready"]
+    assert len(model.observed) == 2
+    for messages, _ in model.observed:
+        system = "\n".join(message.text for message in messages if isinstance(message, SystemMessage))
+        assert "术语使用‘组件’" in system and "不要为走流程重复读取" in system
+        assert "必须阅读技能" not in system and "先用 read_file" not in system
+        assert "Use `read_file` on the path shown" not in system
+        if kind != "general":
+            path = f"/skills/gjb438c/word-fillter-438c-{kind}/SKILL.md"
+            assert inputs["files"][path]["content"] in system
+            assert "仅在当前章节信息确实不足" in system
+
+
 @pytest.mark.parametrize("choice", [None, {"mode": "auto", "documentInstructions": "本篇补充边界。"}])
 def test_whole_auto_exposes_only_base_inferred_from_real_chapters(monkeypatch, choice):
     calls = []

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+import asyncio
 from dataclasses import replace as _replace_row
 import json
+import logging
 import os
 import re
 import sys
 import weakref
+import traceback
 from io import BytesIO
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
@@ -20,18 +23,22 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from openai import APITimeoutError, APIConnectionError, APIStatusError
+from httpx import TransportError
 
 from app.db import connect
 from app.document_agent import draft_section_text, stream_section_text
-from app.document_rules import DraftFormatError, section_rules, validate_draft, validate_constraints
+from app.document_rules import DraftFormatError, section_rules, validate_draft, validate_constraints, table_writing_notes
 from app.document_memory import clear_memory, load_memory, record_memory, read_memory_history, retract_memory, section_memory_targets
 from app.document_versions import record_current_version, router as versions_router
 from app.docx_parser import parse_docx
+from app.docx_export import _html_blocks
 from app.ai_capability import require_ai
 from app.errors import AppError
 from app.config import get_settings
 from app.files import resolve_object, store_bytes
 from app.template_import import clean_template
+from app.document_selection import selection_heading_index, SelectionError
 from app.document_commit import _version_markdown, commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
 from app.document_access import (DocumentRow, Need, check_project, document_principal, ensure_project_writable, load_document, member_role,
@@ -40,6 +47,7 @@ from app.models import format_timestamp
 from app.writing_skills import load_skill_snapshot
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 router.include_router(versions_router)
 router.include_router(objects_router)
 router.include_router(conflicts_router)
@@ -212,6 +220,27 @@ class SectionDraftBody(BaseModel):
     selection: DocumentSelectionBody | None = None
 
 
+class GuidanceQueryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expectedRevision: int = Field(ge=0)
+    scope: Literal["section", "selection", "document", "objects"]
+    headingIndex: int | None = Field(default=None, ge=0)
+    selection: DocumentSelectionBody | None = None
+    objectIds: list[str] = Field(default_factory=list, max_length=200)
+
+
+class GuidanceEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=120)
+    text: str | None = Field(max_length=20000)
+
+
+class GuidancePatchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expectedRevision: int = Field(ge=0)
+    items: list[GuidanceEdit] = Field(min_length=1, max_length=4000)
+
+
 class SectionInsertBody(MergeOptions):
     model_config = ConfigDict(extra="forbid")
 
@@ -276,6 +305,13 @@ _AI_KINDS = frozenset({"selection", "ai_section", "ai_document", "diagram"})
 def _save_markdown(connection, document_id: UUID, markdown: str, expected_revision: int, *,
                    format_template: dict | None = None, outline: list | None = None,
                    kind: str = "edit", restored_from_revision: int | None = None, **commit) -> UUID:
+    from app.document_assignments import check_content_write
+    check_content_write(connection, document_id, markdown, identities=commit.get("identities"), moved=commit.get("moved"))
+    if kind == "restore":
+        from app.document_assignments import require_scope_write
+        from app.document_objects import current_actor
+        if current_actor() is not None:
+            require_scope_write(connection, document_id, current_actor())
     ensure_document_objects(connection, document_id)
     before = record_current_version(connection, document_id, expected_revision=expected_revision)
     template = before["format_template"] if format_template is None else format_template
@@ -390,11 +426,13 @@ def _writing_skill(row) -> dict | None:
 
 @router.patch("/documents/{document_id}/writing-skill")
 def set_document_skill(request: Request, document_id: str, body: DocumentSkillBody) -> dict:
+    from app.document_assignments import require_scope_write
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         with conn.transaction(immediate=True):
             row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
+            require_scope_write(conn, did, session.user_id)
             if row[12] != body.expectedRevision:
                 raise revision_conflict(conn, did, "文档已更新，请关闭设置并刷新后重试。")
             current = _writing_skill(row) or {"mode": "auto", "documentInstructions": ""}
@@ -589,6 +627,7 @@ def create_document(
         format_template = {}
         markdown_content = ""
         outline = []
+        target_paths = {}
 
         if body.sourceType == "template":
             if not body.templateDocumentId:
@@ -622,9 +661,9 @@ def create_document(
             word_path = resolve_object(get_settings().file_data_dir, version["storage_key"])
             try:
                 if version["version"] == 1 and version["edited_file_id"] is None:
-                    cleaned = clean_template(word_path, structure)
+                    cleaned = clean_template(word_path, structure, target_paths=target_paths)
                 else:
-                    cleaned = clean_version(word_path, structure)
+                    cleaned = clean_version(word_path, structure, target_paths=target_paths)
                 parsed = parse_docx(BytesIO(cleaned), outline_headings=True)
             except ValueError as exc:
                 raise AppError(422, "TEMPLATE_STRUCTURE_INVALID", str(exc)) from None
@@ -676,6 +715,16 @@ def create_document(
                 session.user_id, template_version_id
             ]
         )
+        if target_paths:
+            from app.document_objects import live_objects
+            from app.template_guidance import bind_guidance_targets
+            ensure_document_objects(conn, doc_id)
+            try:
+                targets = bind_guidance_targets(cleaned, structure, markdown_content, live_objects(conn, doc_id), target_paths=target_paths)
+            except ValueError as error:
+                raise AppError(422, "GUIDANCE_TARGET_UNMATCHED", str(error)) from None
+            format_template["guidanceTargets"] = targets
+            conn.execute("UPDATE documents SET format_template=%s WHERE id=%s", (json.dumps(format_template), doc_id))
         record_current_version(conn, doc_id, expected_revision=0, kind="created")
         conn.commit()
 
@@ -902,7 +951,7 @@ def _section_update(row, index: int, content: str, mode: str, instruction: str =
     if mode == "append":
         if "![" in content:
             raise DraftFormatError("本节草稿包含原有图片，请使用替换，避免重复插图。")
-        if rules["tables"] and "|" in existing:
+        if any(block.tag == "table" for block in _html_blocks(existing)) and any(block.tag == "table" for block in _html_blocks(content)):
             raise DraftFormatError("本节已有模板表格，请使用替换，避免重复添加表格。")
         updated = _insert_at(row[7], position, content)
         validate_constraints(_section_body(updated, index)[1], rules)
@@ -928,7 +977,7 @@ def _section_adoption_modes(connection, row, index: int, content: str, instructi
     return modes
 
 
-def _validate_edits(row, edits: list[DocumentEdit], instruction: str = "") -> list[DocumentEdit]:
+def _validate_edits(row, edits: list[DocumentEdit], instruction: str = "", *, complete: bool = True) -> list[DocumentEdit]:
     seen = set()
     headings = _headings(row[7])
     for edit in edits:
@@ -943,7 +992,8 @@ def _validate_edits(row, edits: list[DocumentEdit], instruction: str = "") -> li
                 raise DraftFormatError("全文草稿包含不存在的章节，请重新生成。")
             heading, existing, _ = _section_body(row[7], edit.headingIndex)
         rules = section_rules(heading=str(heading["text"]), document_name=row[2], template_name=row[15] or "", instruction=instruction, existing=existing, writing_skill=_writing_skill(row))
-        edit.content = validate_draft(edit.content, rules, heading=str(heading["text"]), preserve_images=True, existing=existing)
+        edit.content = validate_draft(edit.content, rules, heading=str(heading["text"]), preserve_images=True,
+                                     existing=existing, complete=complete)
     return edits
 
 
@@ -975,7 +1025,7 @@ def _parse_edits(content: str, row, *, complete: bool, read_sections: set[int] |
                 if not remainder.startswith(","):
                     break
                 remainder = remainder[1:].lstrip()
-        edits = _validate_edits(row, [DocumentEdit.model_validate(value) for value in values], instruction)
+        edits = _validate_edits(row, [DocumentEdit.model_validate(value) for value in values], instruction, complete=complete)
         if complete and read_sections is not None:
             headings = _headings(row[7])
             required = {index for index in range(len(headings)) if _section_body(row[7], index)[1]}
@@ -1026,17 +1076,169 @@ def get_writing_memory(request: Request, document_id: str, offset: int = 0, limi
 
 @router.delete("/documents/{document_id}/memory")
 def delete_writing_memory(request: Request, document_id: str) -> dict:
+    from app.document_assignments import require_scope_write
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
+        require_scope_write(conn, did, session.user_id)
         clear_memory(conn, did)
         conn.commit()
     return {"data": {"summary": ""}, "requestId": request.state.request_id}
 
 
+def _selected_heading(markdown: str, selection: DocumentSelectionBody | None) -> int | None:
+    if selection is None:
+        raise AppError(422, "SELECTION_REQUIRED", "请先选择正文文字。")
+    try:
+        return selection_heading_index(markdown, selection.model_dump())
+    except SelectionError as error:
+        raise AppError(422, "SELECTION_CHANGED", str(error)) from None
+
+
+@router.post("/documents/{document_id}/writing-guidance/query")
+def query_writing_guidance(request: Request, document_id: str, body: GuidanceQueryBody) -> dict:
+    from app.document_guidance import object_spans, selection_ids, effective_advice, EDITABLE_KINDS
+    session = document_principal(request)
+    did = _uuid(document_id, "documentId")
+    with connect() as connection:
+        row = _document_row(connection, did, session.user_id, _admin(session.roles))
+        objects = object_spans(connection, row)
+        connection.commit()
+    if row[12] != body.expectedRevision:
+        raise revision_conflict(None, did)
+    headings = _headings(row[7])
+    heading_paths, stack = {}, []
+    for index, heading in enumerate(headings):
+        while stack and stack[-1][0] >= heading["level"]:
+            stack.pop()
+        stack.append((heading["level"], heading["text"]))
+        heading_paths[index] = " / ".join(str(text) for _level, text in stack)
+    selected_ids = None
+    if body.scope == "objects":
+        if not body.objectIds or len(set(body.objectIds)) != len(body.objectIds):
+            raise AppError(422, "VALIDATION_FAILED", "请选择不重复的正文段落或表格。")
+        selected = [item for item in objects if item["id"] in body.objectIds and item["kind"] in EDITABLE_KINDS]
+        if len(selected) != len(body.objectIds):
+            raise AppError(422, "GUIDANCE_TARGET_UNMATCHED", "部分对象已删除或不支持设置段落建议。")
+        groups = [{"headingIndex": None if item["headingIndex"] < 0 else item["headingIndex"], "heading": "本段建议",
+                   "items": [{"id": "object:" + item["id"], "heading": "本段建议", "kind": "guidance", "sourceText": table_writing_notes(item["body"]),
+                              "text": (row[6] or {}).get("blockGuidance", {}).get(item["id"], table_writing_notes(item["body"])),
+                              "overridden": item["id"] in (row[6] or {}).get("blockGuidance", {}),
+                              "targetObjectIds": [item["id"]], "targetText": item["label"]}]} for item in selected]
+        return {"data": {"revision": row[12], "groups": groups, "notices": []}, "requestId": request.state.request_id}
+    if body.scope == "document":
+        indices = [None, *range(len(headings))]
+    elif body.scope == "selection":
+        indices = [_selected_heading(row[7], body.selection)]
+        selected_ids = selection_ids(row[7], body.selection.model_dump(), objects)
+    else:
+        if body.headingIndex is None or body.headingIndex >= len(headings):
+            raise AppError(422, "VALIDATION_FAILED", "请选择有效章节。")
+        indices = [body.headingIndex]
+    template = row[6] or {}
+    groups, notices = [], []
+    for index in indices:
+        try:
+            items = effective_advice(template, row[7], index, objects, selected_ids)
+        except ValueError as error:
+            raise AppError(422, "GUIDANCE_UNMATCHED", str(error)) from None
+        notices.extend(item["text"] for item in items if item["kind"] == "notice")
+        items = [item for item in items if item["kind"] != "notice"]
+        if index is not None or items or not headings:
+            groups.append({"headingIndex": index, "heading": "正文" if index is None else headings[index]["text"],
+                           "headingPath": "正文" if index is None else heading_paths[index], "items": items})
+    return {"data": {"revision": row[12], "groups": groups, "notices": list(dict.fromkeys(notices))},
+            "requestId": request.state.request_id}
+
+
+@router.patch("/documents/{document_id}/writing-guidance")
+def set_writing_guidance(request: Request, document_id: str, body: GuidancePatchBody) -> dict:
+    from app.document_guidance import object_spans, EDITABLE_KINDS
+    from app.document_assignments import require_scope_write
+    session = document_principal(request)
+    did = _uuid(document_id, "documentId")
+    with connect() as connection:
+        with connection.transaction(immediate=True):
+            row = _document_row(connection, did, session.user_id, _admin(session.roles), "edit")
+            if row[12] != body.expectedRevision:
+                raise revision_conflict(connection, did)
+            template = row[6] or {}
+            structure = template.get("importStructure") or {}
+            objects = object_spans(connection, row)
+            editable = {item["id"] for item in objects if item["kind"] in EDITABLE_KINDS}
+            source = {item["id"]: item["text"] for item in structure.get("blocks", [])
+                      if item["kind"] in {"guidance", "placeholder", "example"}}
+            if (any(not item.id.startswith("object:") for item in body.items) and not structure.get("reviewed")) or len({item.id for item in body.items}) != len(body.items):
+                raise AppError(422, "VALIDATION_FAILED", "编写建议来源未确认或重复。")
+            overrides = dict(template.get("writingGuidance", {}))
+            block_guidance = dict(template.get("blockGuidance", {}))
+            for item in body.items:
+                if item.id.startswith("object:"):
+                    object_id = item.id.removeprefix("object:")
+                    if object_id not in editable:
+                        raise AppError(422, "GUIDANCE_TARGET_UNMATCHED", "编写建议目标不存在或不支持。")
+                    require_scope_write(connection, did, session.user_id, [object_id])
+                    if item.text is None or not item.text.strip():
+                        block_guidance.pop(object_id, None)
+                    else:
+                        block_guidance[object_id] = item.text.strip()
+                    continue
+                if item.id not in source:
+                    raise AppError(422, "VALIDATION_FAILED", "编写建议不属于此文档的模板。")
+                require_scope_write(connection, did, session.user_id, template.get("guidanceTargets", {}).get(item.id))
+                if item.text is None or item.text.strip() == source[item.id]:
+                    overrides.pop(item.id, None)
+                else:
+                    if not item.text.strip():
+                        raise AppError(422, "VALIDATION_FAILED", "编写建议不能为空；可恢复模板原文。")
+                    overrides[item.id] = item.text.strip()
+            if overrides != template.get("writingGuidance", {}) or block_guidance != template.get("blockGuidance", {}):
+                ensure_document_objects(connection, did)
+                record_current_version(connection, did, expected_revision=row[12])
+                updated = connection.execute(
+                    "UPDATE documents SET format_template=%s, revision=revision+1, updated_at=now() WHERE id=%s AND revision=%s",
+                    [json.dumps({**template, "writingGuidance": overrides, "blockGuidance": block_guidance}, ensure_ascii=False), did, row[12]],
+                )
+                if updated.rowcount != 1:
+                    raise revision_conflict(connection, did)
+                record_current_version(connection, did, expected_revision=row[12]+1, kind="writing_guidance")
+                record_commit(connection, did, base_revision=row[12], markdown=None, kind="writing_guidance")
+            row = _document_row(connection, did, session.user_id, _admin(session.roles))
+            result = _content_result(request, row)
+            result["data"]["formatTemplate"] = row[6]
+            return result
+
+
+async def _keep_draft_alive(upstream, interval=15):
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(upstream))
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                # 空行保活，不改写用户看到的编写阶段或尚未完成的草稿。
+                yield "\n"
+                continue
+            ready, pending = pending, None
+            try:
+                item = ready.result()
+            except StopAsyncIteration:
+                return
+            yield item
+    finally:
+        if pending is not None:
+            pending.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await pending
+        await upstream.aclose()
+
+
 @router.post("/documents/{document_id}/sections/draft", response_model=None)
 def draft_section(request: Request, document_id: str, body: SectionDraftBody, stream: bool = False) -> dict[str, object] | StreamingResponse:
+    from app.document_guidance import object_spans, selection_ids, effective_advice, writing_context
+    from app.document_assignments import require_scope_write, require_manage
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
@@ -1048,6 +1250,10 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     if selected_only:
         if body.scope != "selection" or body.selection is None or body.selectedText != body.selection.text:
             raise AppError(422, "SELECTION_REQUIRED", "请重新选择正文并生成，选区必须包含具体段落和位置。")
+        actual_heading = _selected_heading(row[7], body.selection)
+        if body.headingIndex is not None and body.headingIndex != actual_heading:
+            raise AppError(422, "GUIDANCE_SCOPE_MISMATCH", "选中文字与当前章节不一致，请重新选择正文。")
+        body.headingIndex = actual_heading
         # Reject protected Word locations before spending a model call.
         with connect() as connection:
             _check_word(connection, row, _replace_selection(row[7], body.selection, body.selection.text + "（编写位置检查）"))
@@ -1071,7 +1277,23 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     read_sections: set[int] = set()
     planned_sections: set[int] = set()
     with connect() as connection:
+        from app.document_references import writing_references
+        references = writing_references(connection, row, session)
         memory_targets = section_memory_targets(connection, did, row[7], row[12])
+        objects = object_spans(connection, row)
+        target_ids = selection_ids(row[7], body.selection.model_dump(), objects) if selected_only else [
+            item["id"] for item in objects if item["kind"] != "heading" and
+            (whole_document or item["headingIndex"] == (body.headingIndex if body.headingIndex is not None else -1))]
+        if target_ids:
+            require_scope_write(connection, did, session.user_id, target_ids)
+        else:
+            require_manage(connection, did, session.user_id)
+        try:
+            context = writing_context(row[6] or {}, row[7], objects, None if whole_document else [body.headingIndex if body.headingIndex is not None else -1])
+            advice = effective_advice(row[6] or {}, row[7], body.headingIndex, objects, target_ids) if selected_only else None
+        except ValueError as error:
+            raise AppError(422, "GUIDANCE_UNMATCHED", str(error)) from None
+        connection.commit()
     inputs = dict(
         project_id=row[1], heading=str(heading["text"]), level=int(heading["level"]),
         existing=existing, instruction=body.instruction, base_url=base_url, model=model,
@@ -1082,8 +1304,23 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         read_sections=read_sections, planned_sections=planned_sections, source_revision=row[12],
         writing_skill=_writing_skill(row),
         template_structure=(row[6] or {}).get("importStructure"),
+        guidance_overrides=(row[6] or {}).get("writingGuidance", {}),
+        sequential_document=whole_document,
+        edit_in_place=whole_document,
         memory_targets=memory_targets,
+        guidance_context=context,
+        references=references,
     )
+    if selected_only:
+        inputs["effective_guidance"] = advice
+    elif not whole_document:
+        module = context.get(body.headingIndex, {})
+        inputs["effective_guidance"] = module.get("guidance", [])
+        start = int(heading["bodyStart"])
+        # Existing section text is stripped; preserve offsets relative to that exact text.
+        start += len(row[7][start:]) - len(row[7][start:].lstrip())
+        inputs["writing_modules"] = [{**item, "start": item["start"] - start, "end": item["end"] - start}
+                                     for item in module.get("modules", [])]
     rules = section_rules(heading=inputs["heading"], document_name=row[2], template_name=row[15] or "",
                           instruction=body.instruction, existing=existing, selected_only=inputs["selected_only"], writing_skill=_writing_skill(row))
     inputs["rules"] = rules
@@ -1107,12 +1344,17 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
 
         async def generate():
             content, last_sent = "", 0.0
+            stage = "preparing"
+            target = "全文" if whole_document else inputs["heading"]
             allowed_modes = None
             upstream = stream_section_text(**inputs, include_progress=True)
             try:
                 yield event("start")
                 async for update in upstream:
                     if isinstance(update, dict):
+                        stage = update["stage"]
+                        if stage == "module" and "：" in update["message"]:
+                            target = update["message"]
                         yield event("progress", message=update["message"], stage=update["stage"])
                         continue
                     content = update
@@ -1123,29 +1365,45 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
                         yield event("draft", content)
                         last_sent = monotonic()
                 yield event("progress", message="正在检查正文规范与 Word 排版", stage="validation")
-                if whole_document:
-                    edits = _parse_edits(content, row, complete=True, read_sections=read_sections,
-                                         planned_sections=planned_sections, instruction=body.instruction)
-                    with connect() as connection:
-                        _check_word(connection, row, _apply_edits(row[7], edits))
-                else:
+                stage = "validation"
+                if not whole_document:
                     content = validate_draft(content, rules, selected_only=inputs["selected_only"], heading=inputs["heading"],
                                              preserve_images=not inputs["selected_only"], existing=existing)
-                    if not inputs["selected_only"]:
-                        with connect() as connection:
-                            allowed_modes = _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction)
-                    else:
-                        with connect() as connection:
+
+                def check_word():
+                    with connect() as connection:
+                        if whole_document:
+                            edits = _parse_edits(content, row, complete=True, read_sections=read_sections,
+                                                 planned_sections=planned_sections, instruction=body.instruction)
+                            _check_word(connection, row, _apply_edits(row[7], edits))
+                        elif not inputs["selected_only"]:
+                            return _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction)
+                        else:
                             _check_word(connection, row, _replace_selection(row[7], body.selection, content))
+                    return None
+
+                allowed_modes = await asyncio.to_thread(check_word)
                 yield event("done", content, allowed_modes=allowed_modes)
             except (DraftFormatError, AppError) as exc:
                 yield event("error", message=exc.message if isinstance(exc, AppError) else str(exc))
-            except Exception:
-                yield event("error", message="AI 编写中断，请重试。")
+            except APITimeoutError:
+                yield event("error", message="模型服务长时间未返回内容，请检查模型服务，或调大 AI_READ_TIMEOUT_SECONDS 后重试。")
+            except Exception as exc:
+                # 不记录异常正文：模型服务错误可能携带密钥、提示词或用户原文。
+                logger.error("document draft failed request=%s document=%s stage=%s error=%s status=%s\n%s",
+                             request.state.request_id, did, stage, type(exc).__name__, getattr(exc, "status_code", None),
+                             "".join(traceback.format_tb(exc.__traceback__)))
+                if isinstance(exc, (APIConnectionError, TransportError)):
+                    message = "模型服务连接中断"
+                elif isinstance(exc, APIStatusError):
+                    message = f"模型服务请求失败（HTTP {exc.status_code}）"
+                else:
+                    message = "编写服务处理失败"
+                yield event("error", message=f"{message}；{target}。原文未修改，请重试。")
             finally:
                 await upstream.aclose()
 
-        return StreamingResponse(generate(), media_type="application/x-ndjson",
+        return StreamingResponse(_keep_draft_alive(generate()), media_type="application/x-ndjson",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
     try:
         content = draft_section_text(**inputs)

@@ -60,6 +60,8 @@ LATER_ARTIFACTS: dict[int, tuple[tuple[str, ...], ...]] = {
     115: (("table", "document_conflict_mine_snapshots"),),
     116: (("table", "project_member_events"), ("column", "projects", "members_revision")),
     117: (("table", "template_document_versions"), ("column", "documents", "template_version_id")),
+    118: (("table", "document_object_assignments"), ("table", "document_assignment_events"),
+          ("column", "documents", "assignments_enabled"), ("column", "documents", "assignments_revision")),
 }
 
 

@@ -123,7 +123,7 @@ def validate_structure(source: dict, candidate: dict) -> dict:
             raise ValueError("模板块标识重复或不正确。")
         seen.add(item["id"])
         expected = source["blocks"][index]
-        if set(item) != set(expected) or any(item.get(key) != expected.get(key) for key in immutable):
+        if set(item) - {"targetBlockIds"} != set(expected) - {"targetBlockIds"} or any(item.get(key) != expected.get(key) for key in immutable):
             raise ValueError("不能修改原始内容、位置或保护标记。")
         kind = item["kind"]
         if not isinstance(kind, str) or kind not in KINDS:
@@ -163,11 +163,12 @@ def validate_structure(source: dict, candidate: dict) -> dict:
             raise ValueError("编写指导必须关联到一个标题。")
     if result["reviewed"] and not headings:
         raise ValueError("模板至少需要一个标题才能确认。")
+    validate_guidance_targets(result["blocks"])
     result["reviewed"] = candidate["reviewed"]
     return result
 
 
-def clean_template(path: str | Path, structure: dict) -> bytes:
+def clean_template(path: str | Path, structure: dict, *, target_paths: dict[str, str] | None = None) -> bytes:
     """Clear only reviewed instruction text; retain styles, cells and every other ZIP part."""
     parsed = parse_template(path)
     parsed["revision"] = structure["revision"]
@@ -208,6 +209,10 @@ def clean_template(path: str | Path, structure: dict) -> bytes:
                     properties.remove(item)
                 outline = etree.SubElement(properties, qn("w:outlineLvl"))
                 outline.set(qn("w:val"), str(level - 1 if level is not None else 9))
+    if target_paths is not None or any(block.get("targetBlockIds") for block in checked["blocks"]):
+        paths = cleaned_guidance_paths(document, checked, locations)
+        if target_paths is not None:
+            target_paths.update(paths)
     output = BytesIO()
     with ZipFile(path) as source, ZipFile(output, "w") as target:
         for entry in source.infolist():
@@ -216,7 +221,39 @@ def clean_template(path: str | Path, structure: dict) -> bytes:
     return output.getvalue()
 
 
-def guidance_for_section(structure: dict | None, markdown: str, heading_index: int | None) -> list[dict]:
+def validate_guidance_targets(blocks: list[dict]) -> None:
+    """A local instruction may only bind surviving, non-empty body paragraphs or whole tables."""
+    by_id = {block["id"]: block for block in blocks}
+    for block in blocks:
+        targets = block.get("targetBlockIds", [])
+        if not isinstance(targets, list) or any(not isinstance(value, str) for value in targets) or len(set(targets)) != len(targets):
+            raise ValueError("编写指导的目标段落或表格重复或不正确。")
+        if targets and block["kind"] != "guidance":
+            raise ValueError("只有编写指导可以指定目标段落或表格。")
+        for target_id in targets:
+            target = by_id.get(target_id)
+            if target is None:
+                raise ValueError("编写指导绑定的段落或表格已删除或未匹配，请重新绑定。")
+            if (target["kind"] not in {"body", "table"} or target.get("tableId") or target.get("protected")
+                    or not target.get("text", "").strip()):
+                raise ValueError("编写指导只能绑定非空正文段落或整张表格；空填写位置、受保护内容和单元格暂不支持。")
+
+
+def cleaned_guidance_paths(document, structure: dict, locations: dict) -> dict[str, str]:
+    remaining = {element: location for location, element, _ in _elements(document)}
+    paths = {block["id"]: remaining[locations[block["path"]]] for block in structure["blocks"]
+             if block.get("path") in locations and locations[block["path"]] in remaining}
+    targets = {target for block in structure["blocks"] for target in block.get("targetBlockIds", [])}
+    by_id = {block["id"]: block for block in structure["blocks"]}
+    for target in targets:
+        element = locations.get(by_id[target].get("path"))
+        if target not in paths or not "".join(element.xpath(".//w:t/text()")).strip():
+            raise ValueError("编写指导目标在清理提示词后没有正文，空填写模块暂不支持，请重新绑定。")
+    return paths
+
+
+def guidance_for_section(structure: dict | None, markdown: str, heading_index: int | None,
+                         overrides: dict[str, str] | None = None) -> list[dict]:
     """Match the complete heading path; renamed/moved ambiguous headings never borrow rules."""
     if not structure or not structure.get("reviewed") or heading_index is None or heading_index < 0:
         return []
@@ -249,7 +286,10 @@ def guidance_for_section(structure: dict | None, markdown: str, heading_index: i
     if not ancestors and any(block["kind"] == "guidance" for block in structure["blocks"]):
         raise ValueError("当前标题与来源模板无法对应，无法确定 AI 提示词，请先核对标题及模板。")
     result = [{"heading": next(item["sourceText"] for item in structure["blocks"] if item["id"] == block["headingId"]),
-             "kind": block["kind"], "text": block["text"]}
+             "id": block["id"], "kind": block["kind"], "sourceText": block["text"],
+             **({"targetBlockIds": block["targetBlockIds"]} if "targetBlockIds" in block else {}),
+             "text": (overrides or {}).get(block["id"], block["text"]),
+             "overridden": block["id"] in (overrides or {})}
             for block in structure["blocks"]
             if block["kind"] in {"guidance", "placeholder", "example"} and block["headingId"] in ancestors]
     if not any(path == tuple(stack) for path in paths.values()) and ancestors:

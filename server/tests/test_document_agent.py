@@ -62,6 +62,166 @@ def system_text(messages):
     return "\n".join(str(item.content) for item in messages if isinstance(item, SystemMessage))
 
 
+def test_effective_advice_reaches_final_model_and_user_edit_supersedes_source(monkeypatch):
+    model = ObservedModel(responses=[call("prepare_document_edit", objective="按当前本篇建议编写。"),
+                                     AIMessage(content="已采用当前要求的正文。")])
+    values = context(model, monkeypatch, template_structure={"reviewed": True, "blocks": [
+        {"id": "target", "kind": "heading", "headingLevel": 1, "sourceText": "目标"},
+        {"id": "guide", "kind": "guidance", "headingId": "target", "text": "原模板要求。"},
+    ]}, guidance_overrides={"guide": "本篇改写后的有效建议。"})
+    assert module.draft_section_text(**values) == "已采用当前要求的正文。"
+    for messages, _tools in model.observed:
+        text = system_text(messages)
+        assert '"text": "本篇改写后的有效建议。"' in text
+        assert '"sourceText": "原模板要求。"' in text
+    assert "text 是本次有效要求" in system_text(model.observed[-1][0])
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_document_generation_calls_model_separately_in_module_order_and_scopes_advice(monkeypatch, streaming):
+    models = [ObservedModel(responses=[call("prepare_document_edit", objective="当前模块保留原文。"), AIMessage(content="甲模块原文。")]),
+              ObservedModel(responses=[call("prepare_document_edit", objective="当前模块应用建议。"), AIMessage(content="乙模块修改后。")])]
+    values = context(models[0], monkeypatch, heading="全文", heading_index=None, level=0, whole_document=True,
+                     sequential_document=True, full_markdown="# 甲\n\n甲模块原文。\n\n# 乙\n\n乙模块原文。", existing="",
+                     read_sections=set(), planned_sections=set(), template_structure={"reviewed": True, "blocks": [
+        {"id": "a", "kind": "heading", "headingLevel": 1, "sourceText": "甲"},
+        {"id": "a-guide", "kind": "guidance", "headingId": "a", "text": "甲模块独有建议。"},
+        {"id": "b", "kind": "heading", "headingLevel": 1, "sourceText": "乙"},
+        {"id": "b-guide", "kind": "guidance", "headingId": "b", "text": "乙模块独有建议。"},
+    ]})
+    created = []
+    def factory(**settings):
+        model = models[len(created)]
+        created.append(model)
+        return model
+    monkeypatch.setattr(module, "ChatOpenAI", factory)
+    if streaming:
+        async def collect():
+            return [update async for update in module.stream_section_text(**values, include_progress=True)]
+        updates = asyncio.run(collect())
+        content = [update for update in updates if isinstance(update, str)]
+        assert json.loads(content[0]) == {"edits": [{"headingIndex": 0, "content": "甲模块原文。"}]}
+        assert {"edits": []} in [json.loads(update) for update in content]
+        result = json.loads(content[-1])
+        messages = [update["message"] for update in updates if isinstance(update, dict)]
+        assert any("1/2：甲" in message for message in messages)
+        assert any("2/2：乙" in message for message in messages)
+    else:
+        result = json.loads(module.draft_section_text(**values))
+    assert result == {"edits": [{"headingIndex": 1, "content": "乙模块修改后。"}]}
+    assert values["read_sections"] == values["planned_sections"] == {0, 1}
+    assert len(created) == 2
+    for model, own, other in zip(models, ["甲模块独有建议。", "乙模块独有建议。"], ["乙模块独有建议。", "甲模块独有建议。"]):
+        final = system_text(model.observed[-1][0])
+        assert own in final and other not in final
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_whole_document_writes_empty_leaf_sections_without_inventing_preface(monkeypatch, streaming):
+    models = [ObservedModel(responses=[call("prepare_document_edit", objective="补充当前空章节。"),
+                                      AIMessage(content=body)]) for body in ["甲功能正文。", "乙功能正文。"]]
+    values = context(models[0], monkeypatch, heading="全文", heading_index=None, level=0, whole_document=True,
+                     sequential_document=True, full_markdown="# 功能\n\n## 甲\n\n## 乙\n", existing="",
+                     instruction="补充各功能的正文。", read_sections=set(), planned_sections=set())
+    created = []
+
+    def factory(**settings):
+        model = models[len(created)]
+        created.append(model)
+        return model
+
+    monkeypatch.setattr(module, "ChatOpenAI", factory)
+    if streaming:
+        async def collect():
+            return [item async for item in module.stream_section_text(**values)]
+        result = json.loads(asyncio.run(collect())[-1])
+    else:
+        result = json.loads(module.draft_section_text(**values))
+    assert result == {"edits": [{"headingIndex": 1, "content": "甲功能正文。"},
+                                {"headingIndex": 2, "content": "乙功能正文。"}]}
+    assert values["read_sections"] == values["planned_sections"] == {1, 2}
+    assert len(created) == 2
+
+
+def test_sequential_module_validates_hard_constraints_before_continuing(monkeypatch):
+    model = ObservedModel(responses=[call("prepare_document_edit", objective="编写第一个模块。"),
+                                     AIMessage(content="含禁止词的修改正文。")])
+    values = context(model, monkeypatch, heading="全文", heading_index=None, whole_document=True, sequential_document=True,
+                     full_markdown="# 甲\n\n甲原文。\n\n# 乙\n\n乙原文。", writing_skill={"mode": "selected", "id": "test",
+                     "name": "约束", "revision": 0, "baseKind": "general", "instructions": "遵循约束。",
+                     "forbiddenTerms": ["禁止词"], "maxChars": 1000, "documentInstructions": ""})
+    with pytest.raises(module.DraftFormatError, match="禁止|禁用"):
+        module.draft_section_text(**values)
+    assert len(model.observed) == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("bad_body", ["```markdown\n甲模块修改后。\n```", "<p>甲模块修改后。</p>"])
+def test_whole_document_handles_module_wrapper_and_repairs_html_once(monkeypatch, streaming, bad_body):
+    responses = [call("prepare_document_edit", objective="编写甲模块。"), AIMessage(content=bad_body)]
+    if bad_body.startswith("<"):
+        responses.append(AIMessage(content="甲模块修改后。"))
+    models = [ObservedModel(responses=responses), ObservedModel(responses=[
+        call("prepare_document_edit", objective="编写乙模块。"), AIMessage(content="乙模块修改后。")])]
+    values = context(models[0], monkeypatch, heading="全文", heading_index=None, whole_document=True,
+                     sequential_document=True, full_markdown="# 甲\n\n甲原文。\n\n# 乙\n\n乙原文。")
+    created = []
+    def factory(**settings):
+        model = models[len(created)]
+        created.append(model)
+        return model
+    monkeypatch.setattr(module, "ChatOpenAI", factory)
+    if streaming:
+        async def collect():
+            return [update async for update in module.stream_section_text(**values, include_progress=True)]
+        output = asyncio.run(collect())
+        body = [item for item in output if isinstance(item, str)]
+        assert all("<p>" not in item and "```" not in item for item in body)
+        result = json.loads(body[-1])
+        if bad_body.startswith("<"):
+            assert any(isinstance(item, dict) and item["message"] == "正在修正当前模块的输出格式" for item in output)
+    else:
+        result = json.loads(module.draft_section_text(**values))
+    assert result == {"edits": [{"headingIndex": 0, "content": "甲模块修改后。"},
+                                {"headingIndex": 1, "content": "乙模块修改后。"}]}
+    assert len(models[0].observed) == (3 if bad_body.startswith("<") else 2)
+    assert models[0].observed[-1][1] == [] and len(created) == 2
+
+
+def test_format_repair_stops_after_one_attempt_and_keeps_word_guard(monkeypatch):
+    model = ObservedModel(responses=[call("prepare_document_edit", objective="编写本节。"),
+                                     AIMessage(content="<p>错误正文</p>"), AIMessage(content="<p>仍错误</p>")])
+    values = context(model, monkeypatch)
+    async def collect():
+        return [update async for update in module.stream_section_text(**values, include_progress=True)]
+    with pytest.raises(module.DraftFormatError, match="HTML"):
+        asyncio.run(collect())
+    assert len(model.observed) == 3 and model.observed[-1][1] == []
+
+
+def test_sequential_stream_emits_partial_and_closes_current_agent_on_stop(monkeypatch):
+    closed, started = [], []
+    class Agent:
+        async def astream(self, inputs, **config):
+            try:
+                yield "messages", (AIMessageChunk(content="首段正在编写", id="partial"), {"langgraph_node": "model"})
+                raise AssertionError("停止后不能继续生成")
+            finally:
+                closed.append(True)
+    def factory(**values):
+        started.append(values["heading_index"])
+        return Agent(), {}, {"ready": True, "templateNotices": [], "recursion_limit": 100}
+    monkeypatch.setattr(module, "_section_agent", factory)
+    async def stop():
+        stream = module.stream_section_text(sequential_document=True, whole_document=True,
+                                             full_markdown="# 甲\n\n原文。\n\n# 乙\n\n原文。")
+        result = await anext(stream)
+        await stream.aclose()
+        return result
+    assert json.loads(asyncio.run(stop())) == {"edits": [{"headingIndex": 0, "content": "首段正在编写"}]}
+    assert started == [0] and closed == [True]
+
+
 def test_prepared_section_generates_prose_and_final_model_has_no_tools(monkeypatch):
     model = ObservedModel(responses=[call("prepare_document_edit", objective="润色目标章节。"),
                                      AIMessage(content="保留事实后的本节正文。")])
@@ -429,6 +589,21 @@ def test_stream_progress_reports_real_operations_without_exposing_reasoning(monk
     assert any(value["message"] == "已完整读取 1 个章节" for value in statuses)
     assert statuses[-1] == {"type": "progress", "stage": "writing", "message": "正在生成正文"}
     assert output[-1] == "最终正文。" and "私密" not in json.dumps(output, ensure_ascii=False)
+
+
+def test_skill_progress_distinguishes_definition_chapter_and_template_reference(monkeypatch):
+    prepared = {"ready": False, "templateNotices": []}
+    class Agent:
+        async def astream(self, inputs, **kwargs):
+            for suffix in ("SKILL.md", "templates/project.json", "references/template.md"):
+                yield "updates", {"model": {"messages": [call("read_file", file_path="/skills/gjb438c/srs/" + suffix)]}}
+            prepared["ready"] = True
+            yield "updates", {"model": {"messages": [AIMessage(content="正文。") ]}}
+    monkeypatch.setattr(module, "_section_agent", lambda **kwargs: (Agent(), {}, prepared))
+    async def collect():
+        return [value async for value in module.stream_section_text(include_progress=True)]
+    statuses = [value["message"] for value in asyncio.run(collect()) if isinstance(value, dict) and value["stage"] == "skills"]
+    assert statuses == ["正在核对 Skill 说明", "正在核对章节参考规则", "正在核对配套模板参考"]
 
 
 @pytest.mark.parametrize("batch", [False, True])

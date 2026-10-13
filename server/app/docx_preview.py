@@ -257,6 +257,8 @@ def _run_css(paragraph: Paragraph, run: Run | None, theme, table=None, *, east_a
     decorations = []
     if "u" in properties and _on(properties["u"]):
         decorations.append("underline")
+        css["text-decoration-thickness"] = "0.5pt"
+        css["text-underline-offset"] = "0.1em"
     if "strike" in properties and _on(properties["strike"]):
         decorations.append("line-through")
     if decorations:
@@ -279,15 +281,25 @@ def _paragraph_css(paragraph: Paragraph, table=None) -> dict[str, str]:
     alignment = properties.get("jc", {}).get("val", "left")
     css["text-align"] = {"both": "justify", "distribute": "justify", "start": "left", "end": "right"}.get(alignment, alignment) if alignment in {"left", "right", "center", "both", "distribute", "start", "end"} else "left"
     indent = properties.get("ind", {})
+    # Cancelling a numbered style also cancels its inherited list indentation in Word.
+    if (paragraph._p.xpath("./w:pPr/w:numPr/w:numId[@w:val='0']")
+            and not paragraph._p.xpath("./w:pPr/w:ind")
+            and any(style.xpath("./w:pPr/w:numPr/w:numId") for style in _style_chain(paragraph.style))):
+        indent = {}
     for name, target in (("left", "margin-left"), ("right", "margin-right"), ("firstLine", "text-indent")):
         if (value := _measure(indent.get(name))) is not None:
             css[target] = value
-        if (value := _number(indent.get(name + "Chars"), 100)) is not None:
+        # Word ignores zero character indents when a physical indent is present.
+        if (value := _number(indent.get(name + "Chars"), 100)) is not None and (value or name not in indent):
             css[target] = f"{value:g}em"
     if "hanging" in indent and (value := _number(indent["hanging"], 20)) is not None:
         css["text-indent"] = f"{-value:g}pt"
-    if (value := _number(indent.get("hangingChars"), 100)) is not None:
+    if (value := _number(indent.get("hangingChars"), 100)) is not None and (value or "hanging" not in indent):
         css["text-indent"] = f"{-value:g}em"
+    if "\t" in paragraph.text:
+        tabs = paragraph.part.document.settings.element.find(_W + "defaultTabStop")
+        step = _number(tabs.get(qn("w:val")) if tabs is not None else "720", 20)
+        css["tab-size"] = f"{step:g}pt" if step is not None and step > 0 else "36pt"
     spacing = properties.get("spacing", {})
     if "line" in spacing:
         # Word 的“多倍行距”是相对字体自身的单倍行高（中文字体约 1.3 倍字号），不是相对字号；
@@ -349,15 +361,20 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
             # HTML-only list/table serialization whitespace has no Word run.
             mapped[new_start:new_end] = [css | {"white-space": "normal"}] * (new_end - new_start)
     offset = 0
+    word_tabs = bool(node.get("data-word-tab-stop"))
     for owner, attribute, value in text_nodes:
         groups = []
         for index, (char, css) in enumerate(zip(value, mapped[offset:offset + len(value)])):
+            if char == "\t" and word_tabs:
+                css = css | {"display": "inline-block", "width": "0pt", "overflow": "hidden", "line-height": "1", "white-space": "pre"}
+                if "underline" in css.get("text-decoration", ""):
+                    css = css | {"border-bottom": "0.5pt solid currentColor", "text-decoration": "none", "transform": "translateY(0.1em)"}
             if attribute == "tail" and owner.tag == "br" and index == 0 and char == "\n":
                 # This character is Python-Markdown's HTML serialization
                 # whitespace; <br> already displays the native Word break.
                 css = css | {"white-space": "normal"}
             # 测试工程师 N7：同一样式的字收集成列表再拼接（逐字拼字符串在长段落上是二次方）
-            if groups and (groups[-1][1] is css or groups[-1][1] == css):
+            if char != "\t" and groups and groups[-1][0] != ["\t"] and (groups[-1][1] is css or groups[-1][1] == css):
                 groups[-1][0].append(char)
             else:
                 groups.append(([char], css))
@@ -371,6 +388,8 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
         for chars, css in groups:
             span = html.Element("span")
             span.text = "".join(chars)
+            if span.text == "\t" and word_tabs:
+                span.set("data-word-tab", "1")
             _set_css(span, css)
             parent.insert(position, span)
             position += 1
@@ -439,7 +458,15 @@ def _decorate_paragraph(node, paragraphs, theme, table=None) -> None:
         return
     paragraph = paragraphs[0]
     sample = next((run for run in paragraph.runs if run.text.strip()), None)
-    _set_css(node, _run_css(paragraph, sample, theme, table) | _paragraph_css(paragraph, table))
+    css = _run_css(paragraph, sample, theme, table) | _paragraph_css(paragraph, table)
+    if not node.text_content().strip():
+        css["min-height"] = "1lh"
+    _set_css(node, css)
+    # shortcut: custom/right/center tab stops stay in native Word preview; only default left tabs are positioned here.
+    if "tab-size" in css and css["text-align"] in {"left", "justify"} and not any(
+        source.xpath("./w:pPr/w:tabs/w:tab") for source in _style_chain(paragraph.style) + [paragraph._p]
+    ):
+        node.set("data-word-tab-stop", css["tab-size"])
     _project_runs(node, paragraphs, theme, table)
 
 
@@ -449,20 +476,80 @@ def _decorate_table(node, table: Table, theme) -> None:
     if widths and all(width is not None for width in widths):
         css["width"] = f"{sum(width.pt for width in widths):g}pt"
         css["max-width"] = "100%"
-    _set_css(node, css)
-    borders = {}
+        columns = html.Element("colgroup")
+        for width in widths:
+            column = html.Element("col")
+            _set_css(column, {"width": f"{width.pt:g}pt"})
+            columns.append(column)
+        node.insert(0, columns)
+    borders, table_properties = {}, {}
     for source in (_style_chain(table.style) if table.style else []) + [table._tbl]:
+        for properties in source.findall(_W + "tblPr"):
+            for property_node in properties:
+                table_properties[etree.QName(property_node).localname] = property_node
         for properties in source.findall(f"./{_W}tblPr/{_W}tblBorders"):
             for border in properties:
                 borders[etree.QName(border).localname] = border
+    seen = {}
     for row_index, (target_row, source_row) in enumerate(zip(node.xpath(".//tr"), table.rows)):
-        for column_index, (target_cell, source_cell) in enumerate(zip(target_row.xpath("./th|./td"), source_row.cells)):
-            _decorate_paragraph(target_cell, source_cell.paragraphs, theme, table)
-            cell_css = dict(item.split(":", 1) for item in target_cell.get("style", "").split(";") if ":" in item)
-            cell_css.update({"vertical-align": "top", "font-weight": "400", "border": "none"})
+        if source_row.height is not None:
+            _set_css(target_row, {"height": f"{source_row.height.pt:g}pt"})
+        source_cells = source_row.cells
+        target_cells = target_row.xpath("./th|./td")
+        for column_index, (target_cell, source_cell) in enumerate(zip(target_cells, source_cells)):
+            paragraphs = source_cell.paragraphs
+            while len(paragraphs) > 1 and not paragraphs[0].text.strip():
+                paragraphs = paragraphs[1:]
+            while len(paragraphs) > 1 and not paragraphs[-1].text.strip():
+                paragraphs = paragraphs[:-1]
+            # Paragraph margins do not work on td; retain each native paragraph inside it.
+            if len(paragraphs) == 1:
+                paragraph_node = html.Element("p")
+                paragraph_node.text, target_cell.text = target_cell.text, None
+                paragraph_node.extend(list(target_cell))
+                target_cell.append(paragraph_node)
+                paragraph_node.set("data-word-cell-paragraph", "1")
+                _decorate_paragraph(paragraph_node, paragraphs, theme, table)
+            else:
+                for child in list(target_cell):
+                    target_cell.remove(child)
+                target_cell.text = None
+                for index, paragraph in enumerate(paragraphs):
+                    if index:
+                        br = html.Element("br")
+                        _set_css(br, {"display": "none"})
+                        target_cell.append(br)
+                    paragraph_node = html.Element("p")
+                    text = paragraph.text
+                    if index == 0:
+                        text = text.lstrip()
+                    if index == len(paragraphs) - 1:
+                        text = text.rstrip()
+                    lines = text.split("\n")
+                    paragraph_node.text = lines[0]
+                    for line in lines[1:]:
+                        br = html.Element("br")
+                        br.tail = line
+                        paragraph_node.append(br)
+                    paragraph_node.set("data-word-cell-paragraph", "1")
+                    target_cell.append(paragraph_node)
+                    _decorate_paragraph(paragraph_node, [paragraph], theme, table)
+            cell_css = {"vertical-align": "top", "font-weight": "400", "border": "none",
+                        "padding-top": "0pt", "padding-bottom": "0pt", "padding-left": "5.4pt", "padding-right": "5.4pt"}
             cell_sources = _table_style_sources(table, source_cell.paragraphs[0], "tcPr")
             if source_cell._tc.tcPr is not None:
                 cell_sources.append(source_cell._tc.tcPr)
+            for source, margin_kind in [
+                *((source, "tblCellMar") for source in (_style_chain(table.style) if table.style else []) + [table._tbl.tblPr]),
+                *((source, "tcMar") for source in cell_sources),
+            ]:
+                for margins in source.findall(f".//{_W}{margin_kind}"):
+                    for margin in margins:
+                        side = {"start": "left", "end": "right"}.get(etree.QName(margin).localname, etree.QName(margin).localname)
+                        if side in {"top", "right", "bottom", "left"} and margin.get(qn("w:type"), "dxa") == "dxa":
+                            value = _measure(margin.get(qn("w:w")))
+                            if value is not None:
+                                cell_css["padding-" + side] = value
             for properties in cell_sources:
                 for shading in properties.findall(_W + "shd"):
                     fill = shading.get(qn("w:fill"), "")
@@ -487,11 +574,58 @@ def _decorate_table(node, table: Table, theme) -> None:
                 width = _measure(border.get(qn("w:sz"), "4"), 8) or "0.5pt"
                 color = _color({"val": border.get(qn("w:color"), "000000")}, theme[0]) or "#000000"
                 cell_css["border-" + side] = "none" if mode in {"nil", "none"} else f"{width} { {'double': 'double', 'dotted': 'dotted', 'dashed': 'dashed'}.get(mode, 'solid')} {color}"
-            # Markdown already represents merged cells as grid entries.  Use
-            # grid widths here rather than duplicating a merged cell's width.
             if column_index < len(widths) and widths[column_index] is not None:
                 cell_css["width"] = f"{widths[column_index].pt:g}pt"
             _set_css(target_cell, cell_css)
+        # python-docx repeats the same w:tc for every occupied grid position.
+        column_index = 0
+        while column_index < len(source_cells):
+            cell = source_cells[column_index]._tc
+            end = column_index + 1
+            while end < len(source_cells) and source_cells[end]._tc is cell:
+                end += 1
+            target_cell = target_cells[column_index]
+            if cell in seen:
+                anchor = seen[cell]
+                anchor.set("rowspan", str(int(anchor.get("rowspan", "1")) + 1))
+                target_row.remove(target_cell)
+            else:
+                seen[cell] = target_cell
+                if end - column_index > 1:
+                    target_cell.set("colspan", str(end - column_index))
+                    cell_css = dict(item.split(":", 1) for item in target_cell.get("style", "").split(";") if ":" in item)
+                    if all(width is not None for width in widths[column_index:end]):
+                        cell_css["width"] = f"{sum(width.pt for width in widths[column_index:end]):g}pt"
+                    _set_css(target_cell, cell_css)
+                if cell.xpath("./w:tcPr/w:gridSpan|./w:tcPr/w:vMerge"):
+                    target_cell.set("contenteditable", "false")
+                    target_cell.set("data-word-protected", "1")
+                    target_cell.set("title", "此单元格已合并，请在 Word 中修改；其他普通单元格可以编辑。")
+            for duplicate in target_cells[column_index + 1:end]:
+                target_row.remove(duplicate)
+            column_index = end
+    alignment = table_properties.get("jc")
+    alignment = alignment.get(qn("w:val"), "left") if alignment is not None else "left"
+    if alignment in {"center", "right"} and "width" in css:
+        css["margin-left"] = f"calc((100% - {css['width']}) / 2)" if alignment == "center" else f"calc(100% - {css['width']})"
+    elif node.xpath(".//th|.//td"):
+        indent = table_properties.get("tblInd")
+        indent = (_number(indent.get(qn("w:w")), 20) or 0) if indent is not None and indent.get(qn("w:type"), "dxa") == "dxa" else 0
+        first_cell = node.xpath(".//th|.//td")[0]
+        cell_css = dict(item.split(":", 1) for item in first_cell.get("style", "").split(";") if ":" in item)
+        padding = _number(cell_css["padding-left"].removesuffix("pt")) or 0
+        border = _number(cell_css.get("border-left", "0pt").split()[0].removesuffix("pt")) or 0
+        # Word's table indent measures the first cell's text, rather than its border.
+        css["margin-left"] = f"{indent - padding - border / 2:g}pt"
+    _set_css(node, css)
+    # HTML rowspans cannot cross thead/tbody boundaries.
+    if node.xpath(".//*[@rowspan]"):
+        rows = node.xpath("./thead/tr|./tbody/tr|./tr")
+        for group in node.xpath("./thead|./tbody"):
+            node.remove(group)
+        body = html.Element("tbody")
+        node.append(body)
+        body.extend(rows)
 
 
 def _images(root, supplied: list[dict]) -> None:

@@ -155,6 +155,8 @@ def restore_version(request: Request, document_id: str, revision: int, body: Ver
     from app.documents import _check_word, _content_result, _document_row, _admin, _save_markdown
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.edit")
+        from app.document_assignments import require_scope_write
+        require_scope_write(connection, did, document_principal(request).user_id)
         if current[12] != body.expectedRevision:
             raise revision_conflict(connection, did, "文档已更新，请重新核对后恢复。")
         record_current_version(connection, did, expected_revision=body.expectedRevision)

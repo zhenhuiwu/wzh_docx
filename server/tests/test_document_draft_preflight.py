@@ -43,6 +43,13 @@ def route_context(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "section_memory_targets", lambda *args: {})
     monkeypatch.setattr(module, "document_principal", lambda *args: SimpleNamespace(roles=("system_admin",), user_id=uuid4()))
     monkeypatch.setattr(module, "_document_row", lambda *args: row)
+    # 本组只测真实 Word 预检；对象/分工持久化由 object_guidance / assignments 的 API 测试覆盖。
+    def spans(_connection, current):
+        return [{"id": str(uuid4()), "kind": "paragraph", "body": text, "label": text,
+                 "headingIndex": index, "start": current[7].index(text), "end": current[7].index(text) + len(text)}
+                for index, text in enumerate(("旧正文，日期域必须保留。", "其他章节保持不变。"))]
+    monkeypatch.setattr("app.document_guidance.object_spans", spans)
+    monkeypatch.setattr("app.document_assignments.require_scope_write", lambda *args: None)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
     monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: "清晰的新正文。")
 
@@ -147,3 +154,63 @@ def test_stream_progress_keeps_draft_and_checks_word_before_done(route_context, 
         ("planning", "正在确认本次修改范围"), ("validation", "正在检查正文规范与 Word 排版")]
     assert all(event["revision"] == 7 for event in events)
     assert events[-1]["content"] == "清晰的新正文。" and len(checked) == 2
+
+
+def test_slow_word_validation_keeps_connection_alive(route_context, monkeypatch):
+    from time import sleep
+    request, row, _, _, _ = route_context
+    original = module._keep_draft_alive
+    monkeypatch.setattr(module, "_keep_draft_alive", lambda stream: original(stream, interval=0.005))
+    monkeypatch.setattr(module, "_check_word", lambda *args: sleep(0.03))
+    response = module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0), stream=True)
+
+    async def collect():
+        return [chunk async for chunk in response.body_iterator]
+
+    chunks = asyncio.run(collect())
+    assert "\n" in chunks
+    events = [json.loads(chunk) for chunk in chunks if chunk.strip()]
+    assert events[-1]["type"] == "done"
+    validation = next(index for index, chunk in enumerate(chunks) if '"stage": "validation"' in chunk)
+    assert "\n" in chunks[validation + 1:]
+
+
+def test_model_timeout_has_specific_message(route_context, monkeypatch):
+    import httpx
+    from openai import APITimeoutError
+    request, row, _, _, _ = route_context
+
+    async def generate(**kwargs):
+        raise APITimeoutError(request=httpx.Request("POST", "http://offline.invalid"))
+        yield
+
+    monkeypatch.setattr(module, "stream_section_text", generate)
+    events = stream_events(module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0), stream=True))
+    assert events[-1]["type"] == "error"
+    assert "AI_READ_TIMEOUT_SECONDS" in events[-1]["message"]
+
+
+@pytest.mark.parametrize("failure", ["internal", "connection", "provider"])
+def test_draft_failure_reports_target_and_logs_stack_without_payload(route_context, monkeypatch, caplog, failure):
+    import httpx
+    from openai import APIConnectionError, APIStatusError
+    request, row, _, _, checked = route_context
+    upstream_request = httpx.Request("POST", "http://offline.invalid")
+    secret = "private-model-payload-must-not-be-logged"
+    error = (APIConnectionError(message=secret, request=upstream_request) if failure == "connection" else
+             APIStatusError(secret, response=httpx.Response(502, request=upstream_request), body={"secret": secret})
+             if failure == "provider" else RuntimeError(secret))
+
+    async def generate(**kwargs):
+        yield {"stage": "module", "message": "正在编写 3/31：系统概述"}
+        yield {"stage": "module", "message": "正在编写本节内容 1/2"}
+        raise error
+
+    monkeypatch.setattr(module, "stream_section_text", generate)
+    events = stream_events(module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0), stream=True))
+    assert events[-1]["type"] == "error"
+    assert "系统概述" in events[-1]["message"]
+    assert ("HTTP 502" if failure == "provider" else "模型服务连接中断" if failure == "connection" else "编写服务处理失败") in events[-1]["message"]
+    assert secret not in caplog.text and secret not in events[-1]["message"]
+    assert type(error).__name__ in caplog.text and "preflight-test" in caplog.text
+    assert checked == []
