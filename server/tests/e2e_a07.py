@@ -633,9 +633,9 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             shot(page2, "A07-09-只保存我负责的部分-冲突")
         g13()
 
-        @step("G14 断网留草稿 → 关页 → 改派 → 重开：草稿按当前分工拆分，暂存只追加（28 N-4'、N-5）")
-        def g14():
-            doc2 = upload_doc(admin, pid, f"拆分验收{RUN}", make_word(CHAPTERS))
+        def split_case(mode: str):
+            """留草稿 → 关页 → 改派附录 → 重开。mode：offline 断网；poll 保存失败、等轮询发现改派后再关页；quick 保存失败、输入后立即关页。"""
+            doc2 = upload_doc(admin, pid, f"拆分验收{mode}{RUN}", make_word(CHAPTERS))
             d2 = doc2["id"]
             heads = heading_ids(admin, d2)
             view = admin.call("GET", f"/documents/{d2}/assignments")
@@ -651,29 +651,51 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             key = f"docwb.a07.stash.liuyang{RUN}.{d2}"
             stash = lambda pg: pg.evaluate("k => localStorage.getItem(k) || ''", key)   # noqa: E731
             assert "OLDSTASH" in stash(page3)
-            ctx_c.set_offline(True)
+
+            def fail_saves(route):
+                if route.request.method == "PATCH" and route.request.url.endswith("/content"):
+                    route.abort()
+                else:
+                    route.continue_()
+            if mode == "offline":
+                ctx_c.set_offline(True)
+            else:
+                ctx_c.route("**/api/v1/documents/**", fail_saves)
             para(page3, "功能需求第一段").click(); page3.keyboard.press("End"); page3.keyboard.type("DRAFTA")
             para(page3, "附录第一段").click(); page3.keyboard.press("End"); page3.keyboard.type("DRAFTB")
-            page3.wait_for_timeout(4000)
-            drafts = page3.evaluate("() => Object.keys(localStorage).filter(k => k.includes('draft') && localStorage.getItem(k).includes('DRAFTB')).length")
-            assert drafts, "断网时应留下本机草稿"
+
+            def reassign():
+                view = admin.call("GET", f"/documents/{d2}/assignments")
+                admin.call("PUT", f"/documents/{d2}/assignments",
+                           json={"objectIds": [heads["附录"]], "assigneeIds": [str(users["wangce"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
+            if mode == "poll":
+                page3.wait_for_timeout(3000)
+                reassign()
+                notice = page3.get_by_text(re.compile("分工已调整"))
+                expect(notice).to_be_visible(timeout=60000)
+                # 29 复验 3 建议：多处有未保存修改、其中一处被改派时也要给［只保存我负责的部分］
+                expect(page3.get_by_text(re.compile("你还有未保存的修改"))).to_be_visible()
+                expect(page3.get_by_role("button", name="只保存我负责的部分").first).to_be_visible()
+            elif mode == "offline":
+                page3.wait_for_timeout(4000)
             page3.close()
-            view = admin.call("GET", f"/documents/{d2}/assignments")   # 关页后把附录改派给王测
-            admin.call("PUT", f"/documents/{d2}/assignments",
-                       json={"objectIds": [heads["附录"]], "assigneeIds": [str(users["wangce"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
-            ctx_c.set_offline(False)
+            if mode != "poll":
+                reassign()
+            if mode == "offline":
+                ctx_c.set_offline(False)
+            else:
+                ctx_c.unroute("**/api/v1/documents/**")
             page4 = ctx_c.new_page(); open_pages.append(page4)
             open_doc(page4, pid, d2)
-            recovery = page4.get_by_test_id("draft-recovery")
-            expect(recovery).to_be_visible(timeout=30000)
+            expect(page4.get_by_test_id("draft-recovery")).to_be_visible(timeout=30000)
             for _ in range(40):
                 if "DRAFTB" in stash(page4):
                     break
                 page4.wait_for_timeout(250)
             value = stash(page4)
-            assert "DRAFTB" in value and "OLDSTASH" in value, value   # N-4' 拆分生效；N-5 旧暂存还在
+            assert "DRAFTB" in value and "OLDSTASH" in value, (mode, value)   # N-4 拆分生效；N-5 旧暂存还在
             leftover = page4.evaluate("() => Object.keys(localStorage).filter(k => !k.startsWith('docwb.a07.stash') && (localStorage.getItem(k) || '').includes('DRAFTB')).length")
-            assert leftover == 0, "拆分后的草稿不应再含不归我负责的修改"
+            assert leftover == 0, f"{mode}：拆分后的草稿不应再含不归我负责的修改"
             page4.get_by_test_id("draft-restore").click()
             for _ in range(60):
                 saved = admin.call("GET", f"/documents/{d2}")["markdownContent"]
@@ -681,12 +703,27 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
                     break
                 page4.wait_for_timeout(500)
             else:
-                raise AssertionError("恢复后自己负责的 DRAFTA 应当保存")
+                raise AssertionError(f"{mode}：恢复后自己负责的 DRAFTA 应当保存")
             assert "DRAFTB" not in saved, saved[-300:]
+            expect(page4.get_by_test_id("save-rejected-banner")).to_have_count(0)
             assert "OLDSTASH" in stash(page4)
-            shot(page4, "A07-10-草稿按分工拆分")
+            shot(page4, f"A07-10-草稿按分工拆分-{mode}")
             ctx_c.close()
+
+        @step("G14 断网留草稿 → 关页 → 改派 → 重开：草稿按当前分工拆分，暂存只追加（28 N-4'、N-5）")
+        def g14():
+            split_case("offline")
         g14()
+
+        @step("G14b 保存失败、轮询发现改派（提示含［只保存我负责的部分］）后关页 → 重开：草稿按分工拆分（29 复验 3）")
+        def g14b():
+            split_case("poll")
+        g14b()
+
+        @step("G14c 保存失败、输入后立即关页 → 改派 → 重开：草稿按分工拆分（29 复验 3）")
+        def g14c():
+            split_case("quick")
+        g14c()
 
         browser.close()
     failed = [item for item in results if not item[1]]
