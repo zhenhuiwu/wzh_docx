@@ -17,6 +17,7 @@ import LeaveDialog from "../components/LeaveDialog.vue";
 import AiStatusChip from "../components/ai/AiStatusChip.vue";
 import AiSectionEntry from "../components/ai/AiSectionEntry.vue";
 import AiLeaveDialog from "../components/ai/AiLeaveDialog.vue";
+import { aiEntryAllowed, leaveNavigation } from "../aiEntry";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
@@ -1893,6 +1894,7 @@ function leaveDiscardingAi() {
   clearAiDraft();
   if (!target) return;
   leaveBypass = true;
+  if (leaveNavigation(target, window.history.state?.back) === "back") { router.back(); window.setTimeout(() => { leaveBypass = false; }, 1000); return; }
   void router.push(target).finally(() => { leaveBypass = false; });
 }
 function chooseAiScope(scope: WritingMemory["scope"]) {
@@ -4640,7 +4642,7 @@ function confirmLeave(downloadFirst: boolean) {
   void router.push(target).finally(() => { leaveBypass = false; });
 }
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (referencesDirty.value || referencesBusy.value || blockGuidanceDirty.value || assignmentsPanel.value?.isDirty || assignmentsBusy.value || blockGuidanceBusy.value || guidanceChanged.value || guidanceSaving.value || skillBusy.value || hasUnsaved.value || saving.value || aiDraft.value || aiBusy.value || diagramBusy.value) {
+  if (referencesDirty.value || referencesBusy.value || blockGuidanceDirty.value || assignmentsPanel.value?.isDirty || assignmentsBusy.value || blockGuidanceBusy.value || guidanceChanged.value || guidanceSaving.value || skillBusy.value || hasUnsaved.value || saving.value || aiDraft.value || aiPendingSuggestions.value.length || aiBusy.value || diagramBusy.value) {
     persistLocalDraft();
     event.preventDefault();
     event.returnValue = "";
@@ -5290,7 +5292,7 @@ onUnmounted(() => {
         <Teleport v-for="item in publicHosts" :key="item.key" :to="item.host">
           <PublicBlockEmbed :document-id="document?.id ?? ''" :reference="item.ref" :plan-link="{ name: 'project-plan', params: { id: route.params.id } }" @seen="loadPublicRefs" />
         </Teleport>
-        <AiSectionEntry v-if="mode === 'edit'" :editor="editor" :heading-index="selectedHeading" :version="editorVersion" :hidden="readonly || Boolean(aiPreviewHost) || aiBusy || Boolean(aiUnavailable('writing'))" :disabled="!canStartAi || aiLocked" @start="startSectionAi" />
+        <AiSectionEntry v-if="mode === 'edit'" :editor="editor" :heading-index="selectedHeading" :version="editorVersion" :hidden="readonly || Boolean(aiPreviewHost) || aiBusy || Boolean(aiUnavailable('writing')) || !aiEntryAllowed(assignInfo, selectedHeading)" :disabled="!canStartAi || aiLocked" @start="startSectionAi" />
         <AiLeaveDialog v-if="aiLeave" :count="aiPendingSuggestions.length" @stay="aiLeave = null" @leave="leaveDiscardingAi" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 || (aiBusy && aiScope === 'section') }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
