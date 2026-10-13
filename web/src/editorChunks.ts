@@ -364,3 +364,28 @@ export function textRange(root: Node, offset: number, length: number): Range | n
   }
   return null;
 }
+
+/**
+ * 43 快速预览：把 /preview/blocks 的逐对象 HTML 拼成编辑区正文，每个顶层块带 data-object-id / data-object-revision
+ * （与整篇预览的 decorate_object_ids 同一约定：列表取顶层 li，相邻同类列表并成一个）；Word 正文样式标题加 data-word-heading。
+ */
+export function fastBodyHtml(blocks: Array<{ objectId: string; revision: number; html: string; wordHeadingLevel?: number }>): string {
+  const attr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  let out = "", list: string | null = null;
+  const close = () => { if (list) { out += `</${list}>`; list = null; } };
+  for (const block of blocks) {
+    const html = block.html.trim();
+    const marks = ` data-object-id="${attr(block.objectId)}" data-object-revision="${Number(block.revision)}"${block.wordHeadingLevel ? ` data-word-heading="${Number(block.wordHeadingLevel)}"` : ""}`;
+    const listed = /^<(ul|ol)\b[^>]*>([\s\S]*)<\/\1>$/.exec(html);
+    if (listed && /^<li\b/.test(listed[2].trim())) {
+      const item = listed[2].trim().replace(/^<li\b/, `<li${marks}`);
+      if (list !== listed[1]) { close(); list = listed[1]; out += `<${list}>`; }
+      out += item;
+      continue;
+    }
+    close();
+    out += /^<[a-zA-Z]/.test(html) ? html.replace(/^<([a-zA-Z][\w-]*)/, `<$1${marks}`) : `<p${marks}>${html}</p>`;
+  }
+  close();
+  return out;
+}

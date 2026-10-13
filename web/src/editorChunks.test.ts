@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHUNK_ATTR, ChunkedBody, quickBodyHtml, searchBlocks, splitChunks } from "./editorChunks";
+import { CHUNK_ATTR, ChunkedBody, fastBodyHtml, quickBodyHtml, searchBlocks, splitChunks } from "./editorChunks";
 
 const el = (tagName: string) => ({ tagName }) as unknown as Element;
 
@@ -130,5 +130,22 @@ describe("searchBlocks", () => {
     const r = searchBlocks(["aaaa"], [0], "a", 2);
     expect([r.hits.length, r.total]).toEqual([2, 4]);
     expect(searchBlocks(["x"], [0], "  ").total).toBe(0);
+  });
+});
+
+describe("fastBodyHtml", () => {
+  it("每块带对象 ID，相邻同类列表合并，Word 标题加标记", () => {
+    expect(fastBodyHtml([
+      { objectId: "a", revision: 1, html: "<h2>1 范围</h2>" },
+      { objectId: "b", revision: 2, html: "<p>标识</p>", wordHeadingLevel: 2 },
+      { objectId: "c", revision: 1, html: "<ul>\n<li>一</li>\n</ul>" },
+      { objectId: "d", revision: 1, html: "<ul>\n<li>二</li>\n</ul>" },
+      { objectId: "e", revision: 1, html: "<ol>\n<li>三</li>\n</ol>" },
+      { objectId: "f\"", revision: 1, html: "<table><tr><td>x</td></tr></table>" },
+    ])).toBe('<h2 data-object-id="a" data-object-revision="1">1 范围</h2>'
+      + '<p data-object-id="b" data-object-revision="2" data-word-heading="2">标识</p>'
+      + '<ul><li data-object-id="c" data-object-revision="1">一</li><li data-object-id="d" data-object-revision="1">二</li></ul>'
+      + '<ol><li data-object-id="e" data-object-revision="1">三</li></ol>'
+      + '<table data-object-id="f&quot;" data-object-revision="1"><tr><td>x</td></tr></table>');
   });
 });

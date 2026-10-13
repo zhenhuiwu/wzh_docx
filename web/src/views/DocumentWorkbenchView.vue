@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type Rout
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
-import { CHUNK_ATTR, ChunkedBody, quickBodyHtml, searchBlocks, textRange, type SearchHit } from "../editorChunks";
+import { CHUNK_ATTR, ChunkedBody, fastBodyHtml, quickBodyHtml, searchBlocks, textRange, type SearchHit } from "../editorChunks";
 import DocumentAssignments from "../components/DocumentAssignments.vue";
 import DocumentBlockGuidance from "../components/DocumentBlockGuidance.vue";
 import DocumentReferences from "../components/DocumentReferences.vue";
@@ -48,7 +48,7 @@ import { listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, contentBlockAt, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
-import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
+import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
 const router = useRouter();
@@ -1216,6 +1216,7 @@ async function load() {
   clearAiDraft();
   phase.value = "loading";
   bodyPending.value = false;
+  approxLayout.value = false;
   previewError.value = "";
   errorText.value = "";
   orphanDrafts.value = []; orphanStash.value = "";
@@ -1228,6 +1229,8 @@ async function load() {
     const fetched = await getDocument(id);
     // 验收 P0-2：版式预览（整篇 Word 排版）可能很慢，不等它：先显示只读正文，预览到了再换成可编辑的编辑稿
     const previewTask = previewDocument(id).then(value => ({ value, error: null as unknown }), (error: unknown) => ({ value: null, error }));
+    // 43：按对象的快速预览（不经 Word 往返，约 0.2s），编辑区先用它变成可编辑；整篇版式预览到了再替换
+    const fastTask = previewBlocks(id).catch(() => null);
     const assignments = await getDocumentAssignments(id).catch(() => null);
     if (id !== documentId.value || version !== loadVersion) return;
     document.value = fetched;
@@ -1253,7 +1256,7 @@ async function load() {
     bodyPending.value = true;
     previewError.value = "";
     showEditorHtml(quickBodyHtml(record.markdownContent));
-    void applyPreview(previewTask, record, version);
+    void applyFastPreview(fastTask, previewTask, record, version);
     void refreshOwnership(record);
     if (route.query.assign === "1") assignOpen.value = true;
     assignInitialFilter.value = route.query.filter === "unassigned" ? "unassigned" : typeof route.query.person === "string" ? `person:${route.query.person}` : "all";
@@ -1289,6 +1292,25 @@ async function applyPreview(task: Promise<{ value: Awaited<ReturnType<typeof pre
   previewError.value = "";
   showEditorHtml(result.value.html, result.value.objectModel);
 }
+/** 43：快速预览能对上当前修订就先挂上（可编辑）；整篇预览到了，若还没改过、焦点不在正文，就换成精确版式（保留滚动位置）。 */
+async function applyFastPreview(fastTask: Promise<Awaited<ReturnType<typeof previewBlocks>> | null>, task: Parameters<typeof applyPreview>[0], record: DocumentRecord, version: number) {
+  const fast = await fastTask;
+  if (version !== loadVersion || document.value !== record) return;
+  if (!fast || !fast.objectModel || fast.documentRevision !== record.revision || !fast.blocks.length) { await applyPreview(task, record, version); return; }
+  bodyPending.value = false;
+  previewError.value = "";
+  showEditorHtml(fastBodyHtml(fast.blocks), true);
+  approxLayout.value = true;
+  const result = await task;
+  if (version !== loadVersion || document.value !== record || !result.value || record.revision !== fast.documentRevision) return;
+  if (isDirty.value || saving.value || (editor.value && editor.value.contains(window.document.activeElement)) || aiPreviewHost.value || Object.keys(frozen.value).length) return;
+  const top = desk.value?.scrollTop ?? 0;
+  showEditorHtml(result.value.html, result.value.objectModel);
+  approxLayout.value = false;
+  void nextTick(() => { if (desk.value) desk.value.scrollTop = top; });
+}
+/** 正文用的是快速预览（版式近似，Word 制表位/页面设置等要等整篇预览） */
+const approxLayout = ref(false);
 function retryPreview() {
   const record = document.value;
   if (!record) return;
