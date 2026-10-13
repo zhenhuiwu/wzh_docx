@@ -138,6 +138,7 @@ class DocumentCreateBody(BaseModel):
     sourceType: str
     templateDocumentId: str | None = None
     wordFileId: str | None = None
+    upstreamDocumentIds: list[str] | None = Field(default=None, max_length=20)  # None：按模板依赖预填
 
 
 class WritingMemoryBody(BaseModel):
@@ -707,6 +708,12 @@ def create_document(
             outline = parsed.outline
             format_template = {**parsed.format_template, "images": parsed.images}
 
+        # 任务与模板：链接上游文档，并把上游同名章节复制为可编辑初稿（不同步）
+        from app.doc_chain import default_upstreams, record_upstreams, seed_from_upstreams
+        upstream_ids = (default_upstreams(conn, pid, template_doc_id) if body.upstreamDocumentIds is None
+                        else list(dict.fromkeys(str(_uuid(v, "upstreamDocumentIds")) for v in body.upstreamDocumentIds)))
+        markdown_content, copied = seed_from_upstreams(conn, pid, upstream_ids, markdown_content)
+
         # 创建文档
         doc_id = uuid4()
         conn.execute(
@@ -732,6 +739,7 @@ def create_document(
                 raise AppError(422, "GUIDANCE_TARGET_UNMATCHED", str(error)) from None
             format_template["guidanceTargets"] = targets
             conn.execute("UPDATE documents SET format_template=%s WHERE id=%s", (json.dumps(format_template), doc_id))
+        record_upstreams(conn, doc_id, upstream_ids, copied, session.user_id)
         record_current_version(conn, doc_id, expected_revision=0, kind="created")
         # A07 U-16 / §10.4：编写人员新建的文档整篇默认归创建者（@document）；负责人、管理员新建的不分配
         if not admin and member_role(conn, pid, session.user_id) == "editor":
