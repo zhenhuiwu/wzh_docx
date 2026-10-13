@@ -26,6 +26,7 @@ let loadRequest = 0;
 
 const active = computed(() => {
   if (route.name === "project-documents" || route.name === "document") return "documents";
+  if (route.name === "project-baselines") return "baselines";
   return "overview";
 });
 
@@ -159,6 +160,7 @@ defineExpose({ openRestore: () => openArchive("restore") });
       <nav v-if="!notFound" class="tabs subnav" aria-label="项目内导航">
         <router-link :class="{ on: active === 'overview' }" :aria-current="active === 'overview' ? 'page' : undefined" :to="{ name: 'project', params: { id: projectId } }">项目概述</router-link>
         <router-link :class="{ on: active === 'documents' }" :aria-current="active === 'documents' ? 'page' : undefined" :to="{ name: 'project-documents', params: { id: projectId } }">文档编写</router-link>
+        <router-link :class="{ on: active === 'baselines' }" :aria-current="active === 'baselines' ? 'page' : undefined" :to="{ name: 'project-baselines', params: { id: projectId } }">基线</router-link>
       </nav>
       <StatePanel v-if="phase === 'loading'" kind="loading" text="正在读取项目…" />
       <StatePanel v-else-if="phase === 'error' && notFound" kind="error" title="项目不存在或你无权访问。"><router-link class="primary" :to="{ name: 'projects' }">返回项目列表</router-link></StatePanel>

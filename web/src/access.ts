@@ -8,6 +8,8 @@
 
 /** null：路由本身不拦截（数据可见性由服务端决定）。 */
 export const ROUTE_PERMISSIONS: Record<string, string | null> = {
+  "my-writing": null,
+  "project-baselines": null,
   projects: null, // 项目可见性按成员关系由服务端决定（phase2 S1）
   project: null,
   "project-documents": null,
@@ -32,6 +34,7 @@ export interface NavEntry {
 }
 
 export const NAV_ITEMS: NavEntry[] = [
+  { route: "my-writing", label: "我的编写", group: "main" },
   { route: "projects", label: "项目", group: "main" },
   { route: "test-cases", label: "测试用例管理", group: "main" },
   { route: "knowledge", label: "知识库", group: "main" },

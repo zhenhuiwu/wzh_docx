@@ -19,6 +19,8 @@ import KnowledgeView from "./views/KnowledgeView.vue";
 import KnowledgeDetailView from "./views/KnowledgeDetailView.vue";
 import NotFoundView from "./views/NotFoundView.vue";
 import WritingSkillsView from "./views/WritingSkillsView.vue";
+import MyWritingView from "./views/MyWritingView.vue";
+import ProjectBaselinesView from "./views/ProjectBaselinesView.vue";
 
 const TestCasesView = defineAsyncComponent({
   loader: () => import("./views/TestCasesView.vue"),
@@ -66,6 +68,18 @@ export const router = createRouter({
       children: [
         { path: "", redirect: { name: "projects" } },
         { path: "home", redirect: { name: "projects" } },
+        {
+          path: "my-writing",
+          name: "my-writing",
+          component: MyWritingView,
+          meta: { title: "我的编写" },
+        },
+        {
+          path: "projects/:id/baselines",
+          name: "project-baselines",
+          component: ProjectBaselinesView,
+          meta: { title: "基线" },
+        },
         {
           path: "projects",
           name: "projects",

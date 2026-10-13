@@ -99,7 +99,7 @@ function toggleCollapsed() {
 const pageTitle = computed(() => (typeof route.meta.title === "string" ? route.meta.title : ""));
 const denied = computed(() => typeof route.meta.permission === "string" && !can(route.meta.permission));
 
-const projectRoutes = ["project", "project-documents", "document"];
+const projectRoutes = ["project-baselines", "project", "project-documents", "document"];
 const isProjectRoute = computed(() => projectRoutes.includes(String(route.name)));
 const projectsCurrent = computed(() => route.name === "projects" || isProjectRoute.value);
 let crumbRequest = 0;
@@ -213,6 +213,10 @@ async function logout() {
     <div class="body">
       <aside class="sidenav">
         <nav class="menu" aria-label="主导航">
+          <NavItem :to="{ name: 'my-writing' }" :current="route.name === 'my-writing'" label="我的编写">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4" /></svg>
+            <span class="nav-label">我的编写</span>
+          </NavItem>
           <NavItem :to="{ name: 'projects' }" :current="projectsCurrent" label="项目">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z" /></svg>
             <span class="nav-label">项目</span>
