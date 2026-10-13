@@ -37,7 +37,7 @@ import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
-import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -747,6 +747,14 @@ const aiSuggestionCursor = ref(0);
 const aiSuggestionDropped = ref(0);
 const aiSuggestionAccepted = ref(0);
 const aiSuggestionTick = ref(0);
+function aiDeniedIds(): Set<string> {
+  return new Set(assignmentState.value?.items.filter(item => !item.canEdit).map(item => item.objectId) || []);
+}
+// Panel header (spec 30 §4.2): how many paragraphs of the section the AI may change.
+const aiScopeParagraphs = computed(() => {
+  void editorVersion.value;
+  return aiScope.value === "section" && selectedHeading.value !== null && editor.value ? scopeCount(editor.value, selectedHeading.value, aiDeniedIds()) : 0;
+});
 const aiPendingSuggestions = computed(() => { void aiSuggestionTick.value; return pendingSuggestions(aiSuggestions.value); });
 const aiComplete = ref(false);
 const aiAllowedModes = ref<("append" | "replace")[]>(["append", "replace"]);
@@ -2377,6 +2385,7 @@ function clearAiDraft() {
     if (aiSuggestionAccepted.value) { aiSuggestionAccepted.value = 0; void nextTick(() => onEditorInput()); }
   }
   aiSuggestionDropped.value = 0;
+  if (editor.value) clearScope(editor.value);
   aiController?.abort();
   aiController = undefined;
   aiBusy.value = false;
@@ -2699,10 +2708,14 @@ async function generateSection() {
     const scopeIds = aiScope.value === "section" && index !== null && editor.value ? (() => {
       const { heading, blocks } = sectionBlocks(editor.value, index);
       // A07: only blocks this user may change belong to the writing scope (spec 30 §4.2).
-      const denied = new Set(assignmentState.value?.items.filter(item => !item.canEdit).map(item => item.objectId) || []);
+      const denied = aiDeniedIds();
       return [heading, ...blocks].map(node => node?.getAttribute("data-object-id")).filter((value): value is string => Boolean(value) && !denied.has(value as string));
     })() : undefined;
     const headingIndex = index;
+    if (aiScope.value === "section" && index !== null && editor.value) {
+      const count = scopeCount(editor.value, index, aiDeniedIds());
+      markScope(editor.value, index, aiDeniedIds(), `写作范围：${aiTargetTitle.value} · ${count} 段${assignRestricted.value ? " · 我负责" : ""}`);
+    }
     await streamDocumentSection(id, document.value.revision, index, draftInstruction, text, (event) => {
       if (!current() || controller.signal.aborted) return;
       if (editorVersion.value !== version || document.value?.revision !== event.revision || isDirty.value) throw new ApiError(409, "REVISION_CONFLICT", "文档已变化，请重新生成草稿。");
@@ -4799,7 +4812,11 @@ onUnmounted(() => {
             <p v-if="!canGenerate" class="pnote">在目录中选择章节，或在正文中选中文字。</p>
             <p v-if="!canGenerate && aiError" class="form-error" role="alert">{{ aiError }}</p>
             <template v-if="canGenerate">
-              <div class="target"><b>{{ aiTargetTitle }}</b><span>{{ aiTargetHint }}</span></div>
+              <div v-if="aiScope === 'section'" class="field">
+                <span class="flabel">写作范围</span>
+                <div class="target scope-box" data-testid="ai-scope-box"><b>{{ aiTargetTitle }}<span class="scope-count">（{{ assignRestricted ? '我负责的' : '共' }} {{ aiScopeParagraphs }} 段）</span></b><span>标题{{ assignRestricted ? '和他人负责的段落' : '' }}不会被修改；单次最多 20 段 / 6000 字。</span></div>
+              </div>
+              <div v-else class="target"><b>{{ aiTargetTitle }}</b><span>{{ aiTargetHint }}</span></div>
               <blockquote v-if="aiScope === 'selection'" class="selected-text">{{ selectedText }}</blockquote>
               <div class="field">
                 <span class="flabel">编写规范</span>
@@ -5196,6 +5213,11 @@ onUnmounted(() => {
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
 .ai-preview-body:empty { display:none; }
+.paper-content.ai-scoping > :deep(:not(.ai-scope):not([data-ai-preview]):not([data-ai-lock="标题已固定"])) { opacity:0.45; pointer-events:none; }
+.paper-content :deep(.ai-scope), .paper-content.ai-scoping > :deep(.ai-suggestion) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
+.paper-content :deep(.ai-scope-label) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding:var(--space-2) var(--space-3) 0; color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); user-select:none; }
+.paper-content :deep([data-ai-lock])::after { content:"🔒" attr(data-ai-lock); margin-left:var(--space-2); color:var(--text-tertiary); font-family:var(--font); font-size:var(--text-xs); font-weight:normal; vertical-align:middle; }
+.scope-box .scope-count { font-weight:normal; }
 .paper-content :deep(.ai-del) { text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
 .paper-content :deep(.ai-suggestion) { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
 .paper-content :deep(.ai-suggestion.current) { outline:2px solid var(--stamp); outline-offset:2px; }

@@ -127,3 +127,46 @@ export function resolveSuggestion(suggestion: Suggestion, accepted: boolean, cal
 export function pending(suggestions: Suggestion[]): Suggestion[] {
   return suggestions.filter(item => !item.resolved);
 }
+
+/**
+ * Spec 30 §4.2–4.3: show the writing scope. Scope blocks get a 2px brand frame,
+ * everything else is faded and inert; headings get a lock badge. All markers are
+ * classes/attributes removed by clearScope, plus a `data-ai-preview` label that
+ * serialization ignores.
+ */
+export function markScope(root: HTMLElement, headingIndex: number, denied: Set<string>, label: string): number {
+  clearScope(root);
+  const { heading, blocks } = sectionBlocks(root, headingIndex);
+  const scope = blocks.filter(block => !denied.has(block.getAttribute("data-object-id") || ""));
+  root.classList.add("ai-scoping");
+  for (const node of root.querySelectorAll<HTMLElement>(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6")) {
+    node.setAttribute("data-ai-lock", node === heading ? "标题已固定" : "");
+  }
+  for (const block of scope) block.classList.add("ai-scope");
+  if (scope[0]) scope[0].classList.add("ai-scope-first");
+  scope.at(-1)?.classList.add("ai-scope-last");
+  const tag = document.createElement("div");
+  tag.setAttribute("data-ai-preview", "");
+  tag.setAttribute("data-ai-scope-label", "");
+  tag.contentEditable = "false";
+  tag.className = "ai-scope-label";
+  tag.textContent = label;
+  (scope[0] ?? heading)?.before(tag);
+  if (!scope[0] && heading) heading.after(tag);
+  return scope.length;
+}
+
+export function clearScope(root: HTMLElement): void {
+  root.classList.remove("ai-scoping");
+  root.querySelectorAll("[data-ai-scope-label]").forEach(node => node.remove());
+  for (const node of root.querySelectorAll<HTMLElement>("[data-ai-lock]")) node.removeAttribute("data-ai-lock");
+  for (const node of root.querySelectorAll<HTMLElement>(".ai-scope")) {
+    node.classList.remove("ai-scope", "ai-scope-first", "ai-scope-last");
+    if (!node.className) node.removeAttribute("class");
+  }
+}
+
+/** Number of section blocks the user may change (for the panel header). */
+export function scopeCount(root: HTMLElement, headingIndex: number, denied: Set<string>): number {
+  return sectionBlocks(root, headingIndex).blocks.filter(block => !denied.has(block.getAttribute("data-object-id") || "")).length;
+}
