@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /** 「我的编写」（30 §3.2）：我负责或被分工的全部文档，按 项目 › 文档 分组。分页加载，不设上限。 */
 import { computed, onMounted, ref } from "vue";
+import { onBeforeRouteLeave } from "vue-router";
 import { ApiError } from "../api/client";
 import { listMyWriting, type MyWritingItem } from "../api/baselines";
 import { documentStatusLabel } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime } from "../format";
 import { refreshMyWritingAccess } from "../myWritingAccess";
+import { readSession } from "../session";
+import MyDocumentFragments from "../components/myWriting/MyDocumentFragments.vue";
 
 const PAGE = 50;
 const items = ref<MyWritingItem[]>([]);
@@ -17,9 +20,35 @@ const loadingMore = ref(false);
 const errorText = ref("");
 const query = ref("");
 const filter = ref<"all" | "assigned" | "owned">("all");
+const mode = ref<"list" | "edit">("list");
+const activeId = ref<string | null>(null);
+const editorDirty = ref(false);
+const userId = readSession()?.userId ?? "";
+const editable = computed(() => visible.value.filter((item) => item.assignedBlockCount > 0));
+const active = computed(() => editable.value.find((item) => item.id === activeId.value) ?? editable.value[0] ?? null);
+function leaveOk() {
+  return !editorDirty.value || window.confirm("这份文档还有未保存的修改，离开后会丢失。确定离开？");
+}
+function selectDoc(id: string) {
+  if (id === active.value?.id || !leaveOk()) return;
+  editorDirty.value = false; activeId.value = id;
+}
+function setMode(next: "list" | "edit") {
+  if (next === mode.value || (mode.value === "edit" && !leaveOk())) return;
+  editorDirty.value = false; mode.value = next;
+}
+onBeforeRouteLeave(() => leaveOk());
+function startEdit(id: string) { mode.value = "edit"; activeId.value = id; }
+function onTabKey(event: KeyboardEvent, index: number) {
+  const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  if (!step) return;
+  const next = editable.value[(index + step + editable.value.length) % editable.value.length];
+  selectDoc(next.id);
+  (document.getElementById(`mw-tab-${next.id}`) as HTMLElement | null)?.focus();
+}
 
-async function load(append = false) {
-  if (append) loadingMore.value = true; else phase.value = "loading";
+async function load(append = false, silent = false) {
+  if (append) loadingMore.value = true; else if (!silent) phase.value = "loading";
   try {
     const page = await listMyWriting(append ? items.value.length : 0, PAGE, query.value.trim());
     items.value = append ? [...items.value, ...page.items] : page.items;
@@ -60,10 +89,14 @@ const summary = computed(() => {
       </div>
     </header>
     <div class="card">
-      <form class="toolbar" role="search" @submit.prevent="load()">
+      <form v-if="phase !== 'denied'" class="toolbar" role="search" @submit.prevent="load()">
         <label class="sr-only" for="my-writing-q">按文档名称查询</label>
         <input id="my-writing-q" v-model="query" class="control" type="search" placeholder="按文档名称查询" :disabled="phase === 'loading'" />
         <button type="submit" class="ghost" :disabled="phase === 'loading'">查询</button>
+        <div class="segmented" role="group" aria-label="视图">
+          <button type="button" :class="mode === 'list' ? 'primary' : 'ghost'" :aria-pressed="mode === 'list'" @click="setMode('list')">文档列表</button>
+          <button type="button" :class="mode === 'edit' ? 'primary' : 'ghost'" :aria-pressed="mode === 'edit'" :disabled="!editable.length" :title="editable.length ? '' : '没有分给你的块'" @click="setMode('edit')">按文档编写</button>
+        </div>
         <div class="segmented" role="group" aria-label="筛选">
           <button v-for="option in ([['all', '全部'], ['assigned', '分给我的'], ['owned', '我负责的文档']] as const)" :key="option[0]" type="button"
             :class="filter === option[0] ? 'primary' : 'ghost'" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</button>
@@ -73,6 +106,18 @@ const summary = computed(() => {
       <StatePanel v-else-if="phase === 'loading'" kind="loading" text="正在读取你负责的文档…" />
       <StatePanel v-else-if="phase === 'error'" kind="error" title="没能加载" :text="errorText"><button type="button" class="ghost" @click="load()">重试</button></StatePanel>
       <StatePanel v-else-if="!visible.length" kind="empty" :title="query ? '没有匹配的文档' : '目前没有分配给你的部分。'" :text="query ? '' : '负责人分配后会出现在这里。'" />
+      <div v-else-if="mode === 'edit' && active" class="editor">
+        <div class="doc-tabs" role="tablist" aria-label="分给我的文档">
+          <button v-for="(doc, index) in editable" :id="`mw-tab-${doc.id}`" :key="doc.id" type="button" role="tab" class="doc-tab"
+            :class="{ on: doc.id === active.id }" :aria-selected="doc.id === active.id" :tabindex="doc.id === active.id ? 0 : -1"
+            aria-controls="mw-panel" @click="selectDoc(doc.id)" @keydown="onTabKey($event, index)">
+            <span class="tab-name" :title="doc.name">{{ doc.name }}</span><small>{{ doc.project.name }} · {{ doc.assignedBlockCount }} 处</small>
+          </button>
+        </div>
+        <div id="mw-panel" role="tabpanel" :aria-labelledby="`mw-tab-${active.id}`">
+          <MyDocumentFragments :key="active.id" :doc="active" :user-id="userId" @dirty="editorDirty = $event" @saved="load(false, true)" />
+        </div>
+      </div>
       <div v-else class="groups">
         <section v-for="group in groups" :key="group.id" class="group" :aria-label="group.name">
           <h2 class="group-title"><router-link :to="{ name: 'project', params: { id: group.id } }">{{ group.name }}</router-link></h2>
@@ -87,7 +132,7 @@ const summary = computed(() => {
                   <td>{{ doc.assignedBlockCount ? `${doc.assignedBlockCount} 处` : "—" }}</td>
                   <td><span v-if="doc.latestBaseline" class="tag plain">{{ doc.latestBaseline }}</span><span v-else class="muted">未建立</span></td>
                   <td>{{ formatDateTime(doc.updatedAt) }}</td>
-                  <td class="actions"><router-link class="ghost" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去编写</router-link></td>
+                  <td class="actions"><button v-if="doc.assignedBlockCount" type="button" class="ghost" @click="startEdit(doc.id)">在此编写</button> <router-link class="ghost" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去编写</router-link></td>
                 </tr>
               </tbody>
             </table>
@@ -109,5 +154,13 @@ const summary = computed(() => {
 .actions { text-align: right; white-space: nowrap; }
 .muted { color: var(--ink-tertiary); }
 .more { align-self: center; }
+.segmented + .segmented { margin-left: var(--space-3); }
+.editor { display: flex; flex-direction: column; gap: var(--space-3); }
+.doc-tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--rule); overflow-x: auto; }
+.doc-tab { display: grid; gap: 0; padding: var(--space-2) var(--space-3); background: none; border: 0; border-bottom: 2px solid transparent; font: inherit; color: var(--ink); cursor: pointer; text-align: left; max-width: 280px; }
+.doc-tab small { color: var(--ink-secondary); font-size: var(--text-xs); }
+.doc-tab.on { border-bottom-color: var(--stamp); color: var(--stamp); }
+.doc-tab:focus-visible { outline: var(--focus-outline); box-shadow: var(--focus-shadow); }
+.tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
