@@ -10,6 +10,7 @@ import { getTemplate, listTemplateDocuments, createTemplateDocument, deleteTempl
 import TemplateImportEditor from "../components/TemplateImportEditor.vue";
 import FilePicker from "../components/FilePicker.vue";
 import TemplateUpstreamDialog from "../components/TemplateUpstreamDialog.vue";
+import TemplateChainMini from "../components/TemplateChainMini.vue";
 import { getTemplateUpstreams, type TemplateRef } from "../api/docChain";
 import { rememberCrumb } from "../crumbs";
 import { useFieldErrors } from "../fieldErrors";
@@ -211,6 +212,7 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
       </template>
       <template v-else>
         <div class="section-bar"><h2>模板文档</h2><span class="count">{{ documents.length }}</span></div>
+        <TemplateChainMini v-if="canManage && documents.length" :documents="documents" :upstreams="upstreams" />
         <StatePanel v-if="documents.length === 0" title="还没有模板文档" text="请导入 Word 模板，解析后逐项核对内容用途。" />
         <div v-else class="table-wrap doc-table"><table><thead><tr><th>模板文档</th><th class="col-version">当前版本</th><th class="col-draft">草稿</th><th class="col-usage">使用中</th><th v-if="canManage">上游模板</th><th class="col-ops th-right"><span class="sr">操作</span></th></tr></thead><tbody><tr v-for="doc in documents" :key="doc.id" data-testid="tpl-doc-row"><td class="doc-name">{{ doc.name }}</td>
           <td><template v-if="doc.currentVersion"><span class="version-line" data-testid="tpl-doc-version">第 {{ doc.currentVersion.seq }} 版<span class="muted"> · {{ formatDateTime(doc.currentVersion.publishedAt) }}<template v-if="doc.currentVersion.publishedBy"> · {{ doc.currentVersion.publishedBy }}</template></span></span></template><span v-else class="tag warning">待核对</span></td>
@@ -247,6 +249,7 @@ onBeforeUnmount(() => { ++loadNumber; window.removeEventListener("beforeunload",
 .editing-name { flex:none; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border-subtle); }
 .editing-name h2 { margin:0; font-size:var(--text-md); font-weight:var(--weight-semibold); overflow-wrap:anywhere; }
 .editing-name p { margin:var(--space-1) 0 0; color:var(--text-secondary); font-size:var(--text-sm); }
-.doc-actions { display:flex; justify-content:flex-end; gap:var(--space-4); }
+.doc-actions { display:flex; justify-content:flex-end; align-items:center; gap:var(--space-4); }
+.doc-actions .text { display:inline-flex; align-items:center; line-height:var(--leading-sm); text-decoration:none; }
 .retry-review { align-self:flex-start; margin:var(--space-4); }
 </style>
