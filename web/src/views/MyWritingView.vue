@@ -233,7 +233,7 @@ const summary = computed(() => {
               <button v-for="(doc, index) in editable" :id="`mw-tab-${doc.id}`" :key="doc.id" type="button" role="tab" class="doc-tab"
                 :class="{ on: doc.id === active.id }" :aria-selected="doc.id === active.id" :tabindex="doc.id === active.id ? 0 : -1"
                 aria-controls="mw-panel" @click="selectDoc(doc.id)" @keydown="onTabKey($event, index)">
-                <span class="tab-name" :title="`${doc.name}（${doc.project.name}）`">{{ doc.name }}<template v-if="duplicateNames.has(doc.name)"> · {{ doc.project.name }}</template></span><small>{{ doc.project.name }} · {{ doc.assignedBlockCount }} 处</small>
+                <span class="tab-name" :title="`${doc.name}（${doc.project.name}）`">{{ doc.name }}<template v-if="duplicateNames.has(doc.name)"> · {{ doc.project.name }}</template></span><small>{{ doc.assignedBlockCount }} 处</small>
               </button>
             </div>
             <span v-else class="split-hint">并排对照两份文档，可以各自保存，也可以一起保存。</span>
