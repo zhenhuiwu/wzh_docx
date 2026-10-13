@@ -249,3 +249,37 @@ def test_word_heading_paragraph_is_an_insert_anchor(route_context, monkeypatch):
         {"op": "insertAfter", "blockId": kwargs["block_scope"]["blocks"][0]["id"], "content": "补充正文。"}]}, ensure_ascii=False))
     data = module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))["data"]
     assert data["operations"][0]["op"] == "insertAfter" and data["content"].endswith("补充正文。")
+
+
+def test_existing_section_without_block_mapping_is_not_rewritten(route_context, monkeypatch):
+    """The whole-section rewrite path is retired for sections with text: it could change locked headings."""
+    request, row, *_ = route_context
+    monkeypatch.setattr("app.block_ops.scope_blocks", lambda *args, **kwargs: (None, []))
+    called = []
+    monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: called.append(kwargs) or "整节重写")
+    with pytest.raises(AppError) as error:
+        module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))
+    assert error.value.status_code == 409 and error.value.code == "AI_SCOPE_UNAVAILABLE" and not called
+
+
+def test_suspected_headings_are_locked_when_preview_fails(route_context, monkeypatch):
+    _, row, *_ = route_context
+    row[5] = uuid4()
+
+    def broken(*_args):
+        raise AppError(422, "PREVIEW_UNSUPPORTED", "预览无法生成")
+
+    monkeypatch.setattr(module, "_editing_html", broken)
+    objects = [{"id": "a", "kind": "paragraph", "body": "1.1 标识"},
+               {"id": "b", "kind": "paragraph", "body": "标识"},
+               {"id": "c", "kind": "paragraph", "body": "本条应描述本文档所适用软件的完整标识，适用时，包括其标识号。"},
+               {"id": "d", "kind": "paragraph", "body": "第三章 需求"},
+               {"id": "e", "kind": "paragraph", "body": "说明如下："},
+               {"id": "f", "kind": "table", "body": "| 甲 |\n| --- |\n| 乙 |"}]
+    assert module._word_heading_ids(MagicMock(), row, objects) == {"a", "b", "d"}
+
+
+@pytest.mark.parametrize(("text", "locked"), [("3.2.1 功能需求", True), ("二、总体要求", True), ("**1.1 标识**", True),
+                                              ("系统应在 5 分钟内接收全部状态数据，并在断线后补传。", False), ("1) 文档标识号：TN/x;", False)])
+def test_suspected_heading_patterns(text, locked):
+    assert (module.suspected_heading_ids([{"id": "x", "kind": "paragraph", "body": text}]) == {"x"}) is locked

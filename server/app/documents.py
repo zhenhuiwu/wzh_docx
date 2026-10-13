@@ -1427,6 +1427,9 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         if scope_list:
             block_scope = {"heading": scope_heading, "blocks": scope_list}
             inputs.update(block_scope=block_scope, edit_in_place=False)
+        else:
+            # The whole-section rewrite could change locked headings; existing text is only edited by block operations.
+            raise AppError(409, "AI_SCOPE_UNAVAILABLE", "本节正文无法按段落定位，AI 不能修改已有内容。请刷新后重试，或选中文字后使用“选中文字”。")
     if selected_only:
         inputs["effective_guidance"] = advice
     elif not whole_document:
@@ -1761,13 +1764,34 @@ def _word_heading_ids(connection, row, objects: list[dict]) -> set[str]:
     try:
         html, mapped = decorate_object_ids(connection, row[0], _editing_html(connection, row))
     except AppError:
-        logger.warning("word heading detection unavailable document=%s", row[0])
-        return set()
+        html, mapped = "", False
     if not mapped:
-        return set()
+        # Without the Word preview, lock anything that looks like a heading rather than risk rewriting one.
+        logger.warning("word heading detection unavailable document=%s; locking suspected headings", row[0])
+        return suspected_heading_ids(objects)
     root = html_dom.fragment_fromstring(html, create_parent="div")
     known = {item["id"] for item in objects}
     return {node.get("data-object-id") for node in root.xpath(".//*[@data-word-heading][@data-object-id]")} & known
+
+
+_NUMBERED_HEADING = re.compile(r"^\s*(?:\d+(?:[.．]\d+)*[.．、]?|[一二三四五六七八九十]+[、.．]|第[一二三四五六七八九十\d]+[章节条])\s*\S")
+_SENTENCE_END = re.compile(r"[。；;，,：:！？!?]$")
+
+
+def suspected_heading_ids(objects: list[dict]) -> set[str]:
+    """Conservative fallback: short paragraphs that look like headings (numbered "1.1 标识",
+    "第一章…", or very short lines without sentence punctuation)."""
+    from app.markdown_blocks import plain_text
+    result = set()
+    for item in objects:
+        if item["kind"] != "paragraph":
+            continue
+        text = " ".join(plain_text(item["body"]).split())
+        if not text or len(text) > 40 or _SENTENCE_END.search(text):
+            continue
+        if _NUMBERED_HEADING.match(text) or len(text) <= 15:
+            result.add(item["id"])
+    return result
 
 
 def _editing_html(connection, row) -> str:
