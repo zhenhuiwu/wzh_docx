@@ -93,10 +93,12 @@ def _create(client, headers, project, name, td, **extra):
     return r.json()["data"]
 
 
-def _write(client, headers, did, text):
-    doc = client.get(f"/api/v1/documents/{did}").json()["data"]
-    r = client.patch(f"/api/v1/documents/{did}/content", headers=headers, json={"expectedRevision": doc["revision"], "markdownContent": text})
-    assert r.status_code == 200, r.text
+def _raw_write(did, text):
+    """直接替换整篇正文（测试数据：整篇重写会删掉只读章节，走保存接口会被 CHAPTER_READONLY 拒绝）。"""
+    from app.db import connect
+    with connect() as conn:
+        conn.execute("UPDATE documents SET markdown_content=%s, revision=revision+1 WHERE id=%s", [text, did])
+        conn.commit()
 
 
 def test_template_upstream_edit_and_cycle(document_context):  # noqa: F811
@@ -114,7 +116,7 @@ def test_create_copies_upstream_chapters_and_links(document_context):  # noqa: F
     client, headers, project, *_ = document_context
     tds = _seed_project(document_context)
     book = _create(client, headers, project, "软件任务计划书", tds["task-book"])
-    _write(client, headers, book["id"], "# 1 范围\n\n（在此编写本章内容。）\n\n## 1.1 标识\n\n本系统标识为 ZB-2。\n\n（提示：写明版本。）\n\n# 3 任务目标\n\n目标正文。\n")
+    _raw_write(book["id"], "# 1 范围\n\n（在此编写本章内容。）\n\n## 1.1 标识\n\n本系统标识为 ZB-2。\n\n（提示：写明版本。）\n\n# 3 任务目标\n\n目标正文。\n")
     srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
     text = client.get(f"/api/v1/documents/{srs['id']}").json()["data"]["markdownContent"]
     assert "本系统标识为 ZB-2。" in text and "来源：《软件任务计划书》" in text
@@ -123,7 +125,7 @@ def test_create_copies_upstream_chapters_and_links(document_context):  # noqa: F
     assert text.count("来源：《软件任务计划书》") == 1 and "范围，创建时复制" not in text and "写明版本" not in text
     ups = client.get(f"/api/v1/documents/{srs['id']}/upstreams").json()["data"]["upstreams"]
     assert ups[0]["documentId"] == book["id"] and ups[0]["copiedChapters"][0]["chapter"].endswith("标识")
-    _write(client, headers, book["id"], "# 1 范围\n\n## 1.1 标识\n\n改了。\n")
+    _raw_write(book["id"], "# 1 范围\n\n## 1.1 标识\n\n改了。\n")
     after = client.get(f"/api/v1/documents/{srs['id']}").json()["data"]["markdownContent"]
     assert "改了" not in after  # 不同步
     assert client.get(f"/api/v1/documents/{srs['id']}/upstreams").json()["data"]["upstreams"][0]["changedSinceLink"]
@@ -326,3 +328,36 @@ def test_task_split_regeneration_skips_unchanged(document_context):  # noqa: F81
     md = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["markdownContent"]
     lines = md.splitlines()
     assert not any(a.startswith("|") and b.startswith("#") for a, b in zip(lines, lines[1:]))  # 下一个标题没被吞进表格
+
+
+def test_locked_chapter_heading_cannot_be_deleted_or_changed(document_context):  # noqa: F811
+    """只读章节（公共框架、任务分解）的标题被删除、改名或改级别都返回 409 CHAPTER_READONLY。"""
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    plan = _create(client, headers, project, "软件开发计划", tds["dev-plan"])
+
+    def attempt(did, change):
+        d = client.get(f"/api/v1/documents/{did}").json()["data"]
+        return client.patch(f"/api/v1/documents/{did}/content", headers=headers,
+                            json={"expectedRevision": d["revision"], "markdownContent": change(d["markdownContent"])})
+
+    def head_of(md, suffix):
+        return next(line for line in md.splitlines() if line.startswith("#") and line.rstrip().endswith(suffix))
+
+    def drop_heading(suffix):
+        return lambda md: md.replace(head_of(md, suffix) + "\n", "", 1)
+
+    def rename(suffix):
+        return lambda md: md.replace(head_of(md, suffix), head_of(md, suffix) + "（改）", 1)
+
+    def relevel(suffix):
+        return lambda md: md.replace(head_of(md, suffix), "#" + head_of(md, suffix), 1)
+
+    for did, suffix in [(srs["id"], "运行环境"), (plan["id"], "任务分解")]:
+        for change in (drop_heading(suffix), rename(suffix), relevel(suffix)):
+            r = attempt(did, change)
+            assert r.status_code == 409 and r.json()["error"]["code"] == "CHAPTER_READONLY", r.text
+    # 普通章节标题照常可改
+    r = attempt(srs["id"], rename("功能需求"))
+    assert r.status_code == 200, r.text

@@ -454,6 +454,16 @@ def _section_body_text(body: str) -> str:
     return "".join(b.body.strip() + "\n" for b in split(body)[1])
 
 
+def _locked_headings(markdown: str, keys: set[str]) -> dict[str, str]:
+    """只读章节的标题原文（含级别），按标题键取第一处。"""
+    from app.markdown_blocks import split
+    out: dict[str, str] = {}
+    for block in split(markdown or "")[1]:
+        if block.kind == "heading":
+            out.setdefault(chapter_key(heading_text(block.body)), block.body.strip())
+    return {k: v for k, v in out.items() if k in keys}
+
+
 def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
     from app.markdown_blocks import split
     _p, blocks = split(markdown or "")
@@ -475,7 +485,7 @@ _GUARD_EXEMPT = frozenset({"restore", "revert", "undo", "backfill", "realign", "
 
 def guard_locked_chapters(conn, document_id, base_revision: int, markdown: str | None, actor, kind: str = "edit") -> None:
     """保存检查点（record_commit 调用）：公共框架章节（引用处只读）和开发计划书“任务分解”（由任务生成）不能被用户改写。
-    系统写入（actor 为空、或本模块的自动生成）不检查。章节标题本身的增删由模板结构管控，这里只比较正文。"""
+    系统写入（actor 为空、或本模块的自动生成）不检查。正文改动、标题删除或改写（改名、改级别）都拒绝。"""
     if markdown is None or actor is None or _SYSTEM_WRITE.get() or kind in _GUARD_EXEMPT:
         return
     keys = _locked_sections(conn, document_id)
@@ -487,6 +497,9 @@ def guard_locked_chapters(conn, document_id, base_revision: int, markdown: str |
         return
     before, after = _section_bodies(row["markdown_content"], keys), _section_bodies(markdown, keys)
     changed = [k for k in before if k in after and before[k] != after[k]]
+    # 标题被删除或改写（改名、改级别）同样拒绝：改名后标题键变了，原章节在新稿里就“不见了”
+    heads_before, heads_after = _locked_headings(row["markdown_content"], keys), _locked_headings(markdown, keys)
+    changed += [k for k, head in heads_before.items() if heads_after.get(k) != head and k not in changed]
     if changed:
         raise AppError(409, "CHAPTER_READONLY", "公共框架和“任务分解”章节在此只读：公共框架在“分工 › 公共框架”中修改，任务分解由任务自动生成。",
                        details={"chapters": changed})
