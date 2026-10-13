@@ -17,6 +17,7 @@ _lock = threading.Lock()
 _headings: OrderedDict[str, dict[str, int]] = OrderedDict()
 _blocks: OrderedDict[tuple, list[dict]] = OrderedDict()
 _warming: dict[tuple, threading.Event] = {}
+_parsing: dict[str, threading.Event] = {}
 MAX_FILES, MAX_DOCS = 64, 32
 WARM_WAIT_S = 3.0
 SHORT = 200  # 标题样式段落都很短；更长的正文不比较，省时间
@@ -42,12 +43,37 @@ def word_heading_texts(storage_key: str, path: Path) -> dict[str, int]:
         if storage_key in _headings:
             _headings.move_to_end(storage_key)
             return _headings[storage_key]
+        pending = _parsing.get(storage_key)
+        if pending is None:
+            pending = _parsing[storage_key] = threading.Event()
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        # N1：打开时 /objects 与 /preview/blocks 同时到达，同一原稿只解析一次（另一个等它）
+        pending.wait(30)
+        with _lock:
+            if storage_key in _headings:
+                return _headings[storage_key]
+    try:
+        # N1：python-docx 解析原稿约 0.25 s 纯 CPU（慢机上更久），放进快速进程池，不在请求线程里抢 GIL
+        from app import preview_cache
+        return _remember(_headings, storage_key, preview_cache.fast_call(parse_headings, str(path)), MAX_FILES)
+    finally:
+        if owner:
+            with _lock:
+                _parsing.pop(storage_key, None)
+            pending.set()
+
+
+def parse_headings(path: str) -> dict[str, int]:
+    """纯函数（快速进程池里执行）：原稿里 Word 认作标题的段落 {去空白纯文本: 级别}。"""
     from docx import Document
     from docx.text.paragraph import Paragraph
     from app.docx_preview import memoize_styles, word_heading_like
     result: dict[str, int] = {}
     try:
-        doc = Document(str(path))
+        doc = Document(path)
         memoize_styles(doc)
         for element in doc.element.body.iterchildren():
             if element.tag.endswith("}p"):
@@ -57,7 +83,7 @@ def word_heading_texts(storage_key: str, path: Path) -> dict[str, int]:
                     result.setdefault(text, level)
     except Exception:  # noqa: BLE001 - 原稿读不了时只是没有标记，不影响正文
         result = {}
-    return _remember(_headings, storage_key, result, MAX_FILES)
+    return result
 
 
 def word_heading_levels(connection, document_id, rows) -> dict[str, int]:

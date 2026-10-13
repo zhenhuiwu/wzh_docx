@@ -151,3 +151,31 @@ def test_reopen_reads_wait_for_inflight_patch(document_context, monkeypatch):  #
     assert result["patch"].status_code == 200, result["patch"].text
     assert reopened["documentRevision"] == page["documentRevision"] == revision + 1
     assert any(item["markdown"].endswith("关页") for item in reopened["objects"])
+
+
+def test_word_headings_parsed_once_off_process(monkeypatch):
+    """N1：同一原稿的标题表在快速进程池里只解析一次；/objects 与 /preview/blocks 同时到达时另一个等结果。"""
+    import threading
+
+    calls = []
+    gate = threading.Event()
+
+    def fake_call(fn, *args):
+        calls.append((fn, args))
+        gate.wait(5)
+        return fn(*args)
+    monkeypatch.setattr(preview_cache, "fast_call", fake_call)
+    fast_preview.clear()
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(fast_preview.word_heading_texts("srs-key", SRS))) for _ in range(3)]
+    [thread.start() for thread in threads]
+    time.sleep(0.2)
+    gate.set()
+    [thread.join(10) for thread in threads]
+    assert len(calls) == 1 and calls[0][0] is fast_preview.parse_headings
+    assert len(results) == 3 and results[0] and all(item == results[0] for item in results)
+
+
+def test_fast_pool_runs_heading_parse():
+    """快速进程池真的在子进程里算出与本进程相同的结果。"""
+    assert preview_cache.fast_call(fast_preview.parse_headings, str(SRS)) == fast_preview.parse_headings(str(SRS))
