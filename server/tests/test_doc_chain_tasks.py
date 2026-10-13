@@ -304,3 +304,25 @@ def test_framework_and_task_split_chapters_are_readonly(document_context):  # no
     task = r.json()["data"]
     assert client.delete(f"/api/v1/tasks/{task['id']}?expectedRevision=0", headers=headers).status_code == 204
     assert "需求细化" not in doc(plan["id"])["markdownContent"] and "尚无任务" in doc(plan["id"])["markdownContent"]
+
+
+def test_task_split_regeneration_skips_unchanged(document_context):  # noqa: F811
+    """任务变化但生成的“任务分解”内容不变时不保存、不新增修订。"""
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    plan = _create(client, headers, project, "软件开发计划", tds["dev-plan"])
+    rev = lambda: client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["revision"]  # noqa: E731
+    chapters = client.get(f"/api/v1/projects/{project}/documents/{srs['id']}/chapters").json()["data"]["chapters"]
+    func = next(c for c in chapters if c["title"].endswith("功能需求"))
+    task = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "需求细化", "targets": [
+        {"documentId": srs["id"], "objectId": func["objectId"]}]}).json()["data"]
+    after_create = rev()
+    r = client.patch(f"/api/v1/tasks/{task['id']}", headers=headers, json={"expectedRevision": 0, "description": "只改说明"})
+    assert r.status_code == 200, r.text
+    assert rev() == after_create  # 表格不含说明：内容不变，不保存
+    r = client.patch(f"/api/v1/tasks/{task['id']}", headers=headers, json={"expectedRevision": 1, "title": "需求细化二"})
+    assert r.status_code == 200 and rev() == after_create + 1
+    md = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["markdownContent"]
+    lines = md.splitlines()
+    assert not any(a.startswith("|") and b.startswith("#") for a, b in zip(lines, lines[1:]))  # 下一个标题没被吞进表格

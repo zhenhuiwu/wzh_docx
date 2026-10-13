@@ -410,7 +410,9 @@ def _replace_section(markdown: str, key: str, body: str) -> str | None:
                 end += 1
             _p, fresh = split(body)
             gap = block.gap_after or "\n\n"
-            fresh = [type(b)(b.kind, b.body, b.gap_after or gap, b.heading_level) for b in fresh]
+            # 每块后至少空一行：否则末块（表格）会把下一个标题吞进表格
+            fresh = [type(b)(b.kind, b.body, b.gap_after if (b.gap_after or "").endswith("\n\n") else gap, b.heading_level)
+                     for b in fresh]
             return assemble(prefix, [*blocks[:index + 1], *fresh, *blocks[end:]])
     return None
 
@@ -421,6 +423,9 @@ def regenerate_task_chapter(conn, pid: str) -> None:
     table = _task_table(conn, pid)
     for did in _plan_documents(conn, pid):
         row = conn.execute("SELECT markdown_content, revision FROM documents WHERE id=%s", [did]).fetchone()
+        current = _section_bodies(row["markdown_content"], {SPLIT_KEY}).get(SPLIT_KEY)
+        if current is None or current == _section_body_text(table):
+            continue  # 章节不存在或内容没变：不保存，不新增修订
         fresh = _replace_section(row["markdown_content"], SPLIT_KEY, table)
         if fresh is None or fresh == row["markdown_content"]:
             continue
@@ -441,6 +446,12 @@ def _locked_sections(conn, document_id) -> set[str]:
     if item["key"] == PLAN_KEY:
         keys.add(SPLIT_KEY)
     return keys
+
+
+def _section_body_text(body: str) -> str:
+    """与 _section_bodies 同一口径的章节正文（逐块去首尾空白），用于判断生成内容是否有变化。"""
+    from app.markdown_blocks import split
+    return "".join(b.body.strip() + "\n" for b in split(body)[1])
 
 
 def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
