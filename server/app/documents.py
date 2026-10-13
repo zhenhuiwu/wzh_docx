@@ -810,6 +810,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
             (row[4],),
         ).fetchone() if row[4] else None
         template = _template_info(conn, did, row[4], row[15], None if group is None else group[0])
+        warm_preview(conn, row)  # P0-2：正文接口立即返回，整篇预览在后台准备
 
         return {
             "data": {
@@ -1740,9 +1741,8 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
 
-        from app.document_selection import decorate_selection_html
         from app.document_objects import decorate_object_ids
-        html = decorate_selection_html(row[7], _editing_html(conn, row))
+        html = _cached_html(conn, row, selection=True)
         # S7：能证明一一对应时为顶层块加对象 ID；ensure 可能补建对象行，需提交。
         ensure_document_objects(conn, did)
         if conn.in_transaction:
@@ -1794,15 +1794,49 @@ def suspected_heading_ids(objects: list[dict]) -> set[str]:
     return result
 
 
-def _editing_html(connection, row) -> str:
+def _render_job(connection, row, *, selection: bool):
+    """(缓存键, 渲染函数)。渲染函数不碰数据库连接，可在后台线程执行。"""
+    from app import preview_cache
     from app.docx_preview import render_document_html
     file = connection.execute("SELECT storage_key FROM files WHERE id = %s AND status = 'stored'", [row[5]]).fetchone()
     if file is None:
         raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
+    path = resolve_object(get_settings().file_data_dir, file[0])
+    markdown, images, outline = row[7], row[6].get("images", []), bool(row[6].get("wordOutlineHeadings"))
+
+    def render() -> str:
+        html = render_document_html(path, markdown, images, outline_headings=outline)
+        if selection:
+            from app.document_selection import decorate_selection_html
+            html = decorate_selection_html(markdown, html)
+        return html
+    key = ("selection:" if selection else "word:") + preview_cache.key_of(str(file[0]), markdown, images, outline)
+    return key, render
+
+
+def _cached_html(connection, row, *, selection: bool) -> str:
+    from app import preview_cache
+    key, render = _render_job(connection, row, selection=selection)
     try:
-        return render_document_html(resolve_object(get_settings().file_data_dir, file[0]), row[7], row[6].get("images", []), outline_headings=bool(row[6].get("wordOutlineHeadings")))
+        return preview_cache.get(key, render)
     except ValueError as exc:
         raise AppError(422, "PREVIEW_UNSUPPORTED", str(exc)) from None
+
+
+def _editing_html(connection, row) -> str:
+    return _cached_html(connection, row, selection=False)
+
+
+def warm_preview(connection, row) -> None:
+    """打开文档时后台预热整篇预览（P0-2）；失败不影响正文接口。"""
+    from app import preview_cache
+    if not row[5]:
+        return
+    try:
+        key, render = _render_job(connection, row, selection=True)
+    except AppError:
+        return
+    preview_cache.warm(key, render)
 
 
 @router.get("/documents/{document_id}/original-preview")
