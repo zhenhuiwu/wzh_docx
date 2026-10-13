@@ -144,7 +144,7 @@ async function submit() {
             </fieldset>
             <p v-if="submitError" class="field-error" role="alert">{{ submitError }}</p>
           </div>
-          <div class="dialog-foot">
+          <div class="dialog-actions">
             <button type="button" class="ghost" :disabled="submitting" @click="closeCreate">取消</button>
             <button type="submit" class="primary" :disabled="submitting || docsPhase !== 'ready'">{{ submitting ? "正在建立…" : "建立基线" }}</button>
           </div>

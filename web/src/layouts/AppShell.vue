@@ -136,6 +136,7 @@ const crumbs = computed<Crumb[]>(() => {
     const list: Crumb[] = [{ label: "项目", to: { name: "projects" } }];
     if (projectName) list.push({ label: projectName, to: { name: "project", params: { id } } });
     if (name === "project") list.push({ label: "项目概述" });
+    else if (name === "project-baselines") list.push({ label: "基线" });
     else list.push({ label: "文档编写", to: name === "document" ? { name: "project-documents", params: { id } } : undefined });
     if (name === "document") list.push({ label: objectName("文档") });
     return list;

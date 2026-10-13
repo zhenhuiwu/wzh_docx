@@ -80,7 +80,7 @@ watch(() => [props.documentId, props.base, props.compare], () => void load(), { 
 .segmented { display: flex; gap: var(--space-1); }
 .diff-sections { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .diff-section { border: 1px solid var(--rule); border-radius: var(--radius-sheet); background: var(--sheet); }
-.diff-head { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); text-align: left; }
+.diff-head { display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); text-align: left; }
 .diff-inline, .diff-split { padding: 0 var(--space-3) var(--space-3); font-family: var(--font-doc); font-size: var(--text-md); line-height: var(--leading-md); }
 .diff-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
 .diff-inline p, .diff-split p { margin: 0 0 var(--space-1); padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; }
