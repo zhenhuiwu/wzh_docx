@@ -399,10 +399,11 @@ def test_my_todos_for_writers_and_viewers(document_context):  # noqa: F811
     from app.identity import create_user
     client, headers, project, other, *_ = document_context
     pw = "todo-test-password-1"
-    ids = {k: str(create_user(account=f"todo-{k}", name=k, password=pw, roles=[], allow_no_roles=True)) for k in ("writer", "viewer", "outsider")}
+    ids = {k: str(create_user(account=f"todo-{k}", name=k, password=pw, roles=[], allow_no_roles=True)) for k in ("writer", "viewer", "outsider", "owner")}
     with connect() as conn:
         conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,'editor')", [str(project), ids["writer"]])
         conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,'viewer')", [str(project), ids["viewer"]])
+        conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,'owner')", [str(project), ids["owner"]])
         conn.commit()
     r = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "写需求", "assigneeId": ids["writer"], "targets": []})
     assert r.status_code == 201, r.text
@@ -418,6 +419,11 @@ def test_my_todos_for_writers_and_viewers(document_context):  # noqa: F811
     data = client.get(f"/api/v1/projects/{project}/my-todos").json()["data"]
     assert [t["title"] for t in data["tasks"]] == ["写需求"] and data["issues"] == []
     login("todo-viewer")
+    r = client.get(f"/api/v1/projects/{project}/my-todos")
+    assert r.status_code == 200 and r.json()["data"]["tasks"] == []
+    # 40 复验 N3：没有全局角色的项目负责人同样不依赖 /issues（全局接口仍 403），首页待办 200
+    login("todo-owner")
+    assert client.get(f"/api/v1/issues?projectId={project}").status_code == 403
     r = client.get(f"/api/v1/projects/{project}/my-todos")
     assert r.status_code == 200 and r.json()["data"]["tasks"] == []
     login("todo-outsider")
