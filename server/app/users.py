@@ -450,6 +450,15 @@ def set_roles(user_id: str, request: Request, body: UserRolesBody) -> dict[str, 
     return _envelope(request, updated)
 
 
+def _touch_assignments(connection, user_id) -> None:
+    """A07 复验：停用 / 启用会改变分工面板的“负责人已停用”与编写权，所在项目各文档 assignments_revision + 1，前端随轮询重取。"""
+    connection.execute(
+        "update documents set assignments_revision = assignments_revision + 1 "
+        "where project_id in (select project_id from project_members where user_id = %s)",
+        (str(user_id),),
+    )
+
+
 @router.post("/users/{user_id}/disable")
 def disable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, object]:
     actor = require_permission(request, "users.manage")
@@ -481,6 +490,7 @@ def disable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, 
                 )
                 _revoke(connection, target)
                 _mark_jobs(connection, target)
+            _touch_assignments(connection, target)
             _record(connection, target, actor.user_id, "disable", reason)
             updated = _load(connection, target)
     return _envelope(request, updated)
@@ -508,6 +518,7 @@ def enable_user(user_id: str, request: Request, body: ReasonBody) -> dict[str, o
                 """,
                 (target,),
             )
+            _touch_assignments(connection, target)
             _record(connection, target, actor.user_id, "enable", reason)
             updated = _load(connection, target)
     return _envelope(request, updated)

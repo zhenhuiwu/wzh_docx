@@ -112,7 +112,7 @@ def test_picker_search_pagination_preview_and_restricted_editor(refs):
     with connect() as connection:
         user = connection.execute("SELECT id FROM users WHERE account='version-other'").fetchone()['id']
         connection.execute("INSERT INTO project_members(project_id,user_id,role) VALUES(%s,%s,'editor')", (project, user))
-        connection.execute('UPDATE documents SET assignments_enabled=1 WHERE id=%s', (target['id'],))
+        connection.execute("UPDATE documents SET assignment_mode='enforced' WHERE id=%s", (target['id'],))
         connection.commit()
     other_headers = login(client, 'version-other')
     assert client.get(base+'/references').json()['data']['canEdit'] is False

@@ -34,6 +34,11 @@ export interface DocumentPermissions {
   canResolveConflicts: boolean;
   canViewMemberConflicts: boolean;
   readonlyReason: "role" | "archived" | "assignment" | null;
+  /** A07：分工模式、分工修订号、能否分配。 */
+  assignmentMode?: "open" | "enforced";
+  assignmentsRevision?: number;
+  canAssign?: boolean;
+  projectOwners?: Array<{ id: string; name: string }>;
 }
 
 export interface Capability { available: boolean; reason: string | null }
@@ -113,7 +118,7 @@ export async function updateDocumentContent(
   markdownContent: string,
   memory?: WritingMemory,
   retractMemoryRevision?: number,
-  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean; baseMarkdown?: string } = {}
+  options: { clientSaveKey?: string; allowMerge?: boolean; keepalive?: boolean; baseMarkdown?: string; blockIds?: Array<string | null> } = {}
 ): Promise<ContentSaveResult> {
   const { keepalive, ...extra } = options;
   const body = await apiRequest<{ data: any }>(`/documents/${id}/content`, {
@@ -252,10 +257,10 @@ export async function applyDocumentEdits(id: string, expectedRevision: number, e
   return body.data;
 }
 
-export async function streamDocumentSection(id: string, expectedRevision: number, headingIndex: number | null, instruction: string, selectedText: string | undefined, onEvent: (event: DraftEvent) => void, signal: AbortSignal, scope: WritingMemory["scope"] = "section", selection?: DocumentSelection): Promise<void> {
+export async function streamDocumentSection(id: string, expectedRevision: number, headingIndex: number | null, instruction: string, selectedText: string | undefined, onEvent: (event: DraftEvent) => void, signal: AbortSignal, scope: WritingMemory["scope"] = "section", selection?: DocumentSelection, selectionBlockIds?: string[]): Promise<void> {
   let completed = false;
   await apiRequest<DraftEvent>(`/documents/${id}/sections/draft?stream=true`, {
-    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection }, timeoutMs: 120000, signal,
+    method: "POST", json: { expectedRevision, headingIndex, instruction, selectedText, scope, selection, ...(selectionBlockIds?.length ? { selectionBlockIds } : {}) }, timeoutMs: scope === "document" ? 600000 : 120000, signal,
     onEvent: (event) => {
       if (event.type === "error") throw new ApiError(502, "AI_FAILED", event.message || "AI 编写中断，请重试。");
       if (event.type === "done") completed = true;

@@ -155,8 +155,11 @@ def restore_version(request: Request, document_id: str, revision: int, body: Ver
     from app.documents import _check_word, _content_result, _document_row, _admin, _save_markdown
     with connect() as connection:
         did, current = _visible(connection, request, document_id, "documents.edit")
-        from app.document_assignments import require_scope_write
-        require_scope_write(connection, did, document_principal(request).user_id)
+        from app.document_assignments import actor_scope, restricted
+        if restricted(*actor_scope(connection, did, document_principal(request).user_id)):
+            # A07 U-12：按分工编辑的文档，整篇版本恢复只有项目负责人和系统管理员能做
+            raise AppError(403, "FORBIDDEN", "按分工编辑的文档只有项目负责人可以恢复版本。",
+                           details={"projectRole": "editor", "ownerName": None})
         if current[12] != body.expectedRevision:
             raise revision_conflict(connection, did, "文档已更新，请重新核对后恢复。")
         record_current_version(connection, did, expected_revision=body.expectedRevision)

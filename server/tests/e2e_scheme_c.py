@@ -91,6 +91,15 @@ class Run:
             time.sleep(0.5)
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def scenario(name: str):
     def wrap(fn):
         def run(ctx: Run):
@@ -1461,8 +1470,8 @@ def word_list_doc(ctx: Run, name: str, items: list[tuple[str, int]]) -> str:
                                data={"purpose": "attachment", "projectId": ctx.data["project"]["id"]},
                                headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"schemec-{uuid.uuid4()}"})
     assert upload.status_code == 201, upload.text
-    return zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
-                      json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
+    return open_mode(zhang, zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
+                      json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))["id"]
 
 
 def sink_list_conflict(ctx: Run, page, name: str, markdown, click: str, old: str, new: str, trigger: str) -> str:
@@ -1645,8 +1654,8 @@ def str_doc(ctx: Run, name: str) -> str:
                                data={"purpose": "attachment", "projectId": ctx.data["project"]["id"]},
                                headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"schemec-str-{uuid.uuid4()}"})
     assert upload.status_code == 201, upload.text
-    return zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
-                      json={"name": f"{name}-{time.strftime('%H%M%S')}", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
+    return open_mode(zhang, zhang.call("POST", f"/projects/{ctx.data['project']['id']}/documents",
+                      json={"name": f"{name}-{time.strftime('%H%M%S')}", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))["id"]
 
 
 STR_TABLE_START = "| 测试轮次 | 测试轮次 | 问题总计 | 问题类型 |"

@@ -28,15 +28,15 @@ export const ROLE_TONE: Record<string, string> = { owner: "info", editor: "succe
 
 /**
  * 角色说明。16 §2.6 写的是 A07（硬限制分工）上线后的说法“可以修改文档中分配给自己的部分”；
- * A07 未上线前编写人员能改整篇文档，界面如实写“可以修改项目中的文档”（见 18-A05开发.md 偏差 F-1）。A07 上线时改这里一处即可。
+ * A07 已上线：编写人员只能修改分配给自己的部分（17 §4.5；F-1 偏差已恢复）。
  */
 export const ROLE_OPTIONS: Array<{ value: AssignableRole; label: string; hint: string }> = [
   { value: "owner", label: "负责人", hint: "可以编写，并管理成员和项目资料" },
-  { value: "editor", label: "编写人员", hint: "可以修改项目中的文档" },
+  { value: "editor", label: "编写人员", hint: "只能修改文档中分配给自己的部分" },
   { value: "viewer", label: "只读成员", hint: "可以查看和导出文档" },
 ];
 
-export const MEMBERS_INFO = "编写人员可以修改项目中的文档；只读成员可以查看和导出。权限调整后，对方在下次保存或 1 分钟内生效。";
+export const MEMBERS_INFO = "编写人员只能修改文档中分配给自己的部分（在下方“编写分工”或文档的“编写分工”中分配）；只读成员可以查看和导出。权限调整后，对方在下次保存或 1 分钟内生效。";
 export const LAST_OWNER_TEXT = "项目至少需要一位启用中的负责人。请先把其他成员设为负责人。";
 export const DISABLED_ROW_TEXT = "账号已停用，不能调整权限；可以移除。";
 export const ARCHIVED_MEMBERS_TEXT = "项目已归档，成员和权限不能调整。恢复项目后才能修改。";
@@ -121,6 +121,20 @@ export function assignmentParts(value: Assignments | null | undefined, joiner = 
   if (value.sections) parts.push(`${value.sections} 章`);
   if (value.blocks) parts.push(`${value.blocks} 段`);
   return parts.join(joiner);
+}
+
+/** 成员表“编写分工”列（16 §2.3，K-5）：“{s} 章 · {b} 段” / “{n} 篇文档”；都为 0 显示“—”。 */
+export function assignCountText(value: Assignments | null | undefined): { main: string; docs: string } {
+  const main = assignmentParts(value, " · ");
+  return main ? { main, docs: `${value!.documents} 篇文档` } : { main: "—", docs: "" };
+}
+
+/** S-5：降为只读成员前确认（有分工时）。没有分工返回 null，直接改。 */
+export function demoteConfirmText(member: Pick<MemberLike, "name" | "assignments">, role: string): { title: string; body: string } | null {
+  const parts = assignmentParts(member.assignments);
+  if (role !== "viewer" || !parts) return null;
+  return { title: `把 ${member.name} 改为只读成员？`,
+    body: `${member.name} 在 ${member.assignments!.documents} 篇文档中负责的 ${parts}将变为未分配，只有负责人能修改。` };
 }
 
 /** 移除确认正文（16 §2.6）。 */
@@ -241,6 +255,7 @@ export function pickError(count: number): string {
 /** 工作台只读原因（16 §2.10，按枚举选文案，不拼后端 message）。 */
 export function readonlyText(reason: ReadonlyReason, projectRole: string | null | undefined, changed = false): string {
   if (reason === "archived") return "项目已归档，可以查看和导出，不能修改正文。";
+  if (reason === "assignment") return "这份文档里还没有分给你编写的章节，可以查看和导出。需要修改请联系项目负责人分配。";
   if (projectRole === "auditor") return "你以审计身份只读查看该项目，可以查看和导出，不能修改正文。";
   const role = roleLabel(projectRole);
   return changed ? `你在该项目中的权限已调整为${role}，可以查看和导出，不能修改正文。` : `你在该项目中是${role === "—" ? "成员" : role}，可以查看和导出，不能修改正文。`;
@@ -249,6 +264,7 @@ export function readonlyText(reason: ReadonlyReason, projectRole: string | null 
 /** 工作台保存被挡时的提示条（有未保存内容时）。 */
 export function readonlyBlockedText(reason: ReadonlyReason, projectRole: string | null | undefined): string {
   if (reason === "archived") return "项目已归档，刚才的修改没有保存，可以下载。";
+  if (reason === "assignment") return "分给你的章节已被调整，刚才的修改没有保存，可以下载。";
   return `你的权限已调整为${roleLabel(projectRole)}，刚才的修改没有保存，可以下载。`;
 }
 
