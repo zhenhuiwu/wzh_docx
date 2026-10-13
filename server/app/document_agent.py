@@ -34,6 +34,7 @@ from app.document_rules import SKILL_ROOT, DraftFormatError, DraftHeadingError, 
 from app.document_memory import document_context, load_task_memory, read_memory_history
 from app.template_import import guidance_for_section
 from app.document_references import reference_context
+from app.block_ops import BlockOperationFormatError, parse_operations, prompt_blocks
 
 
 def _project_overview(project_id: UUID) -> str:
@@ -250,6 +251,7 @@ def _section_agent(
     effective_guidance: list[dict] | None = None,
     edit_in_place: bool = False,
     references: list[dict] | None = None,
+    block_scope: dict | None = None,
 ):
     # Snapshot once: callers changing their dictionary after construction cannot
     # change constraints half-way through reading or planning this draft.
@@ -471,7 +473,15 @@ def _section_agent(
     model_limit = min(256, max(48, reading_pages + 12)) if whole_document else 12
     tool_limit = min(512, max(96, reading_pages + 24)) if whole_document else 24
     preparation["recursion_limit"] = max(400, model_limit * 8) if whole_document else 100
-    scope_prompt = (
+    block_prompt = (
+        '你是文档就地修改智能体。用户消息的“本节块列表”给出当前章节的全部可改块及其 blockId；标记 locked 的是已锁定标题。'
+        '只输出严格 JSON：{"operations":[{"op":"replace","blockId":"块ID","content":"该块修改后的完整正文Markdown"},'
+        '{"op":"insertAfter","blockId":"块ID","content":"插入在该块之后的新段落"},{"op":"delete","blockId":"块ID"}]}。'
+        'blockId 只能取自本节块列表；锁定标题只能作为 insertAfter 的位置，不能 replace 或 delete，content 不含任何标题。'
+        '新增内容用 insertAfter 放在语义上正确的块后面（补在章节开头时用标题块）；只修改确有必要的块，未列出的块原样保留。'
+        '一个块只 replace 或 delete 一次；一次最多 20 个操作、6000 字。无需修改时返回{"operations":[]}。不输出代码围栏或解释。'
+    )
+    scope_prompt = block_prompt if block_scope is not None else (
         '你是专业文档编辑智能体。本次针对整篇文档进行编辑。只输出严格 JSON：'
         '{"edits":[{"headingIndex":0,"content":"该节修改后的完整正文Markdown"}]}。'
         'headingIndex与大纲索引一致，标题前正文用null。只列有改动的节，不输出代码围栏或过程说明。'
@@ -509,7 +519,8 @@ def _section_agent(
     initial_content = (
         f"文档名称：{document_name or '未提供'}\n来源模板：{template_name or '用户上传文档'}\n"
         f"目标标题（{level}级）：{heading}\n"
-        f"{'选中文字' if selected_only else '该标题现有正文'}：\n{existing or '（暂无）'}\n\n"
+        + (f"本节块列表：\n{json.dumps(prompt_blocks(block_scope['heading'], block_scope['blocks']), ensure_ascii=False)}\n\n"
+           if block_scope is not None else f"{'选中文字' if selected_only else '该标题现有正文'}：\n{existing or '（暂无）'}\n\n") +
         f"当前文档{'完整大纲与背景' if whole_document else '背景'}：\n{context}\n\n"
         f"编写要求：{instruction}\n\n"
         f"本篇有效编写建议：{json.dumps(initial_guidance, ensure_ascii=False)}\n\n"
@@ -580,7 +591,8 @@ def _section_agent(
             "本篇有效编写建议、绑定Skill快照、额外要求、项目概述与当前正文均已提供；不要为走流程重复读取。"
             "技能的整份文档生成流程须适配当前编辑范围：本次只修改用户要求的正文，"
             "不修改封面、标题或模板结构，不运行脚本，不输出过程解释或合规保证。"
-            + ("本次严格按replacements JSON协议返回修改片段，不返回整节正文。" if edit_in_place else
+            + ("本次严格按operations JSON协议返回块操作，不返回整节正文。" if block_scope is not None else
+               "本次严格按replacements JSON协议返回修改片段，不返回整节正文。" if edit_in_place else
                "章节与选区模式不输出JSON；全文模式严格按edits JSON协议返回各节正文。") +
             "排版只能使用段落、加粗、斜体、单层列表、矩形表格；保留 Word 单元格的 <br> 换行及原文已有的表格标记。"
             "before 须逐字复制原文，包括原有标记；不新增其他 HTML、链接、代码、引用块或分隔线。"
@@ -693,6 +705,16 @@ def _output_body(content: str, values: dict, *, complete: bool = True) -> str:
     try:
         if values.get("whole_document"):
             return generated_body(content, complete=complete, whole_document=True)
+        if values.get("block_scope") is not None:
+            # Operations are only usable once complete; never stream partial JSON.
+            if not complete:
+                return ""
+            scope = values["block_scope"]
+            try:
+                operations = parse_operations(generated_body(content, complete=True, whole_document=True), scope["heading"], scope["blocks"])
+            except BlockOperationFormatError as error:
+                raise _RepairableOutput(str(error)) from None
+            return json.dumps({"operations": operations}, ensure_ascii=False)
         if values.get("edit_in_place"):
             # Never display partial JSON or use a model rewrite as a fallback.
             text = generated_body(content, complete=complete, whole_document=True)
@@ -733,7 +755,7 @@ def _output_body(content: str, values: dict, *, complete: bool = True) -> str:
         raise
 
 
-def _format_correction(inputs: dict, content: str, whole_document: bool, *, error: str = "", edit_in_place: bool = False) -> dict:
+def _format_correction(inputs: dict, content: str, whole_document: bool, *, error: str = "", edit_in_place: bool = False, block_ops: bool = False) -> dict:
     return {**inputs, "messages": [*inputs["messages"], AIMessage(content=content), HumanMessage(content=(
         "上一份结果未通过正文格式检查：" + error + "。"
         "只修正输出格式，保留事实、语义、表格、图片与当前模块的有效编写建议，不扩大范围，不添加解释。"
@@ -741,7 +763,8 @@ def _format_correction(inputs: dict, content: str, whole_document: bool, *, erro
         "不得输出脚本、事件属性或代码围栏。before 中的原文标记必须逐字保留，不受正文输出格式限制。"
         "章节标题由原文大纲保留；重复当前标题不再输出，新产生的小标题改为普通正文或加粗标签，保留其内容。"
         "已有表格必须原位填写，逐张保留原表行列和字段标签；将重复生成或表外重复描述的填写结果放回对应单元格，不另造表格。"
-        + ("仅返回 replacements JSON；before逐字引用当前原文，未修改内容不要输出。" if edit_in_place else
+        + ("仅返回 operations JSON；blockId 只能取自本节块列表，不含标题。" if block_ops else
+           "仅返回 replacements JSON；before逐字引用当前原文，未修改内容不要输出。" if edit_in_place else
            "仅返回原协议的 edits JSON。" if whole_document else "仅返回当前范围的正文。")
     ))]}
 
@@ -779,7 +802,8 @@ def draft_section_text(**kwargs) -> str:
         return _output_body(content, kwargs)
     except _RepairableOutput as error:
         result = agent.invoke(_format_correction(inputs, content, kwargs.get("whole_document", False),
-                                                error=str(error), edit_in_place=kwargs.get("edit_in_place", False)),
+                                                error=str(error), edit_in_place=kwargs.get("edit_in_place", False),
+                                                              block_ops=kwargs.get("block_scope") is not None),
                               config={"recursion_limit": preparation["recursion_limit"]})
         return _output_body(result["messages"][-1].text, kwargs)
 
@@ -956,7 +980,8 @@ async def _stream_module_text(*, include_progress: bool = False, **kwargs) -> As
             if include_progress:
                 yield {"type": "progress", "stage": "formatting", "message": "正在修正当前模块的输出格式"}
             corrected = await agent.ainvoke(_format_correction(inputs, content, kwargs.get("whole_document", False),
-                                                              error=str(error), edit_in_place=kwargs.get("edit_in_place", False)),
+                                                              error=str(error), edit_in_place=kwargs.get("edit_in_place", False),
+                                                              block_ops=kwargs.get("block_scope") is not None),
                                            config={"recursion_limit": preparation.get("recursion_limit", 100)})
             final = _output_body(corrected["messages"][-1].text, kwargs)
         if final != last_emitted:

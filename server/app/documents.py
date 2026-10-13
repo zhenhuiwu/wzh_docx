@@ -218,6 +218,8 @@ class SectionDraftBody(BaseModel):
     instruction: str = Field(default="", max_length=2000)
     scope: Literal["section", "selection", "document"] = "section"
     selection: DocumentSelectionBody | None = None
+    # Spec 30 §4.7: block-ID whitelist of the section; operations outside it are rejected.
+    blockIds: list[str] | None = Field(default=None, max_length=500)
 
 
 class GuidanceQueryBody(BaseModel):
@@ -959,6 +961,23 @@ def _section_update(row, index: int, content: str, mode: str, instruction: str =
     return row[7][:int(heading["bodyStart"])].rstrip() + "\n\n" + content + "\n\n" + row[7][position:]
 
 
+def _block_result(connection, row, index: int, content: str, scope: dict, rules: dict, heading: str,
+                  existing: str, instruction: str = "") -> tuple[str, list[dict], list[str]]:
+    """Validate block operations, compose the section for Word checks and render each operation."""
+    import markdown as md
+    from app.block_ops import apply_operations, parse_operations
+    operations = parse_operations(content, scope["heading"], scope["blocks"])
+    composed = apply_operations(scope["heading"], scope["blocks"], operations)
+    if operations:
+        validate_draft(composed, rules, heading=heading, preserve_images=True, existing=existing)
+        modes = _section_adoption_modes(connection, row, index, composed, instruction, in_place=True)
+    else:
+        modes = ["replace"]
+    for item in operations:
+        item["html"] = md.markdown(item["content"], extensions=["tables"]) if item["content"] else ""
+    return composed, operations, modes
+
+
 def _section_adoption_modes(connection, row, index: int, content: str, instruction: str = "", *, in_place: bool = False) -> list[str]:
     """Check both adoption modes; a protected original paragraph can still allow append.
 
@@ -1316,6 +1335,18 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         guidance_context=context,
         references=references,
     )
+    block_scope = None
+    if not selected_only and not whole_document and existing.strip():
+        from app.block_ops import scope_blocks
+        scope_heading, scope_list = scope_blocks(objects, body.headingIndex)
+        if body.blockIds is not None:
+            allowed = set(body.blockIds)
+            if any(item not in {block["id"] for block in scope_list} | ({scope_heading["id"]} if scope_heading else set()) for item in allowed):
+                raise AppError(409, "AI_SCOPE_VIOLATION", "写作范围已变化，请刷新后重试。")
+            scope_list = [block for block in scope_list if block["id"] in allowed]
+        if scope_list:
+            block_scope = {"heading": scope_heading, "blocks": scope_list}
+            inputs.update(block_scope=block_scope, edit_in_place=False)
     if selected_only:
         inputs["effective_guidance"] = advice
     elif not whole_document:
@@ -1324,15 +1355,17 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         start = int(heading["bodyStart"])
         # Existing section text is stripped; preserve offsets relative to that exact text.
         start += len(row[7][start:]) - len(row[7][start:].lstrip())
-        inputs["writing_modules"] = [{**item, "start": item["start"] - start, "end": item["end"] - start}
-                                     for item in module.get("modules", [])]
+        if block_scope is None:
+            inputs["writing_modules"] = [{**item, "start": item["start"] - start, "end": item["end"] - start}
+                                         for item in module.get("modules", [])]
     rules = section_rules(heading=inputs["heading"], document_name=row[2], template_name=row[15] or "",
                           instruction=body.instruction, existing=existing, selected_only=inputs["selected_only"], writing_skill=_writing_skill(row))
     inputs["rules"] = rules
     if stream:
         import markdown
 
-        def event(kind: str, content: str = "", message: str = "", allowed_modes: list[str] | None = None, stage: str | None = None) -> str:
+        def event(kind: str, content: str = "", message: str = "", allowed_modes: list[str] | None = None, stage: str | None = None,
+                  operations: list[dict] | None = None) -> str:
             edits = _parse_edits(content, row, complete=kind == "done", instruction=body.instruction) if whole_document and content else []
             headings = _headings(row[7])
             html = (("".join("<h2>" + escape(str(headings[edit.headingIndex]["text"]) if edit.headingIndex is not None else "正文") + "</h2>" + markdown.markdown(edit.content, extensions=["tables"]) for edit in edits) or ("<p>正文没有修改。</p>" if kind == "done" else "")) if whole_document
@@ -1343,6 +1376,8 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
                       "edits": [edit.model_dump() for edit in edits]}
             if allowed_modes is not None:
                 result["allowedModes"] = allowed_modes
+            if operations is not None:
+                result["operations"] = operations
             if stage is not None:
                 result["stage"] = stage
             return json.dumps(result, ensure_ascii=False) + "\n"
@@ -1363,6 +1398,8 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
                         yield event("progress", message=update["message"], stage=update["stage"])
                         continue
                     content = update
+                    if block_scope is not None:
+                        continue
                     if not whole_document:
                         validate_draft(content, rules, selected_only=inputs["selected_only"], complete=False,
                                        preserve_images=not inputs["selected_only"], existing=existing)
@@ -1371,6 +1408,14 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
                         last_sent = monotonic()
                 yield event("progress", message="正在检查正文规范与 Word 排版", stage="validation")
                 stage = "validation"
+                if block_scope is not None:
+                    def check_blocks():
+                        with connect() as connection:
+                            return _block_result(connection, row, body.headingIndex, content, block_scope, rules,
+                                                 inputs["heading"], existing, body.instruction)
+                    composed, operations, modes = await asyncio.to_thread(check_blocks)
+                    yield event("done", composed, allowed_modes=modes, operations=operations)
+                    return
                 if not whole_document:
                     content = validate_draft(content, rules, selected_only=inputs["selected_only"], heading=inputs["heading"],
                                              preserve_images=not inputs["selected_only"], existing=existing)
@@ -1423,6 +1468,12 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
             with connect() as connection:
                 _check_word(connection, row, _apply_edits(row[7], edits))
             return {"data": {"edits": [edit.model_dump() for edit in edits], "revision": row[12]}, "requestId": request.state.request_id}
+        if block_scope is not None:
+            with connect() as connection:
+                composed, operations, modes = _block_result(connection, row, body.headingIndex, content, block_scope, rules,
+                                                            inputs["heading"], existing, body.instruction)
+            return {"data": {"content": composed, "operations": operations, "headingIndex": body.headingIndex,
+                             "revision": row[12], "allowedModes": modes}, "requestId": request.state.request_id}
         content = validate_draft(content, rules, selected_only=inputs["selected_only"], heading=inputs["heading"],
                                  preserve_images=not inputs["selected_only"], existing=existing)
         allowed_modes = None

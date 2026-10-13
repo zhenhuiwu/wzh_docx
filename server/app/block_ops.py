@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 
+from app.document_rules import DraftFormatError
 from app.errors import AppError
 
 MAX_OPERATIONS = 20  # spec 30 Q-8: one section, at most 20 paragraphs
@@ -19,7 +20,7 @@ OPS = {"replace", "insertAfter", "delete"}
 _HEADING = re.compile(r"^\s{0,3}#{1,6}[ \t]", re.MULTILINE)
 
 
-class BlockOperationFormatError(ValueError):
+class BlockOperationFormatError(DraftFormatError):
     """The response is not a well-formed operation list; one model correction is allowed."""
 
 
