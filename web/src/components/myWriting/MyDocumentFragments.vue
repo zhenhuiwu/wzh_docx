@@ -4,11 +4,11 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
-import { buildFragments, changedOps, type Fragment } from "../../myBlocks";
+import { buildFragments, changedOps, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 const props = defineProps<{ doc: MyWritingItem; userId: string }>();
-const emit = defineEmits<{ (event: "dirty", value: boolean): void; (event: "saved"): void }>();
+const emit = defineEmits<{ (event: "dirty", value: boolean): void; (event: "saved"): void; (event: "fragments", value: FragmentSummary[]): void }>();
 
 const phase = ref<"loading" | "ready" | "error">("loading");
 const errorText = ref("");
@@ -72,6 +72,14 @@ const pill = computed(() => {
   if (dirty.value) return { tone: "warning", text: "有未保存修改" };
   return { tone: "success", text: state.value === "saved" ? "已保存" : "无修改" };
 });
+const summaries = computed<FragmentSummary[]>(() => fragments.value.map((fragment) => {
+  const ids = new Set(fragment.blocks.map((block) => block.id));
+  const touched = ops.value.some((op) => ids.has(op.objectId));
+  const status = touched && state.value === "conflict" ? "conflict" : touched && state.value === "forbidden" ? "rejected"
+    : fragment.blocks.every((block) => !(drafts.value[block.id] ?? block.markdown).trim()) ? "todo" : "written";
+  return { key: fragment.key, label: fragment.headingPath.at(-1) || "（文档开头）", status };
+}));
+watch(summaries, (value) => emit("fragments", value), { immediate: true });
 defineExpose({ dirty });
 </script>
 
@@ -91,7 +99,7 @@ defineExpose({ dirty });
     </template>
     <div v-else-if="phase === 'error'" class="frag-card"><StatePanel kind="error" title="这一处没能加载。" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel></div>
     <StatePanel v-else-if="!fragments.length" kind="empty" :title="doc.myRole === 'owner' ? '这份文档没有单独分给你的块' : '目前没有分配给你的部分。'" :text="doc.myRole === 'owner' ? '你是文档负责人，可以在文档中编写整篇。' : '负责人分配后会出现在这里。'" />
-    <article v-for="fragment in fragments" v-else :key="fragment.key" class="frag-card">
+    <article v-for="fragment in fragments" v-else :id="`frag-${doc.id}-${fragment.key}`" :key="fragment.key" class="frag-card">
       <header class="frag-head">
         <svg class="lock" viewBox="0 0 16 16" role="img" aria-label="标题锁定"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>
         <strong class="path">{{ fragment.headingPath.join(" › ") || "（文档开头）" }}</strong>

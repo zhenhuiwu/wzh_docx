@@ -57,3 +57,5 @@ export function changedOps(blocks: DocObject[], drafts: Record<string, string>):
     .filter((block) => drafts[block.id] !== undefined && drafts[block.id].trim() && drafts[block.id] !== block.markdown)
     .map((block) => ({ op: "update", objectId: block.id, baseRevision: block.revision, markdown: drafts[block.id] }));
 }
+
+export interface FragmentSummary { key: string; label: string; status: "todo" | "written" | "conflict" | "rejected" }
