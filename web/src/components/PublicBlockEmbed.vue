@@ -1,5 +1,6 @@
 <script setup lang="ts">
-/** 公共框架在文档中的只读引用卡片（30 §3.4）：标签“公共：名称 · 负责人”，有更新时提示，可标记已核对。 */
+/** 公共框架在文档中的只读引用卡片（30 §3.4）：标签“公共：名称 · 负责人”，有更新时提示。
+ *  “去公共内容修改”只给能改该公共块的人，“标记为已核对”只给负责人和编写人员（41 P2-5）；卡头不换行。 */
 import { ref } from "vue";
 import { ApiError } from "../api/client";
 import { markPublicSeen, type PublicRef } from "../api/docChain";
@@ -24,8 +25,8 @@ async function seen() {
       <span class="tag info">公共：{{ reference.block.name }} · {{ reference.block.assignee.name || "未分配" }}</span>
       <span v-if="reference.updated" class="tag warning" role="status">公共内容有更新</span>
       <span class="spacer" />
-      <router-link v-if="planLink" class="link" :to="planLink">去公共内容修改</router-link>
-      <button v-if="reference.updated" type="button" class="ghost" :disabled="busy" @click="seen">{{ busy ? "正在标记…" : "标记为已核对" }}</button>
+      <router-link v-if="planLink && reference.block.canEdit" class="link" :to="planLink">去公共内容修改</router-link>
+      <button v-if="reference.updated && reference.canAck !== false" type="button" class="ghost sm" :disabled="busy" @click="seen">{{ busy ? "正在标记…" : "标记为已核对" }}</button>
     </header>
     <p v-if="reference.block.body" class="body">{{ reference.block.body }}</p>
     <p v-else class="body empty">公共内容还没有编写。</p>
@@ -37,6 +38,7 @@ async function seen() {
 <style scoped>
 .embed { display:grid; gap:var(--space-2); padding:var(--space-3) var(--space-4); border:1px solid var(--border-default); border-left:2px solid var(--stamp); border-radius:var(--radius-sheet); background:var(--bg-subtle); }
 .head { display:flex; align-items:center; gap:var(--space-2); }
+.head > * { flex-shrink:0; white-space:nowrap; }
 .spacer { flex:1; }
 .body { margin:0; color:var(--text-primary); white-space:pre-wrap; overflow-wrap:anywhere; }
 .body.empty, .note { color:var(--text-tertiary); font-size:var(--text-sm); }

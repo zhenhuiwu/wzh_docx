@@ -274,6 +274,8 @@ def record_commit(connection, document_id: UUID, *, base_revision: int, markdown
     markdown=None 表示本次提交没有改正文（例如编写规范设置）。调用方须在写 documents 之前调用 ensure_document_objects。
     """
     actor = current_actor() if actor is None else actor
+    from app.project_tasks import guard_locked_chapters  # 30 §3.4 / Q-2：公共框架、任务分解章节只读（40 P2-5）
+    guard_locked_chapters(connection, document_id, base_revision, markdown, actor, kind)
     revision = base_revision + 1
     change_id = _insert_change(connection, document_id, doc_revision=revision, base_revision=base_revision, actor=actor,
                                kind=kind, merged=merged, ai_assisted=ai_assisted, client_save_key=client_save_key,

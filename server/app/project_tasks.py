@@ -96,28 +96,56 @@ def _check_targets(conn, pid: str, targets: list[Target]) -> list[tuple[str, str
         obj = conn.execute("SELECT kind FROM document_objects WHERE id=%s AND document_id=%s AND deleted_at IS NULL", [oid, did]).fetchone()
         if doc is None or obj is None or obj["kind"] != "heading":
             raise AppError(409, "OBJECT_STALE", "所选章节已被删除或合并，请重新选择。", details={"documentId": did, "objectId": oid})
+        body = conn.execute("SELECT body FROM document_objects WHERE id=%s", [oid]).fetchone()["body"]
+        if chapter_key(heading_text(body)) in framework_titles():  # 40 P2-5：公共框架在“公共框架”里分工，不挂到任务
+            raise AppError(422, "FRAMEWORK_CHAPTER", "公共框架章节在“公共框架”中统一编写和分工，不能放进任务。",
+                           field_errors=[{"field": "targets", "message": f"“{heading_text(body)}”是公共框架章节。"}],
+                           details={"documentId": did, "objectId": oid})
         if (did, oid) not in out:
             out.append((did, oid))
     return out
 
 
-def _write_back(conn, actor, pairs: list[tuple[str, str]], assignee: str | None, previous: str | None, remove: list[tuple[str, str]]) -> None:
-    """写回 A07：pairs 设为 assignee；remove 中仍由 previous 单独持有的显式分配撤销。每份文档 bump 一次并记事件。"""
+def _claimants(conn, did: str, oid: str, exclude_task: str | None = None) -> set[str]:
+    """仍指向该章节的其他任务的负责人（同一章节可挂在多个任务上，41/40 P2-2）。"""
+    return {str(r["assignee_id"]) for r in conn.execute(
+        """SELECT DISTINCT t.assignee_id FROM project_task_targets x JOIN project_tasks t ON t.id=x.task_id
+           WHERE x.document_id=%s AND x.object_id=%s AND t.assignee_id IS NOT NULL AND t.id<>%s""",
+        [did, oid, exclude_task or ""]).fetchall()}
+
+
+def _write_back(conn, actor, pairs: list[tuple[str, str]], assignee: str | None, previous: str | None,
+                remove: list[tuple[str, str]], task_id: str | None = None) -> None:
+    """写回 A07：pairs 设为 assignee（同时保留其他任务对该章节的负责人）；
+    remove 中 previous 的显式分配只在没有别的任务仍为 previous 认领该章节时撤销。每份文档 bump 一次并记事件。"""
     touched: dict[str, tuple[list[str], list[str]]] = {}
-    for did, oid in pairs:
-        conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid])
-        if assignee:
+
+    def held(did: str, oid: str) -> set[str]:
+        return {str(r["assignee_id"]) for r in conn.execute(
+            "SELECT assignee_id FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid]).fetchall()}
+
+    def ensure(did: str, oid: str, users: set[str]) -> None:
+        for uid in users - held(did, oid):
             conn.execute("""INSERT INTO document_object_assignments(document_id,object_id,assignee_id,source,needs_confirm,assigned_by,assigned_at)
-                            VALUES (%s,%s,%s,'manual',0,%s,now())""", [did, oid, assignee, str(actor)])
+                            VALUES (%s,%s,%s,'manual',0,%s,now())""", [did, oid, uid, str(actor)])
+
+    for did, oid in pairs:
+        keep = _claimants(conn, did, oid, task_id) | ({assignee} if assignee else set())
+        for uid in held(did, oid) - keep:  # 任务覆盖手工分配，但不动其他任务的负责人
+            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s AND assignee_id=%s", [did, oid, uid])
+        ensure(did, oid, keep)
         touched.setdefault(did, ([], []))[0].append(oid)
     for did, oid in remove:
         if not previous:
             continue
-        held = {str(r["assignee_id"]) for r in conn.execute(
-            "SELECT assignee_id FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid]).fetchall()}
-        if held == {previous}:
-            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid])
+        others = _claimants(conn, did, oid, task_id)
+        current = held(did, oid)
+        if previous in current and previous not in others:
+            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s AND assignee_id=%s", [did, oid, previous])
             touched.setdefault(did, ([], []))[1].append(oid)
+        if others - current:
+            ensure(did, oid, others)
+            touched.setdefault(did, ([], []))[0].append(oid)
     for did, (assigned, removed) in touched.items():
         da.bump(conn, did)
         if assigned:
@@ -133,19 +161,27 @@ def _targets_of(conn, task_id: str) -> list[tuple[str, str]]:
 
 
 def _task_payload(conn, row, me: str) -> dict:
+    from app.doc_chain import chapter_progress
     targets = []
+    written_of: dict[str, dict[str, bool]] = {}
     for did, oid in _targets_of(conn, str(row["id"])):
-        doc = conn.execute("SELECT name FROM documents WHERE id=%s", [did]).fetchone()
+        doc = conn.execute("SELECT name, markdown_content FROM documents WHERE id=%s", [did]).fetchone()
+        if did not in written_of:  # 进度：章节下有非提示正文即算已写（与依赖链卡片同一口径）
+            chapters = chapter_progress(doc["markdown_content"] if doc else "")[2]
+            written_of[did] = {}
+            for c in chapters:
+                written_of[did].setdefault(c["title"], c["written"])
         obj = conn.execute("SELECT body, deleted_at FROM document_objects WHERE id=%s", [oid]).fetchone()
         owners = [r["name"] for r in conn.execute("""SELECT u.name FROM document_object_assignments a JOIN users u ON u.id=a.assignee_id
                                                     WHERE a.document_id=%s AND a.object_id=%s ORDER BY u.name""", [did, oid]).fetchall()]
         targets.append({"documentId": did, "documentName": doc["name"] if doc else None, "objectId": oid,
                         "chapter": heading_text(obj["body"]) if obj else None, "stale": obj is None or obj["deleted_at"] is not None,
-                        "owners": owners})
+                        "owners": owners, "written": bool(obj and written_of[did].get(heading_text(obj["body"])))})
     assignee = None if row["assignee_id"] is None else str(row["assignee_id"])
     return {"id": str(row["id"]), "title": row["title"], "description": row["description"], "revision": row["revision"],
             "assignee": {"id": assignee, "name": row["assignee_name"], "isMe": assignee == me},
-            "targets": targets, "documentCount": len({t["documentId"] for t in targets})}
+            "targets": targets, "documentCount": len({t["documentId"] for t in targets}),
+            "writtenCount": sum(1 for t in targets if t["written"] and not t["stale"])}
 
 
 def _task_row(conn, task_id: str):
@@ -155,8 +191,8 @@ def _task_row(conn, task_id: str):
 
 # ---------------------------------------------------------------- 公共框架块
 
-def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
-    """各文档中对应公共框架的章节：按内置目录中标记为公共框架的章节标题匹配。"""
+def framework_titles() -> dict[str, str]:
+    """章节标题键 → 公共框架键（内置目录中标记为公共框架的章节 + 框架名本身）。"""
     titles: dict[str, str] = {}
     for item in CATALOG:
         for _level, title, key in item["outline"]:
@@ -165,6 +201,12 @@ def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
     for fw in FRAMEWORKS:
         titles.setdefault(chapter_key(fw["name"]), fw["key"])
     titles.setdefault("运行环境", "runtime")
+    return titles
+
+
+def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
+    """各文档中对应公共框架的章节：按内置目录中标记为公共框架的章节标题匹配。"""
+    titles = framework_titles()
     refs: dict[str, list[dict]] = {}
     for doc in conn.execute("SELECT id, name FROM documents WHERE project_id=%s ORDER BY created_at", [pid]).fetchall():
         for obj in conn.execute("""SELECT id, body FROM document_objects WHERE document_id=%s AND kind='heading' AND deleted_at IS NULL
@@ -266,7 +308,8 @@ def create_task(request: Request, project_id: str, body: TaskBody) -> dict:
             for did, oid in pairs:
                 conn.execute("INSERT INTO project_task_targets(task_id,document_id,object_id) VALUES (%s,%s,%s)", [tid, did, oid])
             if assignee:
-                _write_back(conn, principal.user_id, pairs, assignee, None, [])
+                _write_back(conn, principal.user_id, pairs, assignee, None, [], tid)
+            regenerate_task_chapter(conn, pid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -302,9 +345,10 @@ def update_task(request: Request, task_id: str, body: TaskPatch) -> dict:
             for did, oid in new:
                 conn.execute("INSERT INTO project_task_targets(task_id,document_id,object_id) VALUES (%s,%s,%s)", [tid, did, oid])
             if assignee is None and previous:
-                _write_back(conn, principal.user_id, [], None, previous, old)  # 取消负责人：恢复章节默认
+                _write_back(conn, principal.user_id, [], None, previous, old, tid)  # 取消负责人：恢复章节默认
             else:
-                _write_back(conn, principal.user_id, changed if assignee else [], assignee, previous, removed)
+                _write_back(conn, principal.user_id, changed if assignee else [], assignee, previous, removed, tid)
+            regenerate_task_chapter(conn, pid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -319,8 +363,122 @@ def delete_task(request: Request, task_id: str, expectedRevision: int) -> None:
             if row["revision"] != expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "任务刚被修改过，已显示最新。", details={"revision": row["revision"]})
             previous = None if row["assignee_id"] is None else str(row["assignee_id"])
-            _write_back(conn, _principal.user_id, [], None, previous, _targets_of(conn, tid))
+            _write_back(conn, _principal.user_id, [], None, previous, _targets_of(conn, tid), tid)
             conn.execute("DELETE FROM project_tasks WHERE id=%s", [tid])
+            regenerate_task_chapter(conn, pid)
+
+
+# ---------------------------------------------------------------- 只读章节与“任务分解”自动生成（30 §3.4，Q-2，40 P2-5）
+
+import contextvars  # noqa: E402
+
+_SYSTEM_WRITE = contextvars.ContextVar("tasks_system_write", default=False)
+SPLIT_KEY = chapter_key("4 任务分解")
+
+
+def _task_table(conn, pid: str) -> str:
+    rows = conn.execute("""SELECT t.*, u.name AS assignee_name FROM project_tasks t LEFT JOIN users u ON u.id=t.assignee_id
+                           WHERE t.project_id=%s ORDER BY t.display_order, t.created_at""", [pid]).fetchall()
+    lines = ["| 任务 | 负责人 | 涉及章节 |", "| --- | --- | --- |"]
+    for row in rows:
+        t = _task_payload(conn, row, "")
+        where = "；".join(f"{x['documentName']} {x['chapter']}" for x in t["targets"] if x["documentName"] and not x["stale"])
+        lines.append(f"| {t['title']} | {t['assignee']['name'] or '未分配'} | {where or '—'} |")
+    if not rows:
+        return "（尚无任务。任务在“分工”页维护，本章由任务数据自动生成，不能直接编辑。）\n"
+    return "\n".join(lines) + "\n"
+
+
+def _plan_documents(conn, pid: str) -> list[str]:
+    out = []
+    for doc in conn.execute("""SELECT d.id, d.name, td.name AS tname FROM documents d LEFT JOIN template_documents td
+                               ON td.id=d.template_document_id WHERE d.project_id=%s""", [pid]).fetchall():
+        item = match_catalog(doc["name"], doc["tname"])
+        if item and item["key"] == PLAN_KEY:
+            out.append(str(doc["id"]))
+    return out
+
+
+def _replace_section(markdown: str, key: str, body: str) -> str | None:
+    """把标题键为 key 的章节正文（到下一个标题为止）换成 body；找不到章节返回 None。"""
+    from app.markdown_blocks import assemble, split
+    prefix, blocks = split(markdown or "")
+    for index, block in enumerate(blocks):
+        if block.kind == "heading" and chapter_key(heading_text(block.body)) == key:
+            end = index + 1
+            while end < len(blocks) and blocks[end].kind != "heading":
+                end += 1
+            _p, fresh = split(body)
+            gap = block.gap_after or "\n\n"
+            fresh = [type(b)(b.kind, b.body, b.gap_after or gap, b.heading_level) for b in fresh]
+            return assemble(prefix, [*blocks[:index + 1], *fresh, *blocks[end:]])
+    return None
+
+
+def regenerate_task_chapter(conn, pid: str) -> None:
+    """任务变化后重写开发计划书的“任务分解”章节（系统写入，不经只读检查）。须在写事务内调用。"""
+    from app.documents import _save_markdown
+    table = _task_table(conn, pid)
+    for did in _plan_documents(conn, pid):
+        row = conn.execute("SELECT markdown_content, revision FROM documents WHERE id=%s", [did]).fetchone()
+        fresh = _replace_section(row["markdown_content"], SPLIT_KEY, table)
+        if fresh is None or fresh == row["markdown_content"]:
+            continue
+        token = _SYSTEM_WRITE.set(True)
+        try:
+            _save_markdown(conn, UUID(did), fresh, int(row["revision"]), kind="edit")
+        finally:
+            _SYSTEM_WRITE.reset(token)
+
+
+def _locked_sections(conn, document_id) -> set[str]:
+    doc = conn.execute("""SELECT d.name, td.name AS tname FROM documents d LEFT JOIN template_documents td
+                          ON td.id=d.template_document_id WHERE d.id=%s""", [str(document_id)]).fetchone()
+    item = match_catalog(doc["name"], doc["tname"]) if doc else None
+    if item is None:
+        return set()  # 只管内置依赖链里的文档；自建文档的同名章节不受限
+    keys = set(framework_titles())
+    if item["key"] == PLAN_KEY:
+        keys.add(SPLIT_KEY)
+    return keys
+
+
+def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
+    from app.markdown_blocks import split
+    _p, blocks = split(markdown or "")
+    out: dict[str, str] = {}
+    current = None
+    for block in blocks:
+        if block.kind == "heading":
+            key = chapter_key(heading_text(block.body))
+            current = key if key in keys and key not in out else None
+            if current:
+                out[current] = ""
+        elif current:
+            out[current] += block.body.strip() + "\n"
+    return out
+
+
+_GUARD_EXEMPT = frozenset({"restore", "revert", "undo", "backfill", "realign", "created"})  # 整篇回到某个历史版本，不算改写
+
+
+def guard_locked_chapters(conn, document_id, base_revision: int, markdown: str | None, actor, kind: str = "edit") -> None:
+    """保存检查点（record_commit 调用）：公共框架章节（引用处只读）和开发计划书“任务分解”（由任务生成）不能被用户改写。
+    系统写入（actor 为空、或本模块的自动生成）不检查。章节标题本身的增删由模板结构管控，这里只比较正文。"""
+    if markdown is None or actor is None or _SYSTEM_WRITE.get() or kind in _GUARD_EXEMPT:
+        return
+    keys = _locked_sections(conn, document_id)
+    if not keys:
+        return
+    row = conn.execute("SELECT markdown_content FROM document_versions WHERE document_id=%s AND revision=%s",
+                       [str(document_id), base_revision]).fetchone()
+    if row is None:
+        return
+    before, after = _section_bodies(row["markdown_content"], keys), _section_bodies(markdown, keys)
+    changed = [k for k in before if k in after and before[k] != after[k]]
+    if changed:
+        raise AppError(409, "CHAPTER_READONLY", "公共框架和“任务分解”章节在此只读：公共框架在“分工 › 公共框架”中修改，任务分解由任务自动生成。",
+                       details={"chapters": changed})
 
 
 @router.get("/projects/{project_id}/tasks:markdown")
@@ -403,7 +561,8 @@ def document_public_refs(request: Request, document_id: str) -> dict:
             block = _public_payload(row, [], str(principal.user_id), role)
             for ref in mine:
                 out.append({"objectId": ref["objectId"], "chapter": ref["chapter"], "block": block,
-                            "seenRevision": seen_rev, "updated": row["revision"] > seen_rev and row["revision"] > 0})
+                            "seenRevision": seen_rev, "updated": row["revision"] > seen_rev and row["revision"] > 0,
+                            "canAck": role in ("owner", "editor") and not doc.archived})
     return {"data": {"references": out}, "requestId": request.state.request_id}
 
 
@@ -413,6 +572,8 @@ def mark_public_seen(request: Request, document_id: str, block_id: str) -> dict:
     did, bid = _id(document_id), _id(block_id)
     with connect() as conn:
         doc = load_document(conn, UUID(did), principal.user_id, is_admin(principal))
+        if not (doc.admin or doc.project_role in ("owner", "editor")) or doc.archived:
+            raise AppError(403, "FORBIDDEN", "只读成员不能标记核对。")
         with write_transaction(conn):
             row = conn.execute("SELECT revision FROM public_blocks WHERE id=%s AND project_id=%s", [bid, str(doc.project_id)]).fetchone()
             if row is None:

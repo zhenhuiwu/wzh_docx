@@ -19,7 +19,7 @@ const errorText = ref("");
 const selected = ref<number | null>(null);
 const detail = ref<ProjectBaselineDetail | null>(null);
 const detailPhase = ref<"idle" | "loading" | "ready" | "error">("idle");
-const comparing = ref<{ documentId: string; name: string; seq: number } | null>(null);
+const comparing = ref<{ documentId: string; name: string; seq: number; to?: number } | null>(null);
 
 const message = (error: unknown) => (error instanceof ApiError ? error.message : "暂时不能连接服务。");
 const canManage = (project: ProjectRecord | null | undefined) =>
@@ -30,13 +30,25 @@ async function load() {
   try {
     baselines.value = (await listProjectBaselines(projectId.value)).items;
     phase.value = "ready";
-    if (baselines.value.length && !baselines.value.some((b) => b.seq === selected.value)) void pick(baselines.value[0].seq);
+    const wanted = Number(route.query.seq);
+    if (route.query.document && baselines.value.some((b) => b.seq === wanted)) void openFromQuery(wanted);
+    else if (baselines.value.length && !baselines.value.some((b) => b.seq === selected.value)) void pick(baselines.value[0].seq);
   } catch (error) { errorText.value = message(error); phase.value = "error"; }
 }
 async function pick(seq: number) {
   selected.value = seq; comparing.value = null; detailPhase.value = "loading";
   try { detail.value = await getProjectBaseline(projectId.value, seq); detailPhase.value = "ready"; }
   catch (error) { errorText.value = message(error); detailPhase.value = "error"; }
+}
+/** 依赖链「上游有新基线 / 查看变化」带 ?seq=&document=&from=&to= 进来：选中基线并直接打开该文档的对比。 */
+async function openFromQuery(seq: number) {
+  await pick(seq);
+  const row = detail.value?.documents.find((r) => r.document.id === String(route.query.document));
+  if (!row) return;
+  const from = Number(route.query.from), to = Number(route.query.to);
+  comparing.value = Number.isFinite(from) && from > 0 && Number.isFinite(to) && to > 0 && from !== to
+    ? { documentId: row.document.id, name: row.document.name, seq: from, to }
+    : { documentId: row.document.id, name: row.document.name, seq: row.version.seq };
 }
 watch(projectId, () => { selected.value = null; void load(); }, { immediate: true });
 
@@ -120,8 +132,8 @@ async function submit() {
                 </table>
               </div>
               <section v-if="comparing" class="compare-card" :aria-label="`${comparing.name} 对比`">
-                <div class="compare-head"><h3>{{ comparing.name }}：{{ detail.label }} → 当前</h3><button type="button" class="ghost" @click="comparing = null">关闭对比</button></div>
-                <DiffView :document-id="comparing.documentId" :base="comparing.seq" compare="current" />
+                <div class="compare-head"><h3>{{ comparing.name }}：{{ comparing.to ? `版本 ${comparing.seq} → ${detail.label}` : `${detail.label} → 当前` }}</h3><button type="button" class="ghost" @click="comparing = null">关闭对比</button></div>
+                <DiffView :key="`${comparing.documentId}-${comparing.seq}-${comparing.to ?? 'current'}`" :document-id="comparing.documentId" :base="comparing.seq" :compare="comparing.to ?? 'current'" />
               </section>
             </template>
           </div>
