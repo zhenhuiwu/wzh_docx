@@ -529,7 +529,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             admin.call("PUT", f"/documents/{did}/assignment-mode", json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
             panel.get_by_test_id("assign-mode-toggle").click()
             page.get_by_test_id("assign-mode-confirm-ok").click()
-            expect(panel.get_by_test_id("assign-error")).to_contain_text("分工刚被 系统管理员 调整过，已显示最新，请确认后再切换。", timeout=15000)
+            admin_name = admin.call("GET", "/auth/me")["user"]["name"]  # 已有 admin 账号的名字不一定是“系统管理员”
+            expect(panel.get_by_test_id("assign-error")).to_contain_text(f"分工刚被 {admin_name} 调整过，已显示最新，请确认后再切换。", timeout=15000)
             view = admin.call("GET", f"/documents/{did}/assignments")
             if view["assignmentMode"] != "enforced":
                 admin.call("PUT", f"/documents/{did}/assignment-mode", json={"mode": "enforced", "expectedAssignmentsRevision": view["assignmentsRevision"]})
