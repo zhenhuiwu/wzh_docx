@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from html import escape, unescape
 import re
+import threading
 from typing import Mapping
 
 from lxml import html as html_dom
@@ -65,8 +66,15 @@ _EXCLUDED_ANCESTORS = _EXCLUDED | {"h1", "h2", "h3", "h4", "h5", "h6"}
 _SEMANTIC = {"strong": "strong", "em": "em", "code": "code", "a": "a"}
 
 
+_LOCAL = threading.local()
+
+
 def _render(value: str) -> str:
-    return markdown_renderer.markdown(value, extensions=["tables", "fenced_code"])
+    # 复用每线程一个 Markdown 实例（每段新建实例在千段文档里占 0.5s 以上，P0-2）
+    renderer = getattr(_LOCAL, "markdown", None)
+    if renderer is None:
+        renderer = _LOCAL.markdown = markdown_renderer.Markdown(extensions=["tables", "fenced_code"])
+    return renderer.reset().convert(value)
 
 
 def _root(value: str):
