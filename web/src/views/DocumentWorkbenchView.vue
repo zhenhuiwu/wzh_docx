@@ -5020,7 +5020,7 @@ onUnmounted(() => {
         <AssignmentPanel v-if="assignOpen && mode === 'edit'" :document-id="document.id" :project-id="document.projectId" :objects="assignPanelObjects" :initial-filter="assignInitialFilter" @close="closeAssign" @changed="refreshOwnership()" />
         <SaveRejectedPanel v-if="rejectedOpen && mode === 'edit' && rejected" :violations="rejected.violations" :total="rejected.total" :project-owner="assignInfo?.projectOwner || ''" :busy="savingMine"
           @close="rejectedOpen = false" @locate="locateViolation" @save-mine="saveMineOnly" @download="downloadRejected" @copy="copyRejected" />
-        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
+        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" :can-manage="canAssignDoc" :dirty="isDirty || saving" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <DocumentReferences v-if="mode === 'edit' && referencesOpen" ref="referencesPanel" :document-id="document.id" :revision="document.revision"
           :disabled="readonly || isDirty" @saved="acceptReferences" @close="referencesOpen = false" @busy="referencesBusy = $event" @dirty="referencesDirty = $event" />
         <DocumentAssignments v-if="mode === 'edit' && assignmentsOpen" ref="assignmentsPanel" :document-id="document.id" :revision="document.revision"
