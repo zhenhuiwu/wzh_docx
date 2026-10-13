@@ -422,3 +422,34 @@ def test_my_todos_for_writers_and_viewers(document_context):  # noqa: F811
     assert r.status_code == 200 and r.json()["data"]["tasks"] == []
     login("todo-outsider")
     assert client.get(f"/api/v1/projects/{project}/my-todos").status_code == 404
+
+
+def test_generated_task_split_survives_frontend_markdown(document_context):  # noqa: F811
+    """40 复验 N2：生成任务表后，工作台按前端格式（`|---|`、CRLF、行尾空格）整篇保存不能被判为改写“任务分解”。"""
+    import re
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    plan = _create(client, headers, project, "软件开发计划", tds["dev-plan"])
+    chapters = client.get(f"/api/v1/projects/{project}/documents/{srs['id']}/chapters").json()["data"]["chapters"]
+    func = next(c for c in chapters if c["title"].endswith("功能需求"))
+    assert client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "需求细化", "targets": [
+        {"documentId": srs["id"], "objectId": func["objectId"]}]}).status_code == 201
+
+    def save(md):
+        d = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]
+        return client.patch(f"/api/v1/documents/{plan['id']}/content", headers=headers,
+                            json={"expectedRevision": d["revision"], "markdownContent": md})
+
+    md = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["markdownContent"]
+    assert "| 需求细化 |" in md
+    first = next(line for line in md.splitlines() if line.startswith("#") and line.rstrip().endswith("范围"))
+    # 前端 finishMarkdown：分隔行写成 |---|；另加 CRLF 与行尾空格
+    front = re.sub(r"^\|(?: *-+ *\|)+$", lambda m: "|" + "---|" * m.group(0).count("-" * 3), md, flags=re.M)
+    front = front.replace(first, first + "\n\n诊断", 1).replace("| 需求细化 |", "| 需求细化 |  ", 1).replace("\n", "\r\n")
+    r = save(front)
+    assert r.status_code == 200, r.text
+    # 真改任务表仍然 409
+    md = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["markdownContent"]
+    r = save(md.replace("需求细化", "手改任务", 1))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "CHAPTER_READONLY", r.text

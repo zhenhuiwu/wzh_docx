@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
@@ -379,7 +380,7 @@ SPLIT_KEY = chapter_key("4 任务分解")
 def _task_table(conn, pid: str) -> str:
     rows = conn.execute("""SELECT t.*, u.name AS assignee_name FROM project_tasks t LEFT JOIN users u ON u.id=t.assignee_id
                            WHERE t.project_id=%s ORDER BY t.display_order, t.created_at""", [pid]).fetchall()
-    lines = ["| 任务 | 负责人 | 涉及章节 |", "| --- | --- | --- |"]
+    lines = ["| 任务 | 负责人 | 涉及章节 |", "|---|---|---|"]
     for row in rows:
         t = _task_payload(conn, row, "")
         where = "；".join(f"{x['documentName']} {x['chapter']}" for x in t["targets"] if x["documentName"] and not x["stale"])
@@ -448,25 +449,47 @@ def _locked_sections(conn, document_id) -> set[str]:
     return keys
 
 
+_SEPARATOR_ROW = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
+
+
+def normalize_block(text: str) -> str:
+    """比较用的块正文（40 复验 N2）：统一换行、去行尾/行首空白、表格单元格两侧空白，分隔行统一成 |---|。
+    只用于判断“是否改写”，不改存储内容；前端 finishMarkdown 输出的 |---| 与后端 | --- | 视为相同。"""
+    lines = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("|"):
+            if _SEPARATOR_ROW.match(line):
+                line = "|" + "---|" * len([c for c in line.strip("|").split("|")])
+            else:
+                line = "|" + "|".join(" ".join(cell.split()) for cell in line.strip("|").split("|")) + "|"
+        else:
+            line = " ".join(line.split())
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _section_body_text(body: str) -> str:
-    """与 _section_bodies 同一口径的章节正文（逐块去首尾空白），用于判断生成内容是否有变化。"""
+    """与 _section_bodies 同一口径的章节正文（逐块规范化），用于判断生成内容是否有变化。"""
     from app.markdown_blocks import split
-    return "".join(b.body.strip() + "\n" for b in split(body)[1])
+    return "".join(normalize_block(b.body) + "\n" for b in split(body.replace("\r\n", "\n"))[1])
 
 
 def _locked_headings(markdown: str, keys: set[str]) -> dict[str, str]:
     """只读章节的标题原文（含级别），按标题键取第一处。"""
     from app.markdown_blocks import split
     out: dict[str, str] = {}
-    for block in split(markdown or "")[1]:
+    for block in split((markdown or "").replace("\r\n", "\n"))[1]:
         if block.kind == "heading":
-            out.setdefault(chapter_key(heading_text(block.body)), block.body.strip())
+            out.setdefault(chapter_key(heading_text(block.body)), normalize_block(block.body))
     return {k: v for k, v in out.items() if k in keys}
 
 
 def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
     from app.markdown_blocks import split
-    _p, blocks = split(markdown or "")
+    _p, blocks = split((markdown or "").replace("\r\n", "\n"))
     out: dict[str, str] = {}
     current = None
     for block in blocks:
@@ -476,7 +499,7 @@ def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
             if current:
                 out[current] = ""
         elif current:
-            out[current] += block.body.strip() + "\n"
+            out[current] += normalize_block(block.body) + "\n"
     return out
 
 
@@ -509,7 +532,7 @@ def guard_locked_chapters(conn, document_id, base_revision: int, markdown: str |
 def tasks_markdown(request: Request, project_id: str) -> dict:
     """开发计划书“任务分解”章节的生成内容（Q-2：由任务数据生成，只读）。"""
     data = list_tasks(request, project_id)["data"]
-    lines = ["| 任务 | 负责人 | 涉及章节 |", "| --- | --- | --- |"]
+    lines = ["| 任务 | 负责人 | 涉及章节 |", "|---|---|---|"]
     for t in data["tasks"]:
         where = "；".join(f"{x['documentName']} {x['chapter']}" for x in t["targets"] if x["documentName"])
         lines.append(f"| {t['title']} | {t['assignee']['name'] or '未分配'} | {where or '—'} |")
