@@ -43,7 +43,7 @@ import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
-import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, contentBlockAt, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -1382,7 +1382,7 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
   if (byText) return byText;
   if (!location) return undefined;
   const path = location.headingPath || [];
-  const blocks = [...root.children] as HTMLElement[];
+  const blocks = contentBlocks(root.children as HTMLCollectionOf<HTMLElement>);
   let start = 0;
   if (path.length) {
     const last = path[path.length - 1];
@@ -3963,7 +3963,7 @@ const assignButton = ref<HTMLButtonElement | null>(null);
 function closeAssign() { assignOpen.value = false; void nextTick(() => assignButton.value?.focus()); }
 function locateViolation(item: Violation) {
   const root = editor.value;
-  const node = nodeOf(item.objectId) ?? (typeof item.clientIndex === "number" ? root?.children[item.clientIndex] as HTMLElement | undefined ?? null : null);
+  const node = nodeOf(item.objectId) ?? (typeof item.clientIndex === "number" ? (root ? contentBlockAt(root.children as HTMLCollectionOf<HTMLElement>, item.clientIndex) ?? null : null) : null);
   if (!node) { noteAction("这一处已不在正文中（可能被删除）。", 5000); return; }
   node.scrollIntoView({ behavior: "smooth", block: "center" });
   node.classList.add("a07-hit");

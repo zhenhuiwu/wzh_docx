@@ -223,3 +223,20 @@ export function clearScope(root: HTMLElement): void {
 export function scopeCount(root: HTMLElement, headingIndex: number, denied: Set<string>): number {
   return sectionBlocks(root, headingIndex).blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || "")).length;
 }
+
+/** Minimal element shape so the counting below can be unit-tested without a DOM. */
+export interface BlockLike { hasAttribute(name: string): boolean }
+
+/**
+ * Top-level body blocks in document order, skipping nodes the editor injects
+ * (AI suggestions, scope labels, public reference cards — all `data-ai-preview`).
+ * Positional lookups ("第 N 段", server clientIndex) must count only these.
+ */
+export function contentBlocks<T extends BlockLike>(children: ArrayLike<T>): T[] {
+  return Array.from(children).filter(block => !block.hasAttribute("data-ai-preview"));
+}
+
+/** The body block at a server-side clientIndex (which counts body blocks only). */
+export function contentBlockAt<T extends BlockLike>(children: ArrayLike<T>, index: number): T | undefined {
+  return Number.isInteger(index) && index >= 0 ? contentBlocks(children)[index] : undefined;
+}
