@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
 import { streamDocumentSection } from "../../api/documents";
-import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, contextView, isTemplateFiller, type ContextView, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { aiFragmentTooLarge, headingText, applyAiOperations, buildFragments, changedOps, contextView, isTemplateFiller, type ContextView, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 /** inSplit：并排视图里每列只用次级按钮，整页唯一的主按钮是工具栏上的“保存全部” */
@@ -165,7 +165,7 @@ defineExpose({ dirty, save });
       </div>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
         <span class="sr-only">{{ fragment.headingPath.at(-1) ?? "片段" }} 第 {{ index + 1 }} 段</span>
-        <p v-if="lockedHeadings.has(block.id)" class="locked-heading"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>{{ block.markdown }}<small>标题已固定</small></p>
+        <p v-if="lockedHeadings.has(block.id)" class="locked-heading"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>{{ headingText(block.markdown) }}<small>标题已固定</small></p>
         <textarea v-else v-model="drafts[block.id]" class="control" rows="3" :placeholder="placeholders[block.id] || '在此编写这一段'" :disabled="state === 'saving'" :aria-invalid="!placeholders[block.id] && !drafts[block.id]?.trim()"></textarea>
         <span v-if="!lockedHeadings.has(block.id) && !placeholders[block.id] && !drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
       </label>
