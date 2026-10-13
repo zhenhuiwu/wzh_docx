@@ -25,6 +25,15 @@ PARAS = [f"第{i}段：原始内容 {i}。" for i in range(1, 9)]
 MARK = "【丙0123456789ABCDEFGHIJ丁】"
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def make_doc(data: dict, name: str, big: int) -> str:
     from docx import Document as WordDocument
     word = WordDocument()
@@ -38,8 +47,8 @@ def make_doc(data: dict, name: str, big: int) -> str:
                                data={"purpose": "attachment", "projectId": data["project"]["id"]},
                                headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"selfconf-{uuid.uuid4()}"})
     assert upload.status_code == 201, upload.text
-    return zhang.call("POST", f"/projects/{data['project']['id']}/documents",
-                      json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})["id"]
+    return open_mode(zhang, zhang.call("POST", f"/projects/{data['project']['id']}/documents",
+                      json={"name": name, "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))["id"]
 
 
 def latest_mines(li, doc_id: str, timeout: float = 12.0) -> str:

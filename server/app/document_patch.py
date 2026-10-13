@@ -314,6 +314,11 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                                            (json.dumps(data, ensure_ascii=False), change_id))
                 except _Retry:
                     continue
+                except AppError as error:
+                    if error.code == "SECTION_NOT_ASSIGNED":  # A07：被拒的提交在独立短事务里保留（字不丢）
+                        from app.document_assignments import store_rejected
+                        store_rejected(connection, did, principal.user_id, body.baseDocumentRevision, merged_md, None, error)
+                    raise
                 except sqlite3.IntegrityError:
                     again = replay(connection, did, principal.user_id, body.clientSaveKey, rhash)
                     if again is not None:

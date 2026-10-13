@@ -41,6 +41,15 @@ results: list[tuple[str, bool, str]] = []
 open_pages: list[Page] = []
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def step(name: str):
     def wrap(fn):
         def run(*args, **kwargs):
@@ -124,8 +133,8 @@ def make_document(admin: "Api", project_id: str) -> dict:
                                data={"purpose": "attachment", "projectId": project_id},
                                headers={"X-CSRF-Token": admin.csrf, "Idempotency-Key": f"a05-upload-{uuid.uuid4().hex}"})
     assert upload.status_code == 201, upload.text
-    return admin.call("POST", f"/projects/{project_id}/documents",
-                      json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})
+    return open_mode(admin, admin.call("POST", f"/projects/{project_id}/documents",
+                      json={"name": "软件需求规格说明", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))
 
 
 def seed() -> dict:

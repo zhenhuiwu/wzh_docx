@@ -27,6 +27,14 @@ def guard_test_database() -> str:
 
 def pytest_configure(config: pytest.Config) -> None:
     guard_test_database()
+    config.addinivalue_line("markers", "enforced_new_documents: 新建文档按 A07 默认 enforced（其他用例保持 A07 之前的开放编辑）")
+
+
+@pytest.fixture(autouse=True)
+def legacy_open_documents(request, monkeypatch):
+    """A07 之前写的用例都假定编写人员能改整篇：新建文档默认 open；A07 用例用 enforced_new_documents 标记恢复默认。"""
+    if request.node.get_closest_marker("enforced_new_documents") is None:
+        monkeypatch.setattr("app.documents.NEW_DOCUMENT_MODE", "open")
 
 
 @pytest.fixture(autouse=True)

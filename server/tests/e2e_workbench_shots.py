@@ -27,6 +27,15 @@ FINAL = os.environ.get("E2E_FINAL") == "1"  # 终验补拍：全部 1920×1080�
 WEB = base.WEB
 
 
+
+def open_mode(api, doc: dict) -> dict:
+    """A07 之前写的场景假定编写人员能改整篇：新建文档（默认按分工编辑）改为不限制分工（open）。"""
+    view = api.call("GET", f"/documents/{doc['id']}/assignments")
+    if view["assignmentMode"] != "open":
+        api.call("PUT", f"/documents/{doc['id']}/assignment-mode",
+                 json={"mode": "open", "expectedAssignmentsRevision": view["assignmentsRevision"]})
+    return doc
+
 def shot(page: Page, name: str, **kwargs):
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.wait_for_timeout(400)
@@ -75,7 +84,7 @@ def main() -> int:
     plain.save(buffer)
     upload = zhang.client.post("/files", files={"file": ("整篇保存样例.docx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
                                data={"purpose": "attachment", "projectId": project_id}, headers={"X-CSRF-Token": zhang.csrf, "Idempotency-Key": f"wb-{uuid.uuid4()}"})
-    whole = zhang.call("POST", f"/projects/{project_id}/documents", json={"name": "整篇保存样例", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]})
+    whole = open_mode(zhang, zhang.call("POST", f"/projects/{project_id}/documents", json={"name": "整篇保存样例", "sourceType": "upload", "wordFileId": upload.json()["data"]["id"]}))
     record = zhang.call("GET", f"/documents/{whole['id']}")
     content = record["markdownContent"].rstrip() + "\n\n- 一\n  - 一点一\n- 二\n"
     zhang.call("PATCH", f"/documents/{whole['id']}/content", json={"expectedRevision": record["revision"], "markdownContent": content})

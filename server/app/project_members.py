@@ -376,6 +376,8 @@ def set_member(project_id: str, user_id: str, request: Request, body: MemberPutB
         _record(connection, target, actor.user_id, member_id, "change_role", old_role, role, revision, request_id)
         cleared = (member_assignments.clear_assignments(connection, target, member_id, actor.user_id)
                    if member_assignments.loses_editing(old_role, role) else member_assignments.empty())
+        if "owner" in (old_role, role):
+            member_assignments.touch_project(connection, target)  # A07：projectOwners 变了，各文档重取归属
         owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id, member_id)
         data = _result(connection, target, actor, owner_changed=owner_changed, cleared=cleared,
                        extra={"item": _item(connection, target, member_id, actor)})
@@ -414,6 +416,8 @@ def remove_member(project_id: str, user_id: str, request: Request, expectedMembe
             raise AppError(409, "LAST_OWNER", LAST_OWNER_MESSAGE, details={"activeOwnerCount": 1})
         cleared = member_assignments.clear_assignments(connection, target, member_id, actor.user_id)
         connection.execute("delete from project_members where project_id = %s and user_id = %s", (target, member_id))
+        if old_role == "owner":
+            member_assignments.touch_project(connection, target)
         revision = _bump(connection, target)
         _record(connection, target, actor.user_id, member_id, "remove", old_role, None, revision, request_id)
         owner_changed = reassign_primary(connection, target, actor.user_id, revision, request_id, member_id)
@@ -480,6 +484,8 @@ def add_members(project_id: str, request: Request, body: MemberBatchBody) -> dic
             revision = _bump(connection, target)
             for member_id in added:
                 _record(connection, target, actor.user_id, UUID(member_id), "add", None, role, revision, request_id)
+            if role == "owner":
+                member_assignments.touch_project(connection, target)
         data = _result(connection, target, actor, owner_changed=owner_changed, cleared=member_assignments.empty(),
                        extra={"added": added, "failed": failed})
     return {"data": data, "requestId": request_id}
