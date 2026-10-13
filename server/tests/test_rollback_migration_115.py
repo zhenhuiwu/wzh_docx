@@ -1,12 +1,5 @@
 """方案 C：迁移 115 可单独回滚，回滚后重新迁移能再建回来。"""
-from app.rollback_migration_118 import rollback as _rb118_only  # A07：118 在 117 之后，先回滚
-from app.rollback_migration_120 import rollback as _rb120  # 任务与模板：120 在 118 之后
-
-
-def _rb118(path, apply=False, force=False):
-    """按 120 → 118 的顺序回滚（120 失败时原样返回其退出码）。"""
-    code = _rb120(path, apply=apply, force=force)
-    return code if code else _rb118_only(path, apply=apply, force=force)
+from tests.migration_chain import files_after, rollback_newer_than
 
 import sqlite3
 
@@ -34,7 +27,7 @@ def test_rollback_115_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, cap
     config.get_settings.cache_clear()
     try:
         migrate()
-        assert _rb118(path, apply=True) == 0 and rollback_117(path, apply=True) == 0 and rollback_116(path, apply=True) == 0  # 倒序：先回滚 116
+        assert rollback_newer_than(path, 117) == 0 and rollback_117(path, apply=True) == 0 and rollback_116(path, apply=True) == 0  # 倒序：先回滚 116
         assert _has_table(path) == 1 and _recorded(path) == 1
         assert rollback(path, apply=False) == 0
         assert _has_table(path) == 1 and _recorded(path) == 1
@@ -43,7 +36,7 @@ def test_rollback_115_dry_run_then_apply_then_reapply(tmp_path, monkeypatch, cap
         assert list(tmp_path.glob("app.db.before-rollback-115-*.db"))
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["115_document_conflict_mine_snapshots.sql", "116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql", "120_tasks_templates.sql"]
+        assert migrate() == files_after(114)
         assert _has_table(path) == 1 and _recorded(path) == 1
     finally:
         config.get_settings.cache_clear()
@@ -66,7 +59,7 @@ def test_rollback_115_refuses_while_116_present(tmp_path, monkeypatch, capsys):
     try:
         migrate()
         from app.rollback_migration_117 import rollback as _rollback_117
-        assert _rb118(path, apply=True) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
+        assert rollback_newer_than(path, 117) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         before = _versions(path)
         for apply in (True, False):
             assert rollback(path, apply=apply) == 2
@@ -95,7 +88,7 @@ def test_main_exits_2_while_116_present(tmp_path, monkeypatch, capsys):
     try:
         migrate()
         from app.rollback_migration_117 import rollback as _rollback_117
-        assert _rb118(path, apply=True) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
+        assert rollback_newer_than(path, 117) == 0 and _rollback_117(path, apply=True) == 0  # A06 的 117 在 116 之后，先回滚它
         assert main(["--yes", "--service-stopped"]) == 2
         assert "rollback_migration_116" in capsys.readouterr().err
         assert _has_table(path) == 1 and _recorded(path) == 1

@@ -2,6 +2,8 @@
 
 import sqlite3
 
+from tests.migration_chain import files_from
+
 
 def test_rollback_120(tmp_path, monkeypatch, capsys):
     from app import config
@@ -25,6 +27,6 @@ def test_rollback_120(tmp_path, monkeypatch, capsys):
         assert not names & set(TABLES)
         assert list(tmp_path.glob("app.db.project_tasks-120-*.csv"))
         assert rollback(path, apply=True) == 0 and "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["120_tasks_templates.sql"]
+        assert migrate() == files_from(120)[:1]  # 只重建 120
     finally:
         config.get_settings.cache_clear()
