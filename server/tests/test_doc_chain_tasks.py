@@ -64,7 +64,11 @@ def test_seed_chain_and_plan_api(document_context):  # noqa: F811
     doc = client.get(f"/api/v1/documents/{plan['documentId']}").json()["data"]
     saved = client.patch(f"/api/v1/documents/{plan['documentId']}/content", headers=headers,
                          json={"expectedRevision": doc["revision"], "markdownContent": PLAN})
-    assert saved.status_code == 200, saved.text
+    assert saved.status_code == 409 and saved.json()["error"]["code"] == "CHAPTER_READONLY"  # 任务分解只读（40 P2-5）
+    from app.db import connect  # 旧版手写任务表（迁移前的数据）：只读解析器仍能读
+    with connect() as conn:
+        conn.execute("UPDATE documents SET markdown_content=%s WHERE id=%s", [PLAN, plan["documentId"]])
+        conn.commit()
     data = client.get(f"/api/v1/projects/{project}/plan-tasks").json()["data"]
     task = data["tasks"][0]
     assert task["assignee"]["isMe"] and task["documentCount"] == 2
@@ -259,3 +263,44 @@ def test_shared_chapter_keeps_other_task_assignment(document_context):  # noqa: 
     assert holders(iface) == set() and holders(func) == {me}
     assert client.delete(f"/api/v1/tasks/{c['id']}?expectedRevision=0", headers=headers).status_code == 204
     assert holders(func) == set()
+
+
+def test_framework_and_task_split_chapters_are_readonly(document_context):  # noqa: F811
+    """40 P2-5：引用处的公共框架章节、开发计划书“任务分解”只读；任务不能指向公共框架章节；任务分解由任务生成。"""
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    plan = _create(client, headers, project, "软件开发计划", tds["dev-plan"])
+
+    def doc(did):
+        return client.get(f"/api/v1/documents/{did}").json()["data"]
+
+    def save(did, md):
+        return client.patch(f"/api/v1/documents/{did}/content", headers=headers,
+                            json={"expectedRevision": doc(did)["revision"], "markdownContent": md})
+
+    md = doc(srs["id"])["markdownContent"]
+    head = next(line for line in md.splitlines() if line.lstrip("#").strip().endswith("运行环境"))
+    r = save(srs["id"], md.replace(head, head + "\n\n私自改写的运行环境。", 1))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "CHAPTER_READONLY", r.text
+    func = next(line for line in md.splitlines() if line.lstrip("#").strip().endswith("功能需求"))
+    assert save(srs["id"], md.replace(func, func + "\n\n普通章节可以写。", 1)).status_code == 200
+
+    chapters = client.get(f"/api/v1/projects/{project}/documents/{srs['id']}/chapters").json()["data"]["chapters"]
+    runtime = next(c for c in chapters if c["title"].endswith("运行环境"))
+    funcc = next(c for c in chapters if c["title"].endswith("功能需求"))
+    r = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "环境", "targets": [
+        {"documentId": srs["id"], "objectId": runtime["objectId"]}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "FRAMEWORK_CHAPTER", r.text
+
+    r = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "需求细化", "targets": [
+        {"documentId": srs["id"], "objectId": funcc["objectId"]}]})
+    assert r.status_code == 201, r.text
+    pmd = doc(plan["id"])["markdownContent"]
+    assert "| 需求细化 | 未分配 |" in pmd and "功能需求" in pmd.split("任务分解", 1)[1]
+    split_head = next(line for line in pmd.splitlines() if line.lstrip("#").strip().endswith("任务分解"))
+    r2 = save(plan["id"], pmd.replace(split_head, split_head + "\n\n手写任务。", 1))
+    assert r2.status_code == 409 and r2.json()["error"]["code"] == "CHAPTER_READONLY"
+    task = r.json()["data"]
+    assert client.delete(f"/api/v1/tasks/{task['id']}?expectedRevision=0", headers=headers).status_code == 204
+    assert "需求细化" not in doc(plan["id"])["markdownContent"] and "尚无任务" in doc(plan["id"])["markdownContent"]

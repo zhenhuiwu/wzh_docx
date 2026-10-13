@@ -96,6 +96,11 @@ def _check_targets(conn, pid: str, targets: list[Target]) -> list[tuple[str, str
         obj = conn.execute("SELECT kind FROM document_objects WHERE id=%s AND document_id=%s AND deleted_at IS NULL", [oid, did]).fetchone()
         if doc is None or obj is None or obj["kind"] != "heading":
             raise AppError(409, "OBJECT_STALE", "所选章节已被删除或合并，请重新选择。", details={"documentId": did, "objectId": oid})
+        body = conn.execute("SELECT body FROM document_objects WHERE id=%s", [oid]).fetchone()["body"]
+        if chapter_key(heading_text(body)) in framework_titles():  # 40 P2-5：公共框架在“公共框架”里分工，不挂到任务
+            raise AppError(422, "FRAMEWORK_CHAPTER", "公共框架章节在“公共框架”中统一编写和分工，不能放进任务。",
+                           field_errors=[{"field": "targets", "message": f"“{heading_text(body)}”是公共框架章节。"}],
+                           details={"documentId": did, "objectId": oid})
         if (did, oid) not in out:
             out.append((did, oid))
     return out
@@ -186,8 +191,8 @@ def _task_row(conn, task_id: str):
 
 # ---------------------------------------------------------------- 公共框架块
 
-def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
-    """各文档中对应公共框架的章节：按内置目录中标记为公共框架的章节标题匹配。"""
+def framework_titles() -> dict[str, str]:
+    """章节标题键 → 公共框架键（内置目录中标记为公共框架的章节 + 框架名本身）。"""
     titles: dict[str, str] = {}
     for item in CATALOG:
         for _level, title, key in item["outline"]:
@@ -196,6 +201,12 @@ def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
     for fw in FRAMEWORKS:
         titles.setdefault(chapter_key(fw["name"]), fw["key"])
     titles.setdefault("运行环境", "runtime")
+    return titles
+
+
+def framework_refs(conn, pid: str) -> dict[str, list[dict]]:
+    """各文档中对应公共框架的章节：按内置目录中标记为公共框架的章节标题匹配。"""
+    titles = framework_titles()
     refs: dict[str, list[dict]] = {}
     for doc in conn.execute("SELECT id, name FROM documents WHERE project_id=%s ORDER BY created_at", [pid]).fetchall():
         for obj in conn.execute("""SELECT id, body FROM document_objects WHERE document_id=%s AND kind='heading' AND deleted_at IS NULL
@@ -298,6 +309,7 @@ def create_task(request: Request, project_id: str, body: TaskBody) -> dict:
                 conn.execute("INSERT INTO project_task_targets(task_id,document_id,object_id) VALUES (%s,%s,%s)", [tid, did, oid])
             if assignee:
                 _write_back(conn, principal.user_id, pairs, assignee, None, [], tid)
+            regenerate_task_chapter(conn, pid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -336,6 +348,7 @@ def update_task(request: Request, task_id: str, body: TaskPatch) -> dict:
                 _write_back(conn, principal.user_id, [], None, previous, old, tid)  # 取消负责人：恢复章节默认
             else:
                 _write_back(conn, principal.user_id, changed if assignee else [], assignee, previous, removed, tid)
+            regenerate_task_chapter(conn, pid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -352,6 +365,120 @@ def delete_task(request: Request, task_id: str, expectedRevision: int) -> None:
             previous = None if row["assignee_id"] is None else str(row["assignee_id"])
             _write_back(conn, _principal.user_id, [], None, previous, _targets_of(conn, tid), tid)
             conn.execute("DELETE FROM project_tasks WHERE id=%s", [tid])
+            regenerate_task_chapter(conn, pid)
+
+
+# ---------------------------------------------------------------- 只读章节与“任务分解”自动生成（30 §3.4，Q-2，40 P2-5）
+
+import contextvars  # noqa: E402
+
+_SYSTEM_WRITE = contextvars.ContextVar("tasks_system_write", default=False)
+SPLIT_KEY = chapter_key("4 任务分解")
+
+
+def _task_table(conn, pid: str) -> str:
+    rows = conn.execute("""SELECT t.*, u.name AS assignee_name FROM project_tasks t LEFT JOIN users u ON u.id=t.assignee_id
+                           WHERE t.project_id=%s ORDER BY t.display_order, t.created_at""", [pid]).fetchall()
+    lines = ["| 任务 | 负责人 | 涉及章节 |", "| --- | --- | --- |"]
+    for row in rows:
+        t = _task_payload(conn, row, "")
+        where = "；".join(f"{x['documentName']} {x['chapter']}" for x in t["targets"] if x["documentName"] and not x["stale"])
+        lines.append(f"| {t['title']} | {t['assignee']['name'] or '未分配'} | {where or '—'} |")
+    if not rows:
+        return "（尚无任务。任务在“分工”页维护，本章由任务数据自动生成，不能直接编辑。）\n"
+    return "\n".join(lines) + "\n"
+
+
+def _plan_documents(conn, pid: str) -> list[str]:
+    out = []
+    for doc in conn.execute("""SELECT d.id, d.name, td.name AS tname FROM documents d LEFT JOIN template_documents td
+                               ON td.id=d.template_document_id WHERE d.project_id=%s""", [pid]).fetchall():
+        item = match_catalog(doc["name"], doc["tname"])
+        if item and item["key"] == PLAN_KEY:
+            out.append(str(doc["id"]))
+    return out
+
+
+def _replace_section(markdown: str, key: str, body: str) -> str | None:
+    """把标题键为 key 的章节正文（到下一个标题为止）换成 body；找不到章节返回 None。"""
+    from app.markdown_blocks import assemble, split
+    prefix, blocks = split(markdown or "")
+    for index, block in enumerate(blocks):
+        if block.kind == "heading" and chapter_key(heading_text(block.body)) == key:
+            end = index + 1
+            while end < len(blocks) and blocks[end].kind != "heading":
+                end += 1
+            _p, fresh = split(body)
+            gap = block.gap_after or "\n\n"
+            fresh = [type(b)(b.kind, b.body, b.gap_after or gap, b.heading_level) for b in fresh]
+            return assemble(prefix, [*blocks[:index + 1], *fresh, *blocks[end:]])
+    return None
+
+
+def regenerate_task_chapter(conn, pid: str) -> None:
+    """任务变化后重写开发计划书的“任务分解”章节（系统写入，不经只读检查）。须在写事务内调用。"""
+    from app.documents import _save_markdown
+    table = _task_table(conn, pid)
+    for did in _plan_documents(conn, pid):
+        row = conn.execute("SELECT markdown_content, revision FROM documents WHERE id=%s", [did]).fetchone()
+        fresh = _replace_section(row["markdown_content"], SPLIT_KEY, table)
+        if fresh is None or fresh == row["markdown_content"]:
+            continue
+        token = _SYSTEM_WRITE.set(True)
+        try:
+            _save_markdown(conn, UUID(did), fresh, int(row["revision"]), kind="edit")
+        finally:
+            _SYSTEM_WRITE.reset(token)
+
+
+def _locked_sections(conn, document_id) -> set[str]:
+    doc = conn.execute("""SELECT d.name, td.name AS tname FROM documents d LEFT JOIN template_documents td
+                          ON td.id=d.template_document_id WHERE d.id=%s""", [str(document_id)]).fetchone()
+    item = match_catalog(doc["name"], doc["tname"]) if doc else None
+    if item is None:
+        return set()  # 只管内置依赖链里的文档；自建文档的同名章节不受限
+    keys = set(framework_titles())
+    if item["key"] == PLAN_KEY:
+        keys.add(SPLIT_KEY)
+    return keys
+
+
+def _section_bodies(markdown: str, keys: set[str]) -> dict[str, str]:
+    from app.markdown_blocks import split
+    _p, blocks = split(markdown or "")
+    out: dict[str, str] = {}
+    current = None
+    for block in blocks:
+        if block.kind == "heading":
+            key = chapter_key(heading_text(block.body))
+            current = key if key in keys and key not in out else None
+            if current:
+                out[current] = ""
+        elif current:
+            out[current] += block.body.strip() + "\n"
+    return out
+
+
+_GUARD_EXEMPT = frozenset({"restore", "revert", "undo", "backfill", "realign", "created"})  # 整篇回到某个历史版本，不算改写
+
+
+def guard_locked_chapters(conn, document_id, base_revision: int, markdown: str | None, actor, kind: str = "edit") -> None:
+    """保存检查点（record_commit 调用）：公共框架章节（引用处只读）和开发计划书“任务分解”（由任务生成）不能被用户改写。
+    系统写入（actor 为空、或本模块的自动生成）不检查。章节标题本身的增删由模板结构管控，这里只比较正文。"""
+    if markdown is None or actor is None or _SYSTEM_WRITE.get() or kind in _GUARD_EXEMPT:
+        return
+    keys = _locked_sections(conn, document_id)
+    if not keys:
+        return
+    row = conn.execute("SELECT markdown_content FROM document_versions WHERE document_id=%s AND revision=%s",
+                       [str(document_id), base_revision]).fetchone()
+    if row is None:
+        return
+    before, after = _section_bodies(row["markdown_content"], keys), _section_bodies(markdown, keys)
+    changed = [k for k in before if k in after and before[k] != after[k]]
+    if changed:
+        raise AppError(409, "CHAPTER_READONLY", "公共框架和“任务分解”章节在此只读：公共框架在“分工 › 公共框架”中修改，任务分解由任务自动生成。",
+                       details={"chapters": changed})
 
 
 @router.get("/projects/{project_id}/tasks:markdown")
