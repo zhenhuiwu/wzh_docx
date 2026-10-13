@@ -167,7 +167,7 @@ onMounted(() => void load());
           <thead><tr><th>文档</th><th>章节</th><th>归属</th><th>负责人</th></tr></thead>
           <tbody>
             <template v-for="d in byDocument" :key="d.id">
-              <tr class="group"><td colspan="4"><router-link :to="{ name: 'document', params: { id: projectId, documentId: d.id } }">{{ d.name }}</router-link> · {{ d.items.length }} 处</td></tr>
+              <tr class="group"><td colspan="4"><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: d.id } }">{{ d.name }}</router-link> · {{ d.items.length }} 处</td></tr>
               <tr v-if="!d.items.length"><td></td><td colspan="3" class="muted">没有任务涉及这份文档。</td></tr>
               <tr v-for="(it, i) in d.items" :key="d.id + i">
                 <td></td><td>{{ it.chapter }}<span v-if="it.stale" class="tag warning">章节已删除</span></td>
@@ -178,17 +178,19 @@ onMounted(() => void load());
           </tbody>
         </table></div>
         <div v-else class="table-wrap"><table data-testid="task-table">
-          <thead><tr><th>任务</th><th>负责人</th><th>涉及块</th></tr></thead>
+          <thead><tr><th>任务</th><th>负责人</th><th>涉及块</th><th class="th-right">进度</th></tr></thead>
           <tbody>
-            <tr v-if="!data.tasks.length"><td colspan="3" class="muted">还没有任务。{{ canManage ? "点击“新建任务”添加。" : "负责人分配后会出现在这里。" }}</td></tr>
+            <tr v-if="!data.tasks.length"><td colspan="4" class="muted">还没有任务。{{ canManage ? "点击“新建任务”添加。" : "负责人分配后会出现在这里。" }}</td></tr>
             <tr v-for="t in data.tasks" :key="t.id" :class="{ sel: selection?.kind === 'task' && selection.id === t.id, mine: t.assignee.isMe }" tabindex="0"
                 :aria-selected="selection?.kind === 'task' && selection.id === t.id" @click="selectTask(t)" @keydown.enter="selectTask(t)">
               <td>{{ t.title }}</td><td>{{ t.assignee.name || "未分配" }}</td><td class="muted">{{ where(t) }}</td>
+              <td class="num cell-right" data-testid="task-progress">{{ t.targets.length ? `${t.writtenCount ?? 0}/${t.targets.length}` : "—" }}</td>
             </tr>
-            <tr class="group"><td colspan="3">公共框架</td></tr>
+            <tr class="group"><td colspan="4">公共框架</td></tr>
             <tr v-for="f in data.frameworks" :key="f.id" :class="{ sel: selection?.kind === 'framework' && selection.id === f.id, mine: f.assignee.isMe }" tabindex="0"
                 :aria-selected="selection?.kind === 'framework' && selection.id === f.id" data-testid="framework-row" @click="selectFramework(f)" @keydown.enter="selectFramework(f)">
               <td>{{ f.name }}</td><td>{{ f.assignee.name || "未分配" }}</td><td class="muted">{{ f.references.length }} 份文档引用</td>
+              <td class="num cell-right">{{ f.body ? "已写" : "未写" }}</td>
             </tr>
           </tbody>
         </table></div>
@@ -205,7 +207,7 @@ onMounted(() => void load());
               <ul class="targets">
                 <li v-if="!form.targets.length" class="muted">还没有选择章节。</li>
                 <li v-for="(t, i) in form.targets" :key="t.documentId + t.objectId">
-                  <router-link :to="{ name: 'document', params: { id: projectId, documentId: t.documentId } }">{{ t.documentName }}</router-link> › {{ t.chapter }}
+                  <router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: t.documentId } }">{{ t.documentName }}</router-link> › {{ t.chapter }}
                   <span v-if="task?.targets.find((x) => x.objectId === t.objectId)?.stale" class="tag warning">章节已删除</span>
                   <button v-if="canManage" type="button" class="subtle icon-close" :aria-label="`移除 ${t.chapter}`" :disabled="busy" @click="form.targets.splice(i, 1)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
                 </li>
@@ -216,7 +218,7 @@ onMounted(() => void load());
             <p class="note">分配后，{{ form.assigneeId ? assigneeName : "负责人" }}只能修改这些块，其他部分只读。</p>
             <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
             <div v-if="canManage" class="actions">
-              <button type="submit" class="primary" :disabled="busy">{{ busy ? "正在保存…" : "保存" }}</button>
+              <button type="submit" class="ghost" :disabled="busy">{{ busy ? "正在保存…" : "保存" }}</button>
               <template v-if="!isNew">
                 <button v-if="!confirmingDelete" type="button" class="ghost danger" :disabled="busy" @click="confirmingDelete = true">删除任务</button>
                 <span v-else class="confirm" role="alert">删除任务不会删除文档内容，涉及块的分工会恢复为章节默认。
@@ -234,9 +236,9 @@ onMounted(() => void load());
             <p class="muted">第 {{ framework.revision }} 版<template v-if="framework.updatedBy"> · {{ framework.updatedBy }}</template></p>
             <div class="field"><span class="label">被引用的位置</span>
               <ul class="targets"><li v-if="!framework.references.length" class="muted">还没有文档引用。</li>
-                <li v-for="r in framework.references" :key="r.documentId + r.objectId"><router-link :to="{ name: 'document', params: { id: projectId, documentId: r.documentId } }">{{ r.documentName }}</router-link> › {{ r.chapter }}</li></ul></div>
+                <li v-for="r in framework.references" :key="r.documentId + r.objectId"><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: r.documentId } }">{{ r.documentName }}</router-link> › {{ r.chapter }}</li></ul></div>
             <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
-            <div v-if="framework.canEdit" class="actions"><button type="submit" class="primary" :disabled="busy || frameBody === framework.body">{{ busy ? "正在保存…" : "保存公共内容" }}</button></div>
+            <div v-if="framework.canEdit" class="actions"><button type="submit" class="ghost" :disabled="busy || frameBody === framework.body">{{ busy ? "正在保存…" : "保存公共内容" }}</button></div>
             <p v-else class="note">只有该公共内容的负责人或项目负责人可以修改。</p>
           </form>
           <p v-else class="muted">选择左侧任务或公共框架查看详情。</p>

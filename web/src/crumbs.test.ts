@@ -6,6 +6,6 @@ describe("项目内面包屑", () => {
     expect(PROJECT_ROUTES).toContain("project-plan");
     expect(projectPageCrumb("project-plan")).toEqual({ label: "分工", documentList: false });
     expect(projectPageCrumb("document").documentList).toBe(true);
-    expect(projectPageCrumb("project").label).toBe("项目概述");
+    expect(projectPageCrumb("project").label).toBe("首页");
   });
 });

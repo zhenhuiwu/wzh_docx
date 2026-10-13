@@ -18,6 +18,7 @@ CHAIN: list[tuple[int, str]] = [
     (118, "118_document_assignments"),
     (119, "119_document_baselines"),
     (120, "120_tasks_templates"),
+    (122, "122_upstream_baseline_ack"),
 ]
 
 

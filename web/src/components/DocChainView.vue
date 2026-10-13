@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /** 项目首页文档依赖链（30 §3.1）：按阶段分列的卡片 + SVG 连线，可切换列表视图。 */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
-import { getProjectChain, type ChainNode, type ProjectChain } from "../api/docChain";
+import { baselineCompareRoute, getProjectChain, type ChainNode, type ProjectChain, type UpstreamBaseline } from "../api/docChain";
 import CreateFromTemplateDialog from "./CreateFromTemplateDialog.vue";
 import StatePanel from "./StatePanel.vue";
 
 const props = defineProps<{ projectId: string; readonly?: boolean }>();
+const emit = defineEmits<{ (event: "state", value: { ready: boolean; hasDocuments: boolean; canCreate: boolean }): void }>();
 const router = useRouter();
 const chain = ref<ProjectChain | null>(null);
 const phase = ref<"loading" | "ready" | "error">("loading");
@@ -83,11 +84,30 @@ function onCreated(documentId: string) {
   void router.push({ name: "document", params: { id: props.projectId, documentId } });
 }
 
+/** 「X 更新到了 B2，Y 仍基于 B1」：每条有新基线的上游关系一行。 */
+const baselineNotices = computed(() => (chain.value?.nodes ?? []).flatMap((node) =>
+  (node.upstreamBaselines ?? []).filter((u) => u.newBaseline).map((u) => ({ node, up: u }))));
+function firstNew(node: ChainNode) { return (node.upstreamBaselines ?? []).find((u) => u.newBaseline); }
+function compare(up: UpstreamBaseline | undefined) { if (up) void router.push(baselineCompareRoute(props.projectId, up)); }
+
+/** 页头［从模板创建］：按依赖顺序挑下一份该写的文档（上游都已创建的第一份未创建文档）。都建好了就去文档页。 */
+const nextMissing = computed(() => {
+  const nodes = chain.value?.nodes ?? [];
+  const created = new Set(nodes.filter((n) => n.created).map((n) => n.key));
+  const missing = nodes.filter((n) => !n.created);
+  return missing.find((n) => n.upstream.every((k) => created.has(k))) ?? missing[0] ?? null;
+});
+function createNext() {
+  if (nextMissing.value && canCreate.value) creating.value = nextMissing.value;
+  else void router.push({ name: "project-documents", params: { id: props.projectId } });
+}
+watch([hasDocuments, canCreate, phase], () => emit("state", { ready: phase.value === "ready", hasDocuments: hasDocuments.value, canCreate: canCreate.value }));
+
 function setView(value: "graph" | "list") { view.value = value; void nextTick(layoutLines); }
 
 onMounted(() => { void load(); window.addEventListener("resize", layoutLines); });
 onBeforeUnmount(() => window.removeEventListener("resize", layoutLines));
-defineExpose({ reload: load });
+defineExpose({ reload: load, createNext });
 </script>
 
 <template>
@@ -97,9 +117,9 @@ defineExpose({ reload: load });
       <div class="chain-tools">
         <ul class="legend" aria-label="图例">
           <li><span class="swatch writing" />编写中</li>
-          <li><span class="swatch done" />已完成</li>
+          <li><span class="tag plain">B1</span>已基线</li>
+          <li><span class="tag warning">上游有新基线</span></li>
           <li><span class="swatch missing" />未创建</li>
-          <li><span class="tag warning">上游已更新</span></li>
         </ul>
         <div class="seg" role="group" aria-label="视图">
           <button type="button" class="ghost" :aria-pressed="view === 'graph'" :class="{ on: view === 'graph' }" @click="setView('graph')">依赖图</button>
@@ -110,7 +130,10 @@ defineExpose({ reload: load });
     <div v-if="phase === 'loading'" class="skeleton" role="status" aria-label="正在读取依赖链"><div v-for="i in 3" :key="i" class="sk-col"><span class="sk-card" /><span class="sk-card" /></div></div>
     <StatePanel v-else-if="phase === 'error'" kind="error" title="依赖链加载失败。" :text="errorText"><button type="button" class="ghost" @click="load">重试</button></StatePanel>
     <template v-else-if="chain">
-      <p v-if="!hasDocuments" class="empty-hint" data-testid="chain-empty">还没有文档。按模板依赖链，第一份通常是任务计划书。</p>
+      <div v-if="!hasDocuments" class="empty-hint" data-testid="chain-empty">
+        <span>还没有文档。按模板依赖链，第一份通常是任务计划书。</span>
+        <button v-if="canCreate" type="button" class="primary" data-testid="chain-empty-create" @click="createNext">从模板创建</button>
+      </div>
       <div v-if="view === 'graph'" ref="board" class="board" data-testid="doc-chain">
         <svg class="wires" aria-hidden="true"><path v-for="line in lines" :key="line.from + line.to" :d="line.d" :class="{ hot: related.has(line.from) && related.has(line.to) && (hovered === line.from || hovered === line.to) }" /></svg>
         <div v-for="col in columns" :key="col.key" class="col">
@@ -122,7 +145,10 @@ defineExpose({ reload: load });
                   @mouseenter="hovered = node.key" @mouseleave="hovered = null" @focus="hovered = node.key" @blur="hovered = null" @click="open(node)">
             <span class="node-name">{{ node.name }}</span>
             <template v-if="node.created">
-              <span v-if="node.upstreamChanged" class="tag warning" data-testid="upstream-changed">上游已更新</span>
+              <span v-if="node.baselineSeq || node.upstreamChanged" class="node-flags">
+                <span v-if="node.baselineSeq" class="tag plain" data-testid="baseline-seq">B{{ node.baselineSeq }}</span>
+                <span v-if="node.upstreamChanged" class="tag warning clickable" data-testid="upstream-changed" title="查看上游变化" @click.stop="compare(firstNew(node))">上游有新基线</span>
+              </span>
               <span class="node-meta"><span class="tag" :class="{ info: node.status !== 'completed', success: node.status === 'completed' }">{{ statusLabel[node.status] ?? node.status }}</span><span class="num">{{ node.written }}/{{ node.total }} 章</span></span>
               <span class="bar" aria-hidden="true"><span :style="{ width: percent(node) + '%' }" /></span>
               <span class="owner">{{ node.ownerName || "—" }}</span>
@@ -136,11 +162,19 @@ defineExpose({ reload: load });
         <tbody><tr v-for="node in chain.nodes" :key="node.key ?? node.name">
           <td><button type="button" class="link" :disabled="!node.created && !canCreate" @click="open(node)">{{ node.name }}</button></td>
           <td>{{ upstreamNames(node).join("、") || "—" }}</td>
-          <td><span class="tag" :class="{ info: node.created && node.status !== 'completed', success: node.status === 'completed' }">{{ node.created ? statusLabel[node.status] ?? node.status : "未创建" }}</span></td>
+          <td><span class="tag" :class="{ info: node.created && node.status !== 'completed', success: node.status === 'completed' }">{{ node.created ? statusLabel[node.status] ?? node.status : "未创建" }}</span>
+            <span v-if="node.baselineSeq" class="tag plain">B{{ node.baselineSeq }}</span>
+            <button v-if="node.upstreamChanged" type="button" class="tag warning clickable" @click="compare(firstNew(node))">上游有新基线</button></td>
           <td class="num">{{ node.created ? `${node.written}/${node.total} 章` : "—" }}</td>
           <td>{{ node.ownerName || "—" }}</td>
         </tr></tbody>
       </table></div>
+      <ul v-if="baselineNotices.length" class="baseline-notices" data-testid="baseline-notices">
+        <li v-for="item in baselineNotices" :key="item.node.documentId + item.up.documentId">
+          {{ item.up.name }} 更新到了 B{{ item.up.latestBaselineSeq }}，{{ item.node.name }} 仍基于 {{ item.up.baseBaselineSeq ? `B${item.up.baseBaselineSeq}` : "未基线的版本" }}
+          <button type="button" class="text" @click="compare(item.up)">查看变化</button>
+        </li>
+      </ul>
       <p v-if="chain.others.length" class="others">不在依赖链中的文档：{{ chain.others.map((n) => n.name).join("、") }}</p>
     </template>
     <CreateFromTemplateDialog :project-id="projectId" :node="creating" :upstream-options="createdDocs" :default-upstream-ids="creating ? defaultUpstreams(creating) : []" @close="creating = null" @created="onCreated" />
@@ -148,6 +182,10 @@ defineExpose({ reload: load });
 </template>
 
 <style scoped>
+.node-flags { display:flex; gap:var(--space-1); flex-wrap:wrap; }
+.clickable { cursor:pointer; border:0; }
+.clickable:hover { text-decoration:underline; }
+.baseline-notices { margin:var(--space-3) 0 0; padding:0; list-style:none; display:grid; gap:var(--space-1); color:var(--text-secondary); font-size:var(--text-sm); }
 .chain { min-width:0; }
 .chain-head { display:flex; justify-content:space-between; align-items:center; gap:var(--space-5); margin-bottom:var(--space-4); }
 .chain-tools { display:flex; align-items:center; gap:var(--space-5); }
@@ -182,6 +220,7 @@ defineExpose({ reload: load });
 .skeleton { display:grid; grid-template-columns:repeat(3, 220px); gap:var(--space-6); padding:var(--space-5); }
 .sk-col { display:grid; gap:var(--space-4); }
 .sk-card { height:calc(var(--space-7) * 2); border-radius:var(--radius-sheet); background:var(--gray-300); opacity:.4; }
+.empty-hint { display:flex; align-items:center; gap:var(--space-3); }
 .empty-hint, .others { margin:0 0 var(--space-3); color:var(--text-secondary); font-size:var(--text-sm); }
 .others { margin-top:var(--space-3); }
 .link { border:0; background:none; padding:0; color:var(--text-link); font:inherit; cursor:pointer; }

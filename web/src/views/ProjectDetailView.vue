@@ -5,13 +5,12 @@ import { ApiError, isMissingResource } from "../api/client";
 import { getProject, updateProject, type ProjectOwnerSummary, type ProjectRecord } from "../api/projects";
 import ProjectMembersSection from "../components/ProjectMembersSection.vue";
 import ProjectAssignmentSummary from "../components/ProjectAssignmentSummary.vue";
-import { NO_ACTIVE_OWNER_TAG, activeOwners, ownersText } from "../memberModel";
-import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/documents";
+import { listDocuments, type DocumentRecord } from "../api/documents";
 import StatePanel from "../components/StatePanel.vue";
-import { formatDateTime, initialOf } from "../format";
 import ProjectFrame from "../components/ProjectFrame.vue";
 import DocChainView from "../components/DocChainView.vue";
-import { displayText, projectStatuses, statusLabel } from "../projects";
+import ProjectHomeSidebar from "../components/ProjectHomeSidebar.vue";
+import { projectStatuses } from "../projects";
 import { useFieldErrors } from "../fieldErrors";
 
 const route = useRoute();
@@ -32,6 +31,16 @@ const savedForm = ref("");
 const frame = ref<InstanceType<typeof ProjectFrame> | null>(null);
 const membersSection = ref<InstanceType<typeof ProjectMembersSection> | null>(null);
 const assignSummary = ref<InstanceType<typeof ProjectAssignmentSummary> | null>(null);
+const chainView = ref<InstanceType<typeof DocChainView> | null>(null);
+const sidebar = ref<InstanceType<typeof ProjectHomeSidebar> | null>(null);
+const chainState = ref({ ready: false, hasDocuments: true, canCreate: false });
+/** 首页“一页一事”（30 §3.1）：项目信息和成员管理收进“…›编辑项目”“成员与权限”，按需展开。 */
+const showMembers = ref(false);
+const canCreateFromTemplate = computed(() => !archived.value && (project.value?.permissions?.projectRole === "owner" || Boolean(project.value?.permissions?.canArchive)));
+function manageMembers() {
+  showMembers.value = true;
+  requestAnimationFrame(() => document.getElementById("members-anchor")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
 const dirty = computed(() => editing.value && JSON.stringify(form.value) !== savedForm.value);
 let projectRequest = 0;
 let documentRequest = 0;
@@ -129,6 +138,7 @@ async function saveInfo() {
 
 /** A05：成员操作的响应带 owners[]，直接刷新页头和信息格，不再请求 getProject（16 §2.8 第 7 条）。 */
 function onOwners(value: { owners: ProjectOwnerSummary[]; ownerId: string | null; membersRevision: number }) {
+  sidebar.value?.reloadMembers();
   if (!project.value) return;
   project.value.owners = value.owners;
   project.value.ownerId = value.ownerId;
@@ -173,15 +183,6 @@ function onGone() {
 }
 
 const archived = computed(() => Boolean(project.value?.archivedAt));
-const noActiveOwner = computed(() => Boolean(project.value?.owners) && !activeOwners(project.value?.owners).length);
-// 归档或没有新建权限时，最近文档空态不给“去新建文档”（21 S-2）
-const canCreateDocument = computed(() => {
-  const permissions = project.value?.permissions;
-  if (archived.value || !permissions) return false;
-  return permissions.projectRole === "owner" || permissions.projectRole === "editor" || (!permissions.projectRole && permissions.canManageMembers);
-});
-const ownerLine = computed(() => project.value ? ownersText(project.value.owners, project.value.ownerName || "—") : "—");
-const ownerInitial = computed(() => initialOf(project.value ? activeOwners(project.value.owners)[0]?.name ?? project.value.ownerName : ""));
 
 function canLeave() {
   if (saving.value) {
@@ -241,12 +242,18 @@ onBeforeUnmount(() => {
     </div>
   </section>
   <ProjectFrame v-else ref="frame" :project="project" @archive-changed="onArchiveChanged">
-    <div class="overview-body">
-      <DocChainView :project-id="project.id" :readonly="archived" />
-      <section class="overview-section" aria-labelledby="overview-title">
+    <template #actions>
+      <button v-if="canCreateFromTemplate && chainState.ready && chainState.hasDocuments" type="button" class="primary" data-testid="home-create" @click="chainView?.createNext()">从模板创建</button>
+    </template>
+    <template #menu>
+      <button v-if="project.permissions?.canEdit !== false && !archived" type="button" role="menuitem" class="menu-item" data-testid="menu-edit-project" @click="editing || toggleEditing()">编辑项目</button>
+      <button type="button" role="menuitem" class="menu-item" @click="manageMembers">成员与权限</button>
+    </template>
+    <div class="overview-body home-grid">
+      <div class="home-main">
+      <section v-if="editing" class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
-          <h2 id="overview-title" class="section-title">项目概述</h2>
-          <button v-if="project.permissions?.canEdit !== false" type="button" class="ghost" :disabled="saving" @click="toggleEditing">{{ editing ? "收起编辑" : "编辑项目" }}</button>
+          <h2 id="overview-title" class="section-title">编辑项目</h2>
         </div>
         <form v-if="editing" class="edit-form" :aria-busy="saving" novalidate @submit.prevent="saveInfo">
           <div class="form-grid">
@@ -263,55 +270,24 @@ onBeforeUnmount(() => {
           <p v-if="formError" class="form-alert" role="alert">{{ formError }}</p>
           <div class="form-actions"><button type="submit" class="primary" :disabled="saving">{{ saving ? "正在保存…" : "保存项目" }}</button><button type="button" class="ghost" :disabled="saving" @click="cancelEdit">取消</button></div>
         </form>
-        <template v-else>
-          <p v-if="project.description" class="description">{{ project.description }}</p>
-          <p v-else class="description faint">还没有项目说明。</p>
-          <dl class="detail-grid">
-            <div><dt>负责人</dt><dd><span class="person" data-testid="project-owners"><span class="avatar" aria-hidden="true">{{ ownerInitial }}</span>{{ ownerLine }}</span><span v-if="noActiveOwner" class="tag warning owner-warn" data-testid="project-no-owner">{{ NO_ACTIVE_OWNER_TAG }}</span></dd></div>
-            <div><dt>状态</dt><dd data-testid="project-status">{{ archived ? `已归档（原：${statusLabel(project.status)}）` : statusLabel(project.status) }}</dd></div>
-            <div><dt>甲方单位</dt><dd>{{ displayText(project.organization) }}</dd></div>
-            <div><dt>甲方联系人</dt><dd>{{ displayText(project.clientContact) }}</dd></div>
-            <div><dt>所属部门</dt><dd>{{ displayText(project.department) }}</dd></div>
-            <div><dt>所属组</dt><dd>{{ displayText(project.group) }}</dd></div>
-            <div><dt>计划周期</dt><dd class="num">{{ project.periodStart || project.periodEnd ? `${project.periodStart || "未定"} 至 ${project.periodEnd || "未定"}` : "—" }}</dd></div>
-            <div><dt>最近更新</dt><dd class="num">{{ formatDateTime(project.updatedAt) }}</dd></div>
-          </dl>
-        </template>
       </section>
+        <DocChainView ref="chainView" :project-id="project.id" :readonly="archived" @state="chainState = $event" />
+        <div v-if="showMembers" id="members-anchor" class="home-members">
       <ProjectMembersSection ref="membersSection" :project-id="project.id" :project-name="project.name" :can-restore="Boolean(project.permissions?.canArchive)" @restore="frame?.openRestore()" @owners="onOwners" @permissions-changed="refreshPermissions" @gone="onGone" @assignments="assignSummary?.showPerson($event)" />
       <ProjectAssignmentSummary ref="assignSummary" :project-id="project.id" :can-assign="project.permissions?.projectRole === 'owner' || Boolean(project.permissions?.canArchive)" />
-      <section class="overview-section documents-section" aria-labelledby="documents-title">
-        <div class="section-head">
-          <h2 id="documents-title" class="section-title">最近文档</h2>
-          <router-link class="ghost" :to="{ name: 'project-documents', params: { id: projectId } }">查看全部文档</router-link>
+          <button type="button" class="ghost" @click="showMembers = false">收起成员与权限</button>
         </div>
-        <div class="doc-box">
-          <StatePanel v-if="documentPhase === 'loading'" kind="loading" text="正在读取文档…" class="compact" />
-          <StatePanel v-else-if="documentPhase === 'error'" kind="error" title="文档加载失败" :text="documentError" class="compact"><button type="button" class="ghost" @click="loadDocuments">重试</button></StatePanel>
-          <StatePanel v-else-if="documents.length === 0" title="还没有文档" :text="archived ? '项目已归档，没有文档。' : canCreateDocument ? '在“文档编写”中从模板创建或上传 Word 文档。' : '项目里还没有文档。'" class="compact" data-testid="recent-docs-empty"><router-link v-if="canCreateDocument" class="primary" :to="{ name: 'project-documents', params: { id: projectId } }">去新建文档</router-link></StatePanel>
-          <div v-else class="table-wrap document-list">
-            <table>
-              <thead><tr><th>文档名称</th><th>来源</th><th>编写人</th><th>状态</th><th>最近修改</th><th class="th-right">操作</th></tr></thead>
-              <tbody>
-                <tr v-for="item in documents" :key="item.id">
-                  <td class="doc-name-cell"><router-link class="document-name" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }">{{ item.name }}</router-link></td>
-                  <td class="muted">{{ item.sourceType === "upload" ? "上传 Word" : item.templateDocumentName || "模板" }}</td>
-                  <td>{{ item.ownerName || "—" }}</td>
-                  <td><span class="tag" :class="{ info: item.status === 'in_progress', success: item.status === 'completed' }">{{ documentStatusLabel[item.status] || item.status }}</span></td>
-                  <td class="time num">{{ formatDateTime(item.updatedAt) }}</td>
-                  <td class="cell-right"><router-link class="link" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }" :aria-label="`打开文档：${item.name}`">打开文档</router-link></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+      </div>
+      <ProjectHomeSidebar ref="sidebar" :project-id="project.id" @manage-members="manageMembers" />
     </div>
   </ProjectFrame>
 </template>
 
 <style scoped>
 .overview-body { display:grid; min-width:0; gap:var(--space-6); padding:var(--space-5) var(--space-6) var(--space-6); }
+.home-grid { grid-template-columns:minmax(0, 1fr) 360px; align-items:start; }
+.home-main, .home-members { display:grid; min-width:0; gap:var(--space-6); }
+.home-members > .ghost { justify-self:start; }
 .overview-section { min-width:0; }
 .section-head { display:flex; justify-content:space-between; align-items:center; gap:var(--space-5); margin-bottom:var(--space-4); }
 .description { max-width:calc(var(--space-7) * 20); margin:0 0 var(--space-5); color:var(--text-primary); font-size:var(--text-md); line-height:var(--leading-md); white-space:pre-wrap; overflow-wrap:anywhere; }

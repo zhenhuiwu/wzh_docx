@@ -16,6 +16,43 @@ export interface ChainNode {
   templateDocumentId?: string | null;
   upstreamDocuments?: UpstreamLink[];
   upstreamChanged?: boolean;
+  /** 文档最近进入的项目基线号（B{n}），没有进过基线为 null */
+  baselineSeq?: number | null;
+  upstreamBaselines?: UpstreamBaseline[];
+}
+
+/** 按项目基线判断的上游状态（30 §3.1/§3.5）：下游依据 baseBaselineSeq，上游最新 latestBaselineSeq。 */
+export interface UpstreamBaseline {
+  documentId: string;
+  name: string;
+  latestBaselineSeq: number | null;
+  baseBaselineSeq: number | null;
+  newBaseline: boolean;
+  acked: number | null;
+  fromVersionSeq: number | null;
+  toVersionSeq: number | null;
+}
+export interface UpstreamNotices { notices: UpstreamBaseline[]; canAck: boolean; projectId: string }
+
+/** 「查看变化」：打开项目基线页并直接对比该上游文档（依据的版本 → 新基线版本）。 */
+export function baselineCompareRoute(projectId: string, up: UpstreamBaseline) {
+  const query: Record<string, string> = { document: up.documentId };
+  if (up.latestBaselineSeq != null) query.seq = String(up.latestBaselineSeq);
+  if (up.fromVersionSeq != null) query.from = String(up.fromVersionSeq);
+  if (up.toVersionSeq != null) query.to = String(up.toVersionSeq);
+  return { name: "project-baselines", params: { id: projectId }, query };
+}
+
+export async function getUpstreamNotices(documentId: string): Promise<UpstreamNotices> {
+  const body = await apiRequest<{ data: UpstreamNotices }>(`/documents/${documentId}/upstream-notices`);
+  if (!body?.data) throw new Error("上游提示响应不完整。");
+  return body.data;
+}
+
+export async function ackUpstream(documentId: string, upstreamId: string): Promise<UpstreamBaseline> {
+  const body = await apiRequest<{ data: UpstreamBaseline }>(`/documents/${documentId}/upstreams/${upstreamId}:ack`, { method: "POST" });
+  if (!body?.data) throw new Error("标记核对响应不完整。");
+  return body.data;
 }
 export interface ProjectChain { stages: ChainStage[]; nodes: ChainNode[]; others: ChainNode[]; canCreate: boolean }
 
@@ -93,6 +130,8 @@ export interface ProjectTask {
   assignee: { id: string | null; name: string | null; isMe: boolean };
   targets: TaskTarget[];
   documentCount: number;
+  /** 涉及块中已写的数量（进度列） */
+  writtenCount?: number;
 }
 export interface PublicBlock {
   id: string;
@@ -157,7 +196,7 @@ export async function assignPublicBlock(blockId: string, assigneeId: string | nu
   return body.data;
 }
 
-export interface PublicRef { objectId: string; chapter: string; block: PublicBlock; seenRevision: number; updated: boolean }
+export interface PublicRef { objectId: string; chapter: string; block: PublicBlock; seenRevision: number; updated: boolean; canAck?: boolean }
 
 export async function documentPublicRefs(documentId: string): Promise<PublicRef[]> {
   const body = await apiRequest<{ data: { references: PublicRef[] } }>(`/documents/${documentId}/public-refs`);
