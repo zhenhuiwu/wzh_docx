@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiFragmentTooLarge, buildFragments, changedOps } from "./myBlocks";
+import { aiFragmentTooLarge, buildFragments, changedOps, isPlaceholderText } from "./myBlocks";
 
 const o = (id: string, kind: string, markdown: string, revision = 1) => ({ id, kind, markdown, revision });
 const r = (objectId: string, owners: string[], editable = true) => ({ objectId, kind: "paragraph", owners: owners.map((id) => ({ id, name: id })), via: "explicit", viaObjectId: null, editable, readonlyReason: null });
@@ -31,5 +31,15 @@ describe("changedOps", () => {
   it("sends only changed, non-empty blocks with their revision", () => {
     const blocks = [o("a", "paragraph", "一", 3), o("b", "paragraph", "二", 4), o("c", "paragraph", "三", 5)];
     expect(changedOps(blocks, { a: "一", b: "改二", c: "  " })).toEqual([{ op: "update", objectId: "b", baseRevision: 4, markdown: "改二" }]);
+  });
+});
+
+describe("isPlaceholderText", () => {
+  it("recognises template placeholders only", () => {
+    expect(isPlaceholderText("（在此编写本章内容。）")).toBe(true);
+    expect(isPlaceholderText(" (请在此填写接口说明) ")).toBe(true);
+    expect(isPlaceholderText("接口 2 的输入说明。")).toBe(false);
+    expect(isPlaceholderText("（公共框架：引用文档，各文档引用同一内容。）")).toBe(false);
+    expect(isPlaceholderText("（在此编写本章内容。）补充了正文")).toBe(false);
   });
 });

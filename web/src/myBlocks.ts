@@ -71,3 +71,9 @@ export function aiFragmentTooLarge(fragment: Fragment, drafts: Record<string, st
   const chars = fragment.blocks.reduce((sum, block) => sum + (drafts[block.id] ?? block.markdown).length, 0);
   return fragment.blocks.length > AI_FRAGMENT_MAX_BLOCKS || chars > AI_FRAGMENT_MAX_CHARS;
 }
+
+/** 验收 P1-5：模板占位文字（如“（在此编写本章内容。）”）不算正文：显示为输入框占位提示，不计为“已写”。 */
+const PLACEHOLDER = /^[（(][^（）()\n]*(在此|请在|待编写|待补充|填写|编写本)[^（）()\n]*[）)]$/;
+export function isPlaceholderText(markdown: string): boolean {
+  return PLACEHOLDER.test(markdown.trim());
+}
