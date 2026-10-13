@@ -4,8 +4,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
-import { streamDocumentSection } from "../../api/documents";
-import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { previewDocument, streamDocumentSection } from "../../api/documents";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 const props = defineProps<{ doc: MyWritingItem; userId: string }>();
@@ -19,8 +19,17 @@ const drafts = ref<Record<string, string>>({});
 const state = ref<"idle" | "saving" | "saved" | "conflict" | "forbidden" | "failed">("idle");
 const stateText = ref("");
 const placeholders = ref<Record<string, string>>({});
+/** 验收 40 P2-4：Word 正文样式的标题块锁定（服务端 /objects/patch 同样拒绝）。编辑稿到了才知道是哪些块。 */
+const lockedHeadings = ref<Set<string>>(new Set());
+async function loadLockedHeadings() {
+  const id = props.doc.id;
+  try {
+    const preview = await previewDocument(id);
+    if (id === props.doc.id) lockedHeadings.value = wordHeadingIds(preview.html);
+  } catch { /* 读不到时不锁；服务端仍会拒绝修改标题块 */ }
+}
 
-const blocks = computed<DocObject[]>(() => fragments.value.flatMap((fragment) => fragment.blocks));
+const blocks = computed<DocObject[]>(() => fragments.value.flatMap((fragment) => fragment.blocks).filter((block) => !lockedHeadings.value.has(block.id)));
 const ops = computed(() => changedOps(blocks.value, drafts.value));
 const dirty = computed(() => ops.value.length > 0);
 watch(dirty, (value) => emit("dirty", value), { immediate: true });
@@ -35,6 +44,7 @@ async function load() {
     placeholders.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.filter((b) => isPlaceholderText(b.markdown)).map((b) => [b.id, b.markdown.trim()])));
     drafts.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.map((b) => [b.id, placeholders.value[b.id] ? "" : b.markdown])));
     phase.value = "ready";
+    void loadLockedHeadings();
   } catch (error) {
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
     phase.value = "error";
@@ -68,7 +78,7 @@ async function runAi(fragment: Fragment) {
   if (aiBusy.value || !aiInstruction.value.trim()) return;
   aiBusy.value = fragment.key;
   aiAbort = new AbortController();
-  const ids = new Set(fragment.blocks.map((block) => block.id));
+  const ids = new Set(fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).map((block) => block.id));
   let applied = 0; let skipped = 0;
   const seen = new Set<string>();
   const notice = (tone: "success" | "warning" | "danger", text: string) => { aiNotice.value = { ...aiNotice.value, [fragment.key]: { tone, text } }; };
@@ -109,7 +119,7 @@ const summaries = computed<FragmentSummary[]>(() => fragments.value.map((fragmen
   const ids = new Set(fragment.blocks.map((block) => block.id));
   const touched = ops.value.some((op) => ids.has(op.objectId));
   const status = touched && state.value === "conflict" ? "conflict" : touched && state.value === "forbidden" ? "rejected"
-    : fragment.blocks.every((block) => { const text = (drafts.value[block.id] ?? block.markdown).trim(); return !text || isPlaceholderText(text); }) ? "todo" : "written";
+    : fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).every((block) => { const text = (drafts.value[block.id] ?? block.markdown).trim(); return !text || isPlaceholderText(text); }) ? "todo" : "written";
   return { key: fragment.key, label: fragment.headingPath.at(-1) || "（文档开头）", status };
 }));
 watch(summaries, (value) => emit("fragments", value), { immediate: true });
@@ -148,8 +158,9 @@ defineExpose({ dirty });
       <p v-if="fragment.before" class="context" :title="'前文（他人负责，只读）'"><span class="ctx-label">前文 · 只读</span>{{ fragment.before }}</p>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
         <span class="sr-only">{{ fragment.headingPath.at(-1) ?? "片段" }} 第 {{ index + 1 }} 段</span>
-        <textarea v-model="drafts[block.id]" class="control" rows="3" :placeholder="placeholders[block.id] || '在此编写这一段'" :disabled="state === 'saving'" :aria-invalid="!placeholders[block.id] && !drafts[block.id]?.trim()"></textarea>
-        <span v-if="!placeholders[block.id] && !drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
+        <p v-if="lockedHeadings.has(block.id)" class="locked-heading"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>{{ block.markdown }}<small>标题已固定</small></p>
+        <textarea v-else v-model="drafts[block.id]" class="control" rows="3" :placeholder="placeholders[block.id] || '在此编写这一段'" :disabled="state === 'saving'" :aria-invalid="!placeholders[block.id] && !drafts[block.id]?.trim()"></textarea>
+        <span v-if="!lockedHeadings.has(block.id) && !placeholders[block.id] && !drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
       </label>
       <p v-if="fragment.after" class="context" :title="'后文（他人负责，只读）'"><span class="ctx-label">后文 · 只读</span>{{ fragment.after }}</p>
     </article>
@@ -168,6 +179,8 @@ defineExpose({ dirty });
 .ctx-label { display: block; margin-bottom: 2px; font-size: var(--text-xs); color: var(--ink-tertiary); }
 .ai-form { display: flex; gap: var(--space-2); }
 .ai-form input { flex: 1; }
+.locked-heading { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-1) 0; font-weight: var(--weight-semibold); color: var(--ink); }
+.locked-heading small { color: var(--ink-tertiary); font-size: var(--text-xs); font-weight: var(--weight-regular); }
 .block { display: flex; flex-direction: column; gap: var(--space-1); }
 .block textarea { width: 100%; min-height: calc(var(--control-h) * 2); font-family: var(--font-doc); font-size: var(--text-md); line-height: var(--leading-md); resize: vertical; height: auto; }
 .skeleton span { display: block; height: var(--space-4); background: var(--bg-subtle); border-radius: var(--radius-control); }

@@ -235,6 +235,22 @@ def _items(connection, document_id: UUID, live, ops: list[PatchOp], conflicts) -
     return items
 
 
+def _reject_word_headings(connection, did: UUID, principal, ops) -> None:
+    """验收 40 P2-4：Word 里套正文样式的标题段落（如“1.1 标识”）和真标题一样固定，不能按块修改、删除或移动。"""
+    targets = {op.objectId for op in ops if op.op in ("update", "delete", "move") and op.objectId}
+    if not targets:
+        return
+    from app.document_guidance import object_spans
+    from app.documents import _word_heading_ids
+    row = load_document(connection, did, principal.user_id, is_admin(principal), "edit")
+    locked = _word_heading_ids(connection, row, object_spans(connection, row)) & {str(item) for item in targets}
+    if connection.in_transaction:
+        connection.commit()
+    if locked:
+        raise AppError(403, "HEADING_LOCKED", "标题段落已固定，不能在这里修改；需要改标题请联系文档负责人。",
+                       details={"objectIds": sorted(locked)})
+
+
 @router.post("/documents/{document_id}/objects/patch")
 def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
     from app.documents import _check_word, _save_markdown
@@ -252,6 +268,7 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
         if replayed is not None:
             return {"data": _public(replayed), "requestId": request.state.request_id}
         ensure_committed(connection, did)
+        _reject_word_headings(connection, did, principal, body.ops)
         for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
             guard = document_lock(did) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
             with guard:

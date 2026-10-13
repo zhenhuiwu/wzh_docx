@@ -206,3 +206,22 @@ def test_patch_atomic_conflict_has_no_appliable_parts(team):
     assert details["conflictId"] and details["conflicts"]
     assert not {"appliableOps", "appliableMarkdown", "appliableBaseRevision"} & set(details)
     assert "B 改引用段。" not in current(client, did)["markdownContent"]
+
+
+def test_patch_rejects_word_body_style_headings(team, monkeypatch):
+    """验收 40 P2-4：Word 里套正文样式的标题段落按块保存时被拒（403 HEADING_LOCKED），其他段落照常保存。"""
+    client, did, users = team
+    items = objects(client, did)
+    p1, p3 = by_text(items, "第一段。"), by_text(items, "第三段。")
+    import app.documents as documents
+    monkeypatch.setattr(documents, "_word_heading_ids", lambda connection, row, spans: {p1["objectId"]})
+    headers = _as(client, "editor")
+    rejected = patch(client, did, 1, [update(p1, "改了标题段。")], headers, "word-heading-1")
+    assert rejected.status_code == 403, rejected.text
+    error = rejected.json()["error"]
+    assert error["code"] == "HEADING_LOCKED" and error["details"]["objectIds"] == [p1["objectId"]]
+    assert "改了标题段。" not in current(client, did)["markdownContent"]
+    deleting = client.post(f"/api/v1/documents/{did}/objects/patch", headers=headers, json={
+        "clientSaveKey": "word-heading-2", "baseDocumentRevision": 1, "ops": [{"op": "delete", "objectId": p1["objectId"], "baseRevision": p1["revision"]}]})
+    assert deleting.status_code == 403, deleting.text
+    assert patch(client, did, 1, [update(p3, "改第三段。")], headers, "word-heading-3").status_code == 200

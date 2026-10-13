@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText } from "./myBlocks";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds } from "./myBlocks";
 
 const o = (id: string, kind: string, markdown: string, revision = 1) => ({ id, kind, markdown, revision });
 const r = (objectId: string, owners: string[], editable = true) => ({ objectId, kind: "paragraph", owners: owners.map((id) => ({ id, name: id })), via: "explicit", viaObjectId: null, editable, readonlyReason: null });
@@ -53,5 +53,12 @@ describe("applyAiOperations", () => {
     expect(applyAiOperations(ops, new Set(["a", "b"]), drafts, seen)).toEqual({ applied: 1, skipped: 2 });
     expect(applyAiOperations(ops, new Set(["a", "b"]), drafts, seen)).toEqual({ applied: 0, skipped: 0 });
     expect(drafts).toEqual({ a: "新", b: "乙" });
+  });
+});
+
+describe("wordHeadingIds", () => {
+  it("collects object ids of Word body-style headings", () => {
+    const html = '<p data-object-id="a" data-word-heading="2">1.1 标识</p><p data-object-id="b">正文</p><h2 data-word-heading="1" data-object-id="c">x</h2>';
+    expect([...wordHeadingIds(html)]).toEqual(["a", "c"]);
   });
 });
