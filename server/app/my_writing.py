@@ -44,9 +44,12 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
     uid = principal.user_id
     where = ["""exists (select 1 from project_members m where m.project_id = p.id and m.user_id = %s)""",
              "p.archived_at is null",
+             # 验收 P1(a)：项目负责人默认负责项目里的全部文档（不只是自己建的）
              """(d.owner_id = %s or exists (select 1 from document_object_assignments a
-                  where a.document_id = d.id and a.assignee_id = %s))"""]
-    params: list = [uid, uid, uid]
+                  where a.document_id = d.id and a.assignee_id = %s)
+                 or exists (select 1 from project_members o where o.project_id = p.id
+                  and o.user_id = %s and o.role = 'owner'))"""]
+    params: list = [uid, uid, uid, uid]
     if projectId:
         from app.documents import _uuid
         where.append("d.project_id = %s")
@@ -61,18 +64,20 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
                        p.name AS project_name, ou.name AS owner_name, d.assignment_mode,
                        (select count(*) from document_object_assignments a
                          where a.document_id = d.id and a.assignee_id = %s) AS assigned_count,
-                       {latest} AS latest_baseline
+                       {latest} AS latest_baseline,
+                       exists (select 1 from project_members o where o.project_id = p.id
+                         and o.user_id = %s and o.role = 'owner') AS project_owner
                 FROM documents d JOIN projects p ON p.id = d.project_id
                 LEFT JOIN users ou ON ou.id = d.owner_id
                 WHERE {' and '.join(where)}
                 ORDER BY d.updated_at DESC, d.name LIMIT %s OFFSET %s""",
-            (uid, *params, limit + 1, offset)).fetchall()
+            (uid, uid, *params, limit + 1, offset)).fetchall()
         total = connection.execute(
             f"SELECT count(*) AS n FROM documents d JOIN projects p ON p.id = d.project_id WHERE {' and '.join(where)}",
             tuple(params)).fetchone()["n"]
     items = []
     for row in rows[:limit]:
-        role = "owner" if str(row["owner_id"]) == str(uid) else "assignee"
+        role = "owner" if str(row["owner_id"]) == str(uid) or row["project_owner"] else "assignee"
         items.append({
             "id": str(row["id"]), "name": row["name"], "status": row["status"], "revision": row["revision"],
             "updatedAt": format_timestamp(row["updated_at"]),

@@ -162,13 +162,14 @@ def seed() -> dict:
     return {"users": users, "project": project, "other": other, "document": document, "admin": admin, "admin_name": admin_name}
 
 
-def login(page: Page, account: str, password: str = PASSWORD):
+def login(page: Page, account: str, password: str = PASSWORD, landing: str | None = None):
     page.context.clear_cookies()
     page.goto(f"{WEB}/login")
     page.fill("#staff-id", account)
     page.fill("#password", password)
     page.locator("form button[type=submit]").click()
-    page.wait_for_url(re.compile(r"/(projects|my-writing)"), timeout=30000)  # 编写人员落地页为“我的编写”
+    # 30 §2 / 验收 P1-4：管理员、项目创建者与项目负责人落在「项目」，只有编写人员落在「我的编写」
+    page.wait_for_url(re.compile(rf"/({landing})(\?|$)" if landing else r"/(projects|my-writing)"), timeout=30000)
 
 
 def shot(page: Page, name: str):
@@ -206,7 +207,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         page = ctx_a.new_page()
         page2 = ctx_b.new_page()
         open_pages.extend([page, page2])
-        login(page, ADMIN, ADMIN_PASSWORD)
+        login(page, ADMIN, ADMIN_PASSWORD, landing="projects")
 
         @step("V1 项目内只有概述/文档编写，没有成员导航；概述里有成员与权限")
         def v1():
@@ -366,7 +367,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         @step("V9 自身降级要确认；确认后区块变只读")
         def v9():
             admin.set_role(pid, users["zhang2"], "owner")
-            login(page2, f"zhang2{RUN}")
+            login(page2, f"zhang2{RUN}", landing="projects")
             open_overview(page2, pid)
             row(page2, users["zhang2"]).get_by_test_id("member-role-select").select_option("editor")
             dialog = page2.get_by_test_id("member-self-dialog")
@@ -381,7 +382,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         @step("V10 负责人移除自己 → 跳到项目列表并提示，列表里没有该项目（移除确认截图）")
         def v10():
             admin.set_role(pid, users["owner3"], "owner")
-            login(page2, f"owner3{RUN}")
+            login(page2, f"owner3{RUN}", landing="projects")
             open_overview(page2, pid)
             row(page2, users["owner3"]).get_by_test_id("member-remove").click()
             dialog = page2.get_by_test_id("member-remove-dialog")
@@ -414,7 +415,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page.get_by_test_id("frame-owners")).to_have_text("负责人：陈其他")
             # 改指提示 4 秒后自动收起（21 S-5）
             expect(page.get_by_test_id("members-info")).to_have_count(0, timeout=8000)
-            login(page2, f"other{RUN}")
+            login(page2, f"other{RUN}", landing="projects")
             expect(page2.locator(f'[data-testid=project-my-role][data-project-id="{p3["id"]}"]')).to_have_text("负责人")
             page2.goto(f"{WEB}/projects/{p3['id']}")
             expect(page2.get_by_test_id("frame-owners")).to_have_text("负责人：陈其他", timeout=30000)

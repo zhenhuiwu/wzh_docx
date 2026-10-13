@@ -67,8 +67,10 @@ def test_my_writing_lists_owned_or_assigned(bteam):
     with connect() as connection:
         connection.execute("UPDATE documents SET owner_id=%s WHERE id=%s", (users["editor"], did))
         connection.commit()
+    # 验收 P1(a)：项目负责人即使不是文档负责人，也能在「我的编写」里看到项目的文档（不会是空页）
     _as(client, "owner")
-    assert client.get("/api/v1/my-writing").json()["data"]["items"] == []
+    owned = client.get("/api/v1/my-writing").json()["data"]["items"]
+    assert [(item["id"], item["myRole"]) for item in owned] == [(did, "owner")]
     _as(client, "editor")
     data = client.get("/api/v1/my-writing").json()["data"]
     assert did in [item["id"] for item in data["items"]]
