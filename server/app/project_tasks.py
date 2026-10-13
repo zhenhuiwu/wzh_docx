@@ -101,23 +101,46 @@ def _check_targets(conn, pid: str, targets: list[Target]) -> list[tuple[str, str
     return out
 
 
-def _write_back(conn, actor, pairs: list[tuple[str, str]], assignee: str | None, previous: str | None, remove: list[tuple[str, str]]) -> None:
-    """写回 A07：pairs 设为 assignee；remove 中仍由 previous 单独持有的显式分配撤销。每份文档 bump 一次并记事件。"""
+def _claimants(conn, did: str, oid: str, exclude_task: str | None = None) -> set[str]:
+    """仍指向该章节的其他任务的负责人（同一章节可挂在多个任务上，41/40 P2-2）。"""
+    return {str(r["assignee_id"]) for r in conn.execute(
+        """SELECT DISTINCT t.assignee_id FROM project_task_targets x JOIN project_tasks t ON t.id=x.task_id
+           WHERE x.document_id=%s AND x.object_id=%s AND t.assignee_id IS NOT NULL AND t.id<>%s""",
+        [did, oid, exclude_task or ""]).fetchall()}
+
+
+def _write_back(conn, actor, pairs: list[tuple[str, str]], assignee: str | None, previous: str | None,
+                remove: list[tuple[str, str]], task_id: str | None = None) -> None:
+    """写回 A07：pairs 设为 assignee（同时保留其他任务对该章节的负责人）；
+    remove 中 previous 的显式分配只在没有别的任务仍为 previous 认领该章节时撤销。每份文档 bump 一次并记事件。"""
     touched: dict[str, tuple[list[str], list[str]]] = {}
-    for did, oid in pairs:
-        conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid])
-        if assignee:
+
+    def held(did: str, oid: str) -> set[str]:
+        return {str(r["assignee_id"]) for r in conn.execute(
+            "SELECT assignee_id FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid]).fetchall()}
+
+    def ensure(did: str, oid: str, users: set[str]) -> None:
+        for uid in users - held(did, oid):
             conn.execute("""INSERT INTO document_object_assignments(document_id,object_id,assignee_id,source,needs_confirm,assigned_by,assigned_at)
-                            VALUES (%s,%s,%s,'manual',0,%s,now())""", [did, oid, assignee, str(actor)])
+                            VALUES (%s,%s,%s,'manual',0,%s,now())""", [did, oid, uid, str(actor)])
+
+    for did, oid in pairs:
+        keep = _claimants(conn, did, oid, task_id) | ({assignee} if assignee else set())
+        for uid in held(did, oid) - keep:  # 任务覆盖手工分配，但不动其他任务的负责人
+            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s AND assignee_id=%s", [did, oid, uid])
+        ensure(did, oid, keep)
         touched.setdefault(did, ([], []))[0].append(oid)
     for did, oid in remove:
         if not previous:
             continue
-        held = {str(r["assignee_id"]) for r in conn.execute(
-            "SELECT assignee_id FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid]).fetchall()}
-        if held == {previous}:
-            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [did, oid])
+        others = _claimants(conn, did, oid, task_id)
+        current = held(did, oid)
+        if previous in current and previous not in others:
+            conn.execute("DELETE FROM document_object_assignments WHERE document_id=%s AND object_id=%s AND assignee_id=%s", [did, oid, previous])
             touched.setdefault(did, ([], []))[1].append(oid)
+        if others - current:
+            ensure(did, oid, others)
+            touched.setdefault(did, ([], []))[0].append(oid)
     for did, (assigned, removed) in touched.items():
         da.bump(conn, did)
         if assigned:
@@ -274,7 +297,7 @@ def create_task(request: Request, project_id: str, body: TaskBody) -> dict:
             for did, oid in pairs:
                 conn.execute("INSERT INTO project_task_targets(task_id,document_id,object_id) VALUES (%s,%s,%s)", [tid, did, oid])
             if assignee:
-                _write_back(conn, principal.user_id, pairs, assignee, None, [])
+                _write_back(conn, principal.user_id, pairs, assignee, None, [], tid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -310,9 +333,9 @@ def update_task(request: Request, task_id: str, body: TaskPatch) -> dict:
             for did, oid in new:
                 conn.execute("INSERT INTO project_task_targets(task_id,document_id,object_id) VALUES (%s,%s,%s)", [tid, did, oid])
             if assignee is None and previous:
-                _write_back(conn, principal.user_id, [], None, previous, old)  # 取消负责人：恢复章节默认
+                _write_back(conn, principal.user_id, [], None, previous, old, tid)  # 取消负责人：恢复章节默认
             else:
-                _write_back(conn, principal.user_id, changed if assignee else [], assignee, previous, removed)
+                _write_back(conn, principal.user_id, changed if assignee else [], assignee, previous, removed, tid)
         return {"data": _task_payload(conn, _task_row(conn, tid), str(principal.user_id)), "requestId": request.state.request_id}
 
 
@@ -327,7 +350,7 @@ def delete_task(request: Request, task_id: str, expectedRevision: int) -> None:
             if row["revision"] != expectedRevision:
                 raise AppError(409, "REVISION_CONFLICT", "任务刚被修改过，已显示最新。", details={"revision": row["revision"]})
             previous = None if row["assignee_id"] is None else str(row["assignee_id"])
-            _write_back(conn, _principal.user_id, [], None, previous, _targets_of(conn, tid))
+            _write_back(conn, _principal.user_id, [], None, previous, _targets_of(conn, tid), tid)
             conn.execute("DELETE FROM project_tasks WHERE id=%s", [tid])
 
 

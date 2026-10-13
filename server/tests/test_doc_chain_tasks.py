@@ -214,3 +214,46 @@ def test_upstream_new_baseline_is_baseline_based(document_context):  # noqa: F81
     assert node(plan)["upstreamChanged"] is False
     assert client.get(f"/api/v1/documents/{plan}/upstream-notices", headers=headers).json()["data"]["notices"] == []
     assert client.post(f"/api/v1/documents/{srs}/upstreams/{plan}:ack", headers=headers).status_code == 404
+
+
+def test_shared_chapter_keeps_other_task_assignment(document_context):  # noqa: F811
+    """40 P2-2：同一章节挂在两个任务上，删除/移出其中一个不清另一个任务的分工。"""
+    from app.db import connect
+    from app.identity import create_user
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    me = client.get("/api/v1/auth/me").json()["data"]["user"]["id"]
+    sun = str(create_user(account="task-sun", name="孙", password="task-sun-password-1", roles=["project_creator"]))
+    with connect() as conn:
+        for uid in (me, sun):
+            conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,%s)", [str(project), uid, "owner" if uid == me else "editor"])
+        conn.commit()
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    chapters = client.get(f"/api/v1/projects/{project}/documents/{srs['id']}/chapters").json()["data"]["chapters"]
+    func = next(c for c in chapters if c["title"].endswith("功能需求"))["objectId"]
+    iface = next(c for c in chapters if c["title"].endswith("接口需求"))["objectId"]
+
+    def holders(oid):
+        with connect() as conn:
+            return {str(r["assignee_id"]) for r in conn.execute(
+                "SELECT assignee_id FROM document_object_assignments WHERE document_id=%s AND object_id=%s", [srs["id"], oid]).fetchall()}
+
+    def task(title, uid, oids):
+        r = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": title, "assigneeId": uid,
+                        "targets": [{"documentId": srs["id"], "objectId": o} for o in oids]})
+        assert r.status_code == 201, r.text
+        return r.json()["data"]
+
+    c = task("C", me, [func])
+    d = task("D", sun, [func, iface])
+    assert holders(func) == {me, sun}  # 后建的任务不覆盖前一个任务的负责人
+    r = client.patch(f"/api/v1/tasks/{d['id']}", headers=headers, json={"expectedRevision": 0, "targets": [{"documentId": srs["id"], "objectId": iface}]})
+    assert r.status_code == 200, r.text
+    assert holders(func) == {me} and holders(iface) == {sun}
+    e = task("E", me, [func])  # 同一负责人两个任务
+    assert client.delete(f"/api/v1/tasks/{e['id']}?expectedRevision=0", headers=headers).status_code == 204
+    assert holders(func) == {me}  # C 仍为 me 认领
+    assert client.delete(f"/api/v1/tasks/{d['id']}?expectedRevision=1", headers=headers).status_code == 204
+    assert holders(iface) == set() and holders(func) == {me}
+    assert client.delete(f"/api/v1/tasks/{c['id']}?expectedRevision=0", headers=headers).status_code == 204
+    assert holders(func) == set()
