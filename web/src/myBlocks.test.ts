@@ -11,10 +11,21 @@ describe("buildFragments", () => {
     const fragments = buildFragments(objects, resolved, "me");
     expect(fragments.map((f) => f.blocks.map((b) => b.id))).toEqual([["p2", "p3"], ["p5"]]);
     expect(fragments[0].headingPath).toEqual(["3 需求", "3.2 功能"]);
-    expect(fragments[0].before).toBeNull(); // 前面是标题，已在路径里
+    expect(fragments[0].before).toBe("他人段"); // 跨过标题取最近的正文块（复验 P1-5）
     expect(fragments[0].after).toBe("他人二");
     expect(fragments[1].before).toBe("他人二");
     expect(fragments.map((f) => f.headingIndex)).toEqual([1, 1]);
+  });
+  it("整节分给我（标题与正文都是我的）时，前后文跨过标题取相邻章节的正文（复验 P1-5）", () => {
+    const doc = [o("h1", "heading", "# 1 范围"), o("a", "paragraph", "上一节末段"), o("h2", "heading", "# 2 引用"), o("b", "paragraph", "我的段"), o("h3", "heading", "# 3 需求"), o("c", "paragraph", "下一节首段")];
+    const [only] = buildFragments(doc, [r("h2", ["me"]), r("b", ["me"]), r("a", ["x"]), r("c", ["x"])], "me");
+    expect([only.before, only.after]).toEqual(["上一节末段", "下一节首段"]);
+    // 模板占位不当上下文
+    const [skip] = buildFragments([o("x", "paragraph", "真正的前文"), o("y", "paragraph", "（在此编写本章内容。）"), ...doc.slice(2)], [r("h2", ["me"]), r("b", ["me"])], "me");
+    expect(skip.before).toBe("真正的前文");
+    // 相邻章节也是我的：不重复显示
+    const [first, second] = buildFragments(doc, [r("a", ["me"]), r("b", ["me"])], "me");
+    expect([first.after, second.before]).toEqual([null, null]);
   });
   it("uses null heading index before the first heading and limits AI scope (Q-8)", () => {
     const [first] = buildFragments([o("p0", "paragraph", "开头"), ...objects], [r("p0", ["me"])], "me");
