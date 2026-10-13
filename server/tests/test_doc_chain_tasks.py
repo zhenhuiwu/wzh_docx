@@ -459,3 +459,14 @@ def test_generated_task_split_survives_frontend_markdown(document_context):  # n
     md = client.get(f"/api/v1/documents/{plan['id']}").json()["data"]["markdownContent"]
     r = save(md.replace("需求细化", "手改任务", 1))
     assert r.status_code == 409 and r.json()["error"]["code"] == "CHAPTER_READONLY", r.text
+
+
+def test_framework_hint_counts_as_placeholder():
+    """产品确认（41 复验 f31c8eb）：公共框架说明文字按模板占位处理——不算已写、不当作初稿复制。"""
+    from app.doc_chain import FRAMEWORKS, chapter_progress, is_prompt_or_empty
+    from app.markdown_blocks import split
+    for fw in FRAMEWORKS:
+        hint = f"（公共框架：{fw['name']}，各文档引用同一内容。）"
+        assert all(is_prompt_or_empty(b) for b in split(hint + "\n")[1])
+        assert chapter_progress(f"# 3 {fw['name']}\n\n{hint}\n")[0] == 0
+    assert not is_prompt_or_empty(split("正文。\n")[1][0])
