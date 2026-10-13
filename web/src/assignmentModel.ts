@@ -74,7 +74,16 @@ export function alignByEdits(blocks: Array<{ kind: string; body: string }>, base
   const cost: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
   for (let i = 1; i <= n; i += 1) cost[i][0] = i * 1.5;
   for (let j = 1; j <= m; j += 1) cost[0][j] = j * 1.5;
-  const sub = (i: number, j: number) => blocks[i].body.trim() === baseline[j].markdown.trim() ? 0 : blocks[i].kind === baseline[j].kind ? 1 : 2.5;
+  const grams = (text: string) => { const chars = [...text.trim()]; const out = new Map<string, number>(); for (let k = 0; k < chars.length; k += 1) { for (const g of [chars[k], chars[k] + (chars[k + 1] ?? "")]) out.set(g, (out.get(g) ?? 0) + 1); } return out; };
+  const mineGrams = blocks.map(block => grams(block.body)), baseGrams = baseline.map(item => grams(item.markdown));
+  const dice = (a: Map<string, number>, b: Map<string, number>) => { let both = 0, total = 0; for (const [g, c] of a) { both += Math.min(c, b.get(g) ?? 0); total += c; } for (const c of b.values()) total += c; return total ? 2 * both / total : 0; };
+  // 原位改写的代价随文字相似度（单字 + 双字的 Dice）降低（0.2–1.8，总比“删一段 + 加一段”的 3 便宜）：改过的段更愿意配回自己原来那段
+  const subCache = new Map<number, number>();
+  const sub = (i: number, j: number) => {
+    const key = i * (m + 1) + j; const hit = subCache.get(key); if (hit !== undefined) return hit;
+    const value = blocks[i].body.trim() === baseline[j].markdown.trim() ? 0 : blocks[i].kind === baseline[j].kind ? 0.2 + 1.6 * (1 - dice(mineGrams[i], baseGrams[j])) : 2.5;
+    subCache.set(key, value); return value;
+  };
   for (let i = 1; i <= n; i += 1) {
     for (let j = 1; j <= m; j += 1) cost[i][j] = Math.min(cost[i - 1][j - 1] + sub(i - 1, j - 1), cost[i - 1][j] + 1.5, cost[i][j - 1] + 1.5);
   }
@@ -93,7 +102,7 @@ export function keepMineOnly(markdown: string, baseline: BaselineObject[], edita
   // mineIds：编辑区里每块真实的对象 ID（优先）；没有时退回文字配对（本机草稿等）
   const known = new Set(baseline.map(item => item.id));
   const byIds = !!mineIds && mineIds.length === blocks.length;
-  const ids = byIds ? mineIds!.map(id => id && known.has(id) ? id : null) : blocks.length * baseline.length <= 4_000_000 ? alignByEdits(blocks, baseline) : assignBlockIds(markdown, baseline);
+  const ids = byIds ? mineIds!.map(id => id && known.has(id) ? id : null) : blocks.length * baseline.length <= 1_000_000 ? alignByEdits(blocks, baseline) : assignBlockIds(markdown, baseline);
   const mineById = new Map<string, string>();
   const following = new Map<string, string[]>();
   const leading: string[] = [];
