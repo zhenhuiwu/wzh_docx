@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -72,6 +73,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     seed_writing_skills()
     bootstrap_first_admin()
     recover_interrupted_tasks()
+    from app import preview_cache
+    threading.Thread(target=preview_cache.prestart_fast, name="fast-pool-prestart", daemon=True).start()
     try:
         yield
     finally:

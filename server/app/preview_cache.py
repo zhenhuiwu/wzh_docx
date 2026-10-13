@@ -25,6 +25,7 @@ _lock = threading.Lock()
 _done: OrderedDict[str, str] = OrderedDict()
 _running: dict[str, Future] = {}
 _pool: ProcessPoolExecutor | None = None
+_fast: ProcessPoolExecutor | None = None
 
 
 def workers() -> int:
@@ -38,6 +39,45 @@ def _executor() -> ProcessPoolExecutor:
     if _pool is None:
         _pool = ProcessPoolExecutor(max_workers=workers(), mp_context=multiprocessing.get_context("spawn"))
     return _pool
+
+
+def fast_workers() -> int:
+    return max(1, int(os.environ.get("FAST_PREVIEW_WORKERS", "2")))
+
+
+def _fast_executor() -> ProcessPoolExecutor:
+    """N1：快速路径（编辑区可编辑前要用的原稿标题表等）专用的小进程池，与整篇渲染池分开：
+    整篇渲染每篇 5–10 s，4 篇同时打开时会占满渲染池，快速路径排在它后面就等于被饿死。"""
+    global _fast
+    with _lock:
+        if _fast is None:
+            _fast = ProcessPoolExecutor(max_workers=fast_workers(), mp_context=multiprocessing.get_context("spawn"))
+        return _fast
+
+
+def _noop() -> None:
+    return None
+
+
+def prestart_fast() -> None:
+    """服务启动时预先拉起快速池的子进程（spawn 要导入 python-docx，约 1 s），首个打开文档的人不用等。"""
+    try:
+        pool = _fast_executor()
+        for future in [pool.submit(_noop) for _ in range(fast_workers())]:
+            future.result(timeout=60)
+    except Exception as exc:  # noqa: BLE001 - 预启动失败时首次使用再拉起
+        logger.info("fast pool prestart failed: %s", exc)
+
+
+def fast_call(fn, *args):
+    """在快速池执行 fn(*args)（纯 CPU、可序列化）；池损坏时退回本进程执行，结果相同。"""
+    global _fast
+    try:
+        return _fast_executor().submit(fn, *args).result()
+    except RuntimeError:  # BrokenProcessPool 也是 RuntimeError 子类
+        with _lock:
+            _fast = None
+        return fn(*args)
 
 
 def render(path: str, markdown: str, images: list | None, outline_headings: bool, selection: bool) -> str:
@@ -104,14 +144,42 @@ def warm(key: str, job: Job) -> None:
     future.add_done_callback(lambda done: done.exception() and logger.info("preview warm failed: %s", done.exception()))
 
 
+_decorated: OrderedDict[tuple, tuple] = OrderedDict()
+
+
+def decorated(key: str, html: str, rows: list) -> tuple[str, bool]:
+    """N1：整篇预览加对象 ID（lxml 解析整篇 + 逐对象取纯文本，大文档约 1 s 纯 CPU）放进进程池执行，
+    不在请求线程里抢 GIL（同时打开的其他文档的快速预览、/objects 因此不被拖慢）。按 (预览键, 对象 ID+修订) 缓存。"""
+    from app.document_objects import decorate_html
+    signature = hashlib.sha256("\0".join(f"{object_id}:{revision}" for object_id, revision, _ in rows).encode()).hexdigest()
+    cache_key = (key, signature)
+    with _lock:
+        if cache_key in _decorated:
+            _decorated.move_to_end(cache_key)
+            return _decorated[cache_key]
+    try:
+        with _lock:
+            future = _executor().submit(decorate_html, html, rows)
+        result = future.result()
+    except RuntimeError:  # 进程池损坏：退回本进程执行
+        result = decorate_html(html, rows)
+    with _lock:
+        _decorated[cache_key] = result
+        while len(_decorated) > MAX_ENTRIES:
+            _decorated.popitem(last=False)
+    return result
+
+
 def clear() -> None:
     with _lock:
         _done.clear()
+        _decorated.clear()
 
 
 def shutdown() -> None:
-    global _pool
+    global _pool, _fast
     with _lock:
-        pool, _pool = _pool, None
-    if pool is not None:
-        pool.shutdown(wait=False, cancel_futures=True)
+        pools, _pool, _fast = (_pool, _fast), None, None
+    for pool in pools:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)

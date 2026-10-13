@@ -571,12 +571,23 @@ def decorate_object_ids(connection, document_id: UUID, html: str) -> tuple[str, 
     只在能证明一一对应时添加：顶层节点数与存活对象数相同，且逐个纯文本一致；否则原样返回，前端走整篇保存。
     返回 (html, objectModel)。
     """
+    if not html:
+        return html, False
+    return decorate_html(html, object_rows(connection, document_id))
+
+
+def object_rows(connection, document_id: UUID) -> list[tuple[str, int, str]]:
+    """存活对象的 (id, revision, body)，可序列化，供 decorate_html 在预览进程池里执行。"""
+    return [(str(row["id"]), int(row["revision"]), row["body"]) for row in live_objects(connection, document_id)]
+
+
+def decorate_html(html: str, rows: list[tuple[str, int, str]]) -> tuple[str, bool]:
+    """decorate_object_ids 的纯函数部分（不碰数据库）。N1：整篇预览在进程池里调用，不占服务进程的 GIL。"""
     from lxml import html as html_dom
     from app.markdown_blocks import plain_text
 
     if not html:
         return html, False
-    rows = live_objects(connection, document_id)
     root = html_dom.fragment_fromstring(html, create_parent="div")
     nodes = []
     for child in root:
@@ -612,12 +623,12 @@ def decorate_object_ids(connection, document_id: UUID, html: str) -> tuple[str, 
                 column += width
         return "".join(row[x] for row in grid for x in sorted(row))
 
-    for node, row in zip(nodes, rows):
-        if bare(node_text(node)) != bare(plain_text(row["body"])):
+    for node, (_, _, body) in zip(nodes, rows):
+        if bare(node_text(node)) != bare(plain_text(body)):
             return html, False
-    for node, row in zip(nodes, rows):
-        node.set("data-object-id", str(row["id"]))
-        node.set("data-object-revision", str(row["revision"]))
+    for node, (object_id, revision, _) in zip(nodes, rows):
+        node.set("data-object-id", object_id)
+        node.set("data-object-revision", str(revision))
     from html import escape
     serialized = escape(root.text or "", quote=False) + "".join(html_dom.tostring(child, encoding="unicode", method="html") for child in root)
     return serialized, True

@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import weakref
 import traceback
 from io import BytesIO
@@ -1743,13 +1744,18 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
 
-        from app.document_objects import decorate_object_ids
+        from app import preview_cache
+        from app.document_objects import object_rows
+        key, _job = _render_job(conn, row, selection=True)
         html = _cached_html(conn, row, selection=True)
         # S7：能证明一一对应时为顶层块加对象 ID；ensure 可能补建对象行，需提交。
         ensure_document_objects(conn, did)
         if conn.in_transaction:
             conn.commit()
-        html, object_model = decorate_object_ids(conn, did, html)
+        rows = object_rows(conn, did)
+        if conn.in_transaction:
+            conn.commit()
+        html, object_model = preview_cache.decorated(key, html, rows) if html else (html, False)
 
         return {
             "data": {"html": html, "objectModel": object_model, "revision": row[12]},
@@ -1831,6 +1837,12 @@ def warm_preview(connection, row) -> None:
     except AppError:
         return
     preview_cache.warm(key, job)
+    # N1：原稿标题表（/objects、/preview/blocks 要用）也提前在快速进程池里算；线程只是等结果，不占 GIL
+    from app import fast_preview
+    file = connection.execute("SELECT storage_key FROM files WHERE id = %s AND status = 'stored'", [row[5]]).fetchone()
+    if file is not None:
+        threading.Thread(target=fast_preview.word_heading_texts, args=(str(file[0]), Path(job[0])), daemon=True,
+                         name="word-headings-warm").start()
 
 
 @router.get("/documents/{document_id}/original-preview")
