@@ -18,6 +18,23 @@ router = APIRouter()
 _STATUS = {"all", "writing", "baselined"}
 
 
+_WRITER_ROLES = ("owner", "editor")
+
+
+@router.get("/my-writing/access")
+def my_writing_access(request: Request) -> dict:
+    """Q-9：只读成员（评审、只读）不显示「我的编写」。管理员，或在任一未归档项目里是负责人/编写人员的才显示。"""
+    principal = require_session(request)
+    visible = "system_admin" in principal.roles
+    if not visible:
+        with connect() as connection:
+            visible = connection.execute(
+                """SELECT 1 FROM project_members m JOIN projects p ON p.id = m.project_id
+                   WHERE m.user_id = %s AND m.role IN ('owner','editor') AND p.archived_at IS NULL LIMIT 1""",
+                (principal.user_id,)).fetchone() is not None
+    return {"data": {"visible": visible}, "requestId": request.state.request_id}
+
+
 @router.get("/my-writing")
 def my_writing(request: Request, projectId: str | None = None, q: str | None = None,
                offset: int = 0, limit: int = 20) -> dict:

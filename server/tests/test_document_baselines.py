@@ -92,3 +92,10 @@ def test_project_baseline_tags_documents(bteam):
     detail = client.get(f"/api/v1/projects/{project}/baselines/1").json()["data"]
     assert detail["documents"][0]["changed"] and detail["documents"][0]["sinceBaseline"]["paragraphsAdded"] == 1
     assert client.get(f"/api/v1/projects/{project}/baselines").json()["data"]["total"] == 1
+
+
+def test_my_writing_hidden_for_read_only_members(bteam):
+    client, did, users = bteam
+    for role, visible in (("editor", True), ("owner", True), ("viewer", False), ("reviewer", False), ("outsider", False)):
+        _as(client, role)
+        assert client.get("/api/v1/my-writing/access").json()["data"]["visible"] is visible, role
