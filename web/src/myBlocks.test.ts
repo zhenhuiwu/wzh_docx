@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFragments, changedOps } from "./myBlocks";
+import { aiFragmentTooLarge, buildFragments, changedOps } from "./myBlocks";
 
 const o = (id: string, kind: string, markdown: string, revision = 1) => ({ id, kind, markdown, revision });
 const r = (objectId: string, owners: string[], editable = true) => ({ objectId, kind: "paragraph", owners: owners.map((id) => ({ id, name: id })), via: "explicit", viaObjectId: null, editable, readonlyReason: null });
@@ -14,6 +14,13 @@ describe("buildFragments", () => {
     expect(fragments[0].before).toBeNull(); // 前面是标题，已在路径里
     expect(fragments[0].after).toBe("他人二");
     expect(fragments[1].before).toBe("他人二");
+    expect(fragments.map((f) => f.headingIndex)).toEqual([1, 1]);
+  });
+  it("uses null heading index before the first heading and limits AI scope (Q-8)", () => {
+    const [first] = buildFragments([o("p0", "paragraph", "开头"), ...objects], [r("p0", ["me"])], "me");
+    expect(first.headingIndex).toBeNull();
+    expect(aiFragmentTooLarge(first, {})).toBe(false);
+    expect(aiFragmentTooLarge(first, { p0: "字".repeat(6001) })).toBe(true);
   });
   it("skips blocks I own but cannot edit", () => {
     expect(buildFragments(objects, [r("p2", ["me"], false)], "me")).toEqual([]);

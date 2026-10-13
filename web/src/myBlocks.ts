@@ -4,6 +4,8 @@ import type { DocObject, ResolvedObject } from "./api/assignments";
 export interface Fragment {
   key: string;
   headingPath: string[];
+  /** 所在章节的标题序号（与 AI 编写接口的 headingIndex 一致；文档开头为 null） */
+  headingIndex: number | null;
   blocks: DocObject[]; // 我负责、可编辑的块（标题锁定，不在其中）
   lockedHeadings: Record<string, true>;
   before: string | null;
@@ -26,8 +28,10 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
   const fragments: Fragment[] = [];
   const path: string[] = [];
   let current: Fragment | null = null;
+  let headings = -1;
   objects.forEach((object, index) => {
     if (object.kind === "heading") {
+      headings += 1;
       const depth = level(object.markdown);
       path.splice(depth - 1, path.length, headingText(object.markdown));
       if (current && mine(object)) current.lockedHeadings[object.id] = true;
@@ -37,7 +41,7 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
     if (mine(object)) {
       if (!current) {
         const prev = objects[index - 1];
-        current = { key: object.id, headingPath: [...path], blocks: [], lockedHeadings: {}, before: prev && prev.kind !== "heading" && !mine(prev) ? prev.markdown : null, after: null };
+        current = { key: object.id, headingPath: [...path], headingIndex: headings < 0 ? null : headings, blocks: [], lockedHeadings: {}, before: prev && prev.kind !== "heading" && !mine(prev) ? prev.markdown : null, after: null };
         fragments.push(current);
       }
       current.blocks.push(object);
@@ -59,3 +63,11 @@ export function changedOps(blocks: DocObject[], drafts: Record<string, string>):
 }
 
 export interface FragmentSummary { key: string; label: string; status: "todo" | "written" | "conflict" | "rejected" }
+
+/** 30 Q-8：AI 编写本节一次最多 20 段、6000 字。 */
+export const AI_FRAGMENT_MAX_BLOCKS = 20;
+export const AI_FRAGMENT_MAX_CHARS = 6000;
+export function aiFragmentTooLarge(fragment: Fragment, drafts: Record<string, string>): boolean {
+  const chars = fragment.blocks.reduce((sum, block) => sum + (drafts[block.id] ?? block.markdown).length, 0);
+  return fragment.blocks.length > AI_FRAGMENT_MAX_BLOCKS || chars > AI_FRAGMENT_MAX_CHARS;
+}

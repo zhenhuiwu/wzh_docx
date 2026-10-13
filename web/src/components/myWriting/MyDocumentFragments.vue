@@ -4,7 +4,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
-import { buildFragments, changedOps, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { streamDocumentSection } from "../../api/documents";
+import { aiFragmentTooLarge, buildFragments, changedOps, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 const props = defineProps<{ doc: MyWritingItem; userId: string }>();
@@ -53,6 +54,41 @@ async function save() {
     else { state.value = "failed"; stateText.value = api?.message ?? "暂时不能连接服务，修改还在本页，可以重试。"; }
   }
 }
+
+// 30 §4.2 / Q-8：AI 编写本节——复用 AI 修改接口，范围限定为这个片段里我负责的块；结果只填进草稿，由我确认后再保存。
+const aiOpen = ref<string | null>(null);
+const aiInstruction = ref("");
+const aiBusy = ref<string | null>(null);
+const aiNotice = ref<Record<string, { tone: "success" | "warning" | "danger"; text: string }>>({});
+let aiAbort: AbortController | null = null;
+function openAi(key: string) { aiOpen.value = aiOpen.value === key ? null : key; aiInstruction.value = ""; }
+async function runAi(fragment: Fragment) {
+  if (aiBusy.value || !aiInstruction.value.trim()) return;
+  aiBusy.value = fragment.key;
+  aiAbort = new AbortController();
+  const ids = new Set(fragment.blocks.map((block) => block.id));
+  let applied = 0; let skipped = 0;
+  const notice = (tone: "success" | "warning" | "danger", text: string) => { aiNotice.value = { ...aiNotice.value, [fragment.key]: { tone, text } }; };
+  try {
+    await streamDocumentSection(props.doc.id, revision.value, fragment.headingIndex, aiInstruction.value.trim(), undefined, (event) => {
+      if (event.type !== "draft" || !event.operations) return;
+      for (const op of event.operations) {
+        if (op.op === "replace" && ids.has(op.blockId) && op.content.trim()) { drafts.value[op.blockId] = op.content; applied += 1; }
+        else skipped += 1;
+      }
+    }, aiAbort.signal, "section", undefined, undefined, [...ids]);
+    if (!applied) notice("warning", "AI 没有给出可填入的修改。");
+    else notice(skipped ? "warning" : "success", `AI 已改写 ${applied} 段，确认后点“保存本文档”。${skipped ? `另有 ${skipped} 处增删段落的建议需在文档中操作。` : ""}`);
+    aiOpen.value = null;
+  } catch (error) {
+    if (aiAbort.signal.aborted) notice("warning", "已停止 AI 编写。");
+    else notice("danger", error instanceof ApiError || error instanceof Error ? error.message : "AI 编写失败，请重试。");
+  } finally {
+    aiBusy.value = null; aiAbort = null;
+  }
+}
+function stopAi() { aiAbort?.abort(); }
+onBeforeUnmount(() => aiAbort?.abort());
 
 function toggleContext(key: string) {
   const next = new Set(openContext.value);
@@ -104,7 +140,15 @@ defineExpose({ dirty });
         <svg class="lock" viewBox="0 0 16 16" role="img" aria-label="标题锁定"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>
         <strong class="path">{{ fragment.headingPath.join(" › ") || "（文档开头）" }}</strong>
         <button v-if="fragment.before || fragment.after" type="button" class="subtle" :aria-expanded="openContext.has(fragment.key)" @click="toggleContext(fragment.key)">{{ openContext.has(fragment.key) ? "收起上下文" : "显示上下文" }}</button>
+        <button type="button" class="ghost" :aria-expanded="aiOpen === fragment.key" :disabled="state === 'saving' || (aiBusy !== null && aiBusy !== fragment.key) || aiFragmentTooLarge(fragment, drafts)" :title="aiFragmentTooLarge(fragment, drafts) ? '本节超过 20 段或 6000 字，请在文档中选中部分后使用 AI' : ''" @click="openAi(fragment.key)">AI 编写本节</button>
       </header>
+      <form v-if="aiOpen === fragment.key" class="ai-form" @submit.prevent="runAi(fragment)">
+        <input v-model="aiInstruction" class="control" :aria-label="`AI 编写要求：${fragment.headingPath.at(-1) ?? '片段'}`" placeholder="说明要怎么写，例如：补充接口鉴权要求" :disabled="aiBusy === fragment.key" maxlength="500" />
+        <button v-if="aiBusy === fragment.key" type="button" class="ghost" @click="stopAi">停止</button>
+        <button v-else type="submit" class="primary" :disabled="!aiInstruction.trim()">生成</button>
+      </form>
+      <p v-if="aiBusy === fragment.key" class="notice info" role="status">AI 正在编写本节…</p>
+      <p v-else-if="aiNotice[fragment.key]" class="notice" :class="aiNotice[fragment.key].tone" role="status">{{ aiNotice[fragment.key].text }}</p>
       <p v-if="openContext.has(fragment.key) && fragment.before" class="context">{{ fragment.before }}</p>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
         <span class="sr-only">{{ fragment.headingPath.at(-1) ?? "片段" }} 第 {{ index + 1 }} 段</span>
@@ -125,6 +169,8 @@ defineExpose({ dirty });
 .path { overflow-wrap: anywhere; margin-right: auto; }
 .lock { width: var(--icon-sm); height: var(--icon-sm); fill: none; stroke: var(--ink-secondary); stroke-width: 1.4; flex: none; }
 .context { margin: 0; padding: var(--space-2); color: var(--ink-tertiary); background: var(--bg-subtle); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.ai-form { display: flex; gap: var(--space-2); }
+.ai-form input { flex: 1; }
 .block { display: flex; flex-direction: column; gap: var(--space-1); }
 .block textarea { width: 100%; min-height: calc(var(--control-h) * 2); font-family: var(--font-doc); font-size: var(--text-md); line-height: var(--leading-md); resize: vertical; height: auto; }
 .skeleton span { display: block; height: var(--space-4); background: var(--bg-subtle); border-radius: var(--radius-control); }
