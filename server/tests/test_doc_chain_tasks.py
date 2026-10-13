@@ -122,7 +122,7 @@ def test_create_copies_upstream_chapters_and_links(document_context):  # noqa: F
     assert "改了" not in after  # 不同步
     assert client.get(f"/api/v1/documents/{srs['id']}/upstreams").json()["data"]["upstreams"][0]["changedSinceLink"]
     chain = client.get(f"/api/v1/projects/{project}/doc-chain").json()["data"]
-    assert next(n for n in chain["nodes"] if n["key"] == "srs")["upstreamChanged"]
+    assert not next(n for n in chain["nodes"] if n["key"] == "srs")["upstreamChanged"]  # 只改正文、未进新基线不提示
     # 手动清空上游（Q-1）、非法上游
     assert client.put(f"/api/v1/documents/{srs['id']}/upstreams", headers=headers, json={"upstreamDocumentIds": []}).json()["data"]["upstreams"] == []
     assert client.put(f"/api/v1/documents/{book['id']}/upstreams", headers=headers, json={"upstreamDocumentIds": [book["id"]]}).status_code == 422
@@ -171,3 +171,44 @@ def test_tasks_write_back_and_public_blocks(document_context):  # noqa: F811
     assert client.post(f"/api/v1/documents/{srs['id']}/public-refs/{runtime['id']}:seen", headers=headers).status_code == 200
     ref = next(r for r in client.get(f"/api/v1/documents/{srs['id']}/public-refs").json()["data"]["references"] if r["block"]["key"] == "runtime")
     assert not ref["updated"]
+
+
+def test_upstream_new_baseline_is_baseline_based(document_context):  # noqa: F811
+    from app.db import connect
+    client, headers, project, *_ = document_context
+    client.post("/api/v1/templates/builtin:seed", headers=headers)
+    nodes = client.get(f"/api/v1/projects/{project}/doc-chain").json()["data"]["nodes"]
+    td = {n["key"]: n["templateDocumentId"] for n in nodes}
+    srs = client.post(f"/api/v1/projects/{project}/documents", headers=headers,
+                      json={"name": "软件需求规格说明", "sourceType": "template", "templateDocumentId": td["srs"]}).json()["data"]["id"]
+    plan = client.post(f"/api/v1/projects/{project}/documents", headers=headers,
+                       json={"name": "软件开发计划", "sourceType": "template", "templateDocumentId": td["dev-plan"],
+                             "upstreamDocumentIds": [srs]}).json()["data"]["id"]
+
+    def node(did):
+        return next(n for n in client.get(f"/api/v1/projects/{project}/doc-chain").json()["data"]["nodes"] if n["documentId"] == did)
+
+    def edit(did):  # 正文改动：只要 revision 变化，基线就会生成新文档版本
+        with connect() as conn:
+            conn.execute("UPDATE documents SET revision=revision+1, markdown_content=markdown_content || '\n\n新增。\n' WHERE id=%s", [did])
+            conn.commit()
+
+    edit(srs)  # 未进基线前的修改不算“上游有新基线”
+    assert node(plan)["upstreamChanged"] is False and node(plan)["baselineSeq"] is None
+    r = client.post(f"/api/v1/projects/{project}/baselines", headers=headers, json={"name": "评审", "documentIds": [srs, plan]})
+    assert r.status_code == 201, r.text
+    assert node(plan)["baselineSeq"] == 1 and node(plan)["upstreamChanged"] is False
+    client.post(f"/api/v1/projects/{project}/baselines", headers=headers, json={"name": "无变化", "documentIds": [srs]})
+    assert node(plan)["upstreamChanged"] is False  # 新基线但上游版本没变
+    edit(srs)
+    client.post(f"/api/v1/projects/{project}/baselines", headers=headers, json={"name": "需求更新", "documentIds": [srs]})
+    up = node(plan)["upstreamBaselines"][0]
+    assert node(plan)["upstreamChanged"] is True and (up["baseBaselineSeq"], up["latestBaselineSeq"]) == (1, 3)
+    assert up["fromVersionSeq"] != up["toVersionSeq"]
+    notices = client.get(f"/api/v1/documents/{plan}/upstream-notices", headers=headers).json()["data"]
+    assert [n["documentId"] for n in notices["notices"]] == [srs] and notices["canAck"] is True
+    acked = client.post(f"/api/v1/documents/{plan}/upstreams/{srs}:ack", headers=headers)
+    assert acked.status_code == 200, acked.text and acked.json()["data"]["newBaseline"] is False
+    assert node(plan)["upstreamChanged"] is False
+    assert client.get(f"/api/v1/documents/{plan}/upstream-notices", headers=headers).json()["data"]["notices"] == []
+    assert client.post(f"/api/v1/documents/{srs}/upstreams/{plan}:ack", headers=headers).status_code == 404

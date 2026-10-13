@@ -217,12 +217,19 @@ def get_project_chain(request: Request, project_id: str) -> dict:
     with connect() as conn:
         links = {n["documentId"]: document_upstreams(conn, n["documentId"]) for n in [*by_key.values(), *extras]}
     key_of = {n["documentId"]: k for k, n in by_key.items()}
+    with connect() as conn:
+        status = {n["documentId"]: upstream_baseline_status(conn, n["documentId"]) for n in [*by_key.values(), *extras]}
+        latest_pb = {n["documentId"]: (baseline_entries(conn, n["documentId"]) or [None])[-1] for n in [*by_key.values(), *extras]}
     for node in [*by_key.values(), *extras]:
         node["upstreamDocuments"] = links.get(node["documentId"], [])
-        node["upstreamChanged"] = any(u["changedSinceLink"] for u in node["upstreamDocuments"])
+        node["upstreamBaselines"] = status.get(node["documentId"], [])
+        node["upstreamChanged"] = any(u["newBaseline"] for u in node["upstreamBaselines"])
+        entry = latest_pb.get(node["documentId"])
+        node["baselineSeq"] = entry["pbSeq"] if entry else None
     for item in CATALOG:
         node = by_key.get(item["key"]) or {"documentId": None, "name": item["name"], "status": "missing", "created": False,
-                                          "written": 0, "total": len(item["outline"]), "ownerName": None, "updatedAt": None}
+                                          "written": 0, "total": len(item["outline"]), "ownerName": None, "updatedAt": None,
+                                          "baselineSeq": None, "upstreamBaselines": [], "upstreamChanged": False}
         linked = [key_of[u["documentId"]] for u in node.get("upstreamDocuments", []) if u["documentId"] in key_of]
         nodes.append({**node, "key": item["key"], "stage": item["stage"],
                       "upstream": linked if node.get("upstreamDocuments") else list(item["upstream"]),
@@ -473,3 +480,86 @@ def put_document_upstreams(request: Request, document_id: str, body: DocumentUps
                             VALUES (%s,%s,'manual',%s,%s)""", [str(did), value, rev, str(principal.user_id)])
         conn.commit()
         return {"data": {"upstreams": document_upstreams(conn, did)}, "requestId": request.state.request_id}
+
+
+# ---------------------------------------------------------------- 上游有新基线（按项目基线判断，30 §3.1、§3.5）
+
+def baseline_entries(conn, document_id) -> list[dict]:
+    """文档进入过的项目基线，按基线号升序：pbSeq、文档版本号 versionSeq、版本对应的正文 revision。"""
+    rows = conn.execute("""SELECT pb.seq AS pb_seq, pb.created_at, v.seq AS v_seq, v.revision
+                           FROM project_baseline_items i JOIN project_baselines pb ON pb.id=i.project_baseline_id
+                           JOIN document_baselines v ON v.id=i.document_baseline_id
+                           WHERE i.document_id=%s ORDER BY pb.seq""", [str(document_id)]).fetchall()
+    return [{"pbSeq": r["pb_seq"], "versionSeq": r["v_seq"], "revision": r["revision"]} for r in rows]
+
+
+def upstream_baseline_status(conn, document_id) -> list[dict]:
+    """每个上游：最近基线号、下游核对所依据的基线号、是否有新基线、对比用的文档版本号。
+
+    下游所依据的基线 = 已“标记为已核对”的基线号；否则取下游首次进入的项目基线；
+    下游从未进基线时取链接建立时已有的最新基线（没有则为 0）。
+    上游在此之后进入了更新的项目基线、且正文版本不同，即“有新基线”。基线不冻结，也不修改下游内容（Q-4、Q-5）。
+    """
+    did = str(document_id)
+    links = conn.execute("""SELECT u.upstream_document_id, u.acked_baseline_seq, u.created_at, d.name, d.project_id
+                            FROM document_upstreams u JOIN documents d ON d.id=u.upstream_document_id
+                            WHERE u.document_id=%s ORDER BY d.created_at""", [did]).fetchall()
+    own = baseline_entries(conn, did)
+    out = []
+    for link in links:
+        uid = str(link["upstream_document_id"])
+        entries = baseline_entries(conn, uid)
+        if link["acked_baseline_seq"] is not None:
+            ref = int(link["acked_baseline_seq"])
+        elif own:
+            ref = own[0]["pbSeq"]
+        else:
+            row = conn.execute("SELECT max(seq) AS n FROM project_baselines WHERE project_id=%s AND created_at<=%s",
+                               [str(link["project_id"]), link["created_at"]]).fetchone()
+            ref = int(row["n"] or 0)
+        latest = entries[-1] if entries else None
+        based = next((e for e in reversed(entries) if e["pbSeq"] <= ref), None)
+        new = bool(latest and latest["pbSeq"] > ref and (based is None or based["revision"] != latest["revision"]))
+        out.append({"documentId": uid, "name": link["name"],
+                    "latestBaselineSeq": latest["pbSeq"] if latest else None,
+                    "baseBaselineSeq": based["pbSeq"] if based else (ref or None),
+                    "newBaseline": new, "acked": link["acked_baseline_seq"],
+                    "fromVersionSeq": based["versionSeq"] if based else None,
+                    "toVersionSeq": latest["versionSeq"] if latest else None})
+    return out
+
+
+@router.get("/documents/{document_id}/upstream-notices")
+def get_upstream_notices(request: Request, document_id: str) -> dict:
+    """工作台提示条（UpstreamNotice）数据：只列出有新基线的上游。"""
+    from app.document_access import load_document
+    principal = document_principal(request)
+    did = UUID(_uid(document_id, "文档不存在或你无权访问。"))
+    with connect() as conn:
+        doc = load_document(conn, did, principal.user_id, is_admin(principal))
+        can_ack = not doc.archived and (doc.admin or doc.project_role in ("owner", "editor"))
+        items = [s for s in upstream_baseline_status(conn, did) if s["newBaseline"]]
+    return {"data": {"notices": items, "canAck": can_ack, "projectId": str(doc.project_id)}, "requestId": request.state.request_id}
+
+
+@router.post("/documents/{document_id}/upstreams/{upstream_id}:ack")
+def ack_upstream(request: Request, document_id: str, upstream_id: str) -> dict:
+    """标记为已核对：下游此后以上游当前最新基线为依据（不强制，Q-5）。"""
+    from app.document_access import ensure_project_writable, load_document
+    principal = document_principal(request)
+    did = UUID(_uid(document_id, "文档不存在或你无权访问。"))
+    uid = _uid(upstream_id, "上游文档不存在。")
+    with connect() as conn:
+        doc = load_document(conn, did, principal.user_id, is_admin(principal))
+        if not (doc.admin or doc.project_role in ("owner", "editor")):
+            raise AppError(403, "FORBIDDEN", "只读成员不能标记核对。")
+        ensure_project_writable(conn, doc.project_id)
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM document_upstreams WHERE document_id=%s AND upstream_document_id=%s", [str(did), uid]).fetchone() is None:
+            raise AppError(404, "NOT_FOUND", "这份文档没有这个上游。")
+        entries = baseline_entries(conn, uid)
+        seq = entries[-1]["pbSeq"] if entries else 0
+        conn.execute("UPDATE document_upstreams SET acked_baseline_seq=%s WHERE document_id=%s AND upstream_document_id=%s", [seq, str(did), uid])
+        conn.commit()
+        status = next(s for s in upstream_baseline_status(conn, did) if s["documentId"] == uid)
+    return {"data": status, "requestId": request.state.request_id}

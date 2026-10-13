@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from tests.migration_chain import files_from
+from tests.migration_chain import files_from, rollback_newer_than
 
 
 def test_rollback_120(tmp_path, monkeypatch, capsys):
@@ -19,6 +19,7 @@ def test_rollback_120(tmp_path, monkeypatch, capsys):
         with sqlite3.connect(path) as connection:
             connection.execute("pragma foreign_keys=off")
             connection.execute("insert into project_tasks(id,project_id,title) values ('t','p','任务')")
+        rollback_newer_than(path, 120)
         assert rollback(path, apply=False) == 0
         assert rollback(path, apply=True) == 3
         assert rollback(path, apply=True, force=True) == 0
@@ -27,6 +28,6 @@ def test_rollback_120(tmp_path, monkeypatch, capsys):
         assert not names & set(TABLES)
         assert list(tmp_path.glob("app.db.project_tasks-120-*.csv"))
         assert rollback(path, apply=True) == 0 and "不需要回滚" in capsys.readouterr().out
-        assert migrate() == files_from(120)[:1]  # 只重建 120
+        assert migrate() == files_from(120)  # 重建 120 及之后被回滚的迁移
     finally:
         config.get_settings.cache_clear()
