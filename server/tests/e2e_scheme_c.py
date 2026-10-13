@@ -1684,6 +1684,20 @@ def merged_revert_round(ctx: Run, page, concurrent: bool) -> dict:
         ctx.zhang_edit(doc_id, "本条应对被测试软件的设计、操作或测试提供改进建议", "本条应对被测试软件的设计、操作或测试提供改进建议【张工改】")
     cell = page.locator(".paper-content td", has_text="第一轮回归测试").first
     cell.scroll_into_view_if_needed()
+    if cell.get_attribute("data-word-protected") == "1":
+        # 合并 codex/document-writing-fixes：原稿预览已把合并单元格渲染为 rowspan/colspan 并设为只读保护，
+        # 不再能输入后等服务器 422。改为断言：合并格不可编辑，别处修改照常保存，表格保持原样。
+        assert cell.get_attribute("contenteditable") == "false", "合并单元格应为只读保护"
+        page.keyboard.press("Control+s")
+        base.wait_saved(page, 60000)
+        expect(page.get_by_test_id("save-blocked")).to_have_count(0)
+        server = ctx.server(doc_id)["markdownContent"]
+        assert other_mark in server, "别处的修改没进正文"
+        assert str_table(server) == str_table(original), "这张表被改动了"
+        if concurrent:
+            assert caption_mark in server and "【张工改】" in server, "表题的修改或张工的修改丢了"
+        base.shot(page, f"C2-合并单元格只读-{tag}")
+        return {"tag": tag, "protected": True, "statuses": [row["status"] for row in sent]}
     cell.click()
     page.keyboard.press("End")
     page.keyboard.type("李工填5")
