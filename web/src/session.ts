@@ -96,6 +96,10 @@ export function endSession(): Promise<void> {
       .then(() => {
         signedOut = true;
         current.value = null;
+        // 27 复验 N-1：A07 只读块暂存是本人的输入，退出登录时清掉（换账号不可见）
+        try {
+          for (const key of Object.keys(window.localStorage)) if (key.startsWith("docwb.a07.stash.")) window.localStorage.removeItem(key);
+        } catch { /* 无本机存储 */ }
         // 换账号后不应短暂显示上一位用户看过的项目名（09 审查 S7）。
         projectCrumb.value = null;
         objectCrumb.value = null;

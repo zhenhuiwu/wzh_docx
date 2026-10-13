@@ -287,12 +287,47 @@ def record_commit(connection, document_id: UUID, *, base_revision: int, markdown
         else:
             prefix, blocks = split(markdown)
             if assemble(prefix, blocks) == markdown:
+                from app import document_assignments as da
+                # A07：没有任何分配、操作人也不受限时不做检查（大文档写锁内不多读一遍对象）
+                limited = actor is not None and da.restricted(*da.actor_scope(connection, document_id, actor))
+                guard = limited or \
+                    connection.execute("SELECT 1 FROM document_object_assignments WHERE document_id=%s LIMIT 1",
+                                       (str(document_id),)).fetchone() is not None
+                before = da.nodes_of(connection, document_id) if guard or identities is not None else []
+                if identities is not None:
+                    # A07 §4.1：不可信的 blockIds 逐个核对，不属于本文档 / 类别不符 / 重复的当 null
+                    if len(identities) == len(blocks):
+                        identities = da.sanitize_identities({n.id: n.kind for n in before}, [b.kind for b in blocks],
+                                                            [None if value is None else str(value) for value in identities])
+                        if moved is None:
+                            moved = da._moved([n.id for n in before], [value for value in identities if value])
+                    else:
+                        identities = None
+                if identities is not None and guard and not limited and \
+                        da.identities_drop_assignments(connection, document_id, before, blocks, identities):
+                    # 27 M-1：负责人/管理员的块标识会让有分配的对象“消失”而正文仍在（客户端配错）→ 不信这些标识，改走服务端匹配
+                    identities, moved = None, None
                 changed = _sync(connection, document_id, blocks, revision, actor, change_id, identities, moved)
+                # A07 硬限制检查点（17 §4.5.2）：同一写事务内重读分配，越权整体回滚
+                if guard:
+                    try:
+                        da.enforce(connection, document_id, actor, before, revision)
+                    except AppError as error:
+                        if error.code == "SECTION_NOT_ASSIGNED" and actor is not None:
+                            # 28 L-1 / 27 M-3：所有写入路径被拒都留存这次提交（错误处理里另起事务）
+                            error.rejected = {"document_id": str(document_id), "actor": str(actor), "base": base_revision,
+                                              "markdown": markdown, "block_ids": identities}
+                        raise
         if changed is not None:
             connection.execute(
                 "UPDATE documents SET objects_revision=%s, objects_prefix=COALESCE(%s, objects_prefix) WHERE id=%s",
                 (revision, prefix, document_id),
             )
+    if changed is None and markdown is not None and actor is not None:
+        from app import document_assignments as da
+        if da.restricted(*da.actor_scope(connection, document_id, actor)):
+            # 对象模型落后、无法校验分工：对编写人员 fail-closed（17 §4.5.2）
+            raise AppError(409, "ASSIGNMENT_CHECK_UNAVAILABLE", "暂时无法核对分工，请刷新后再保存。你的内容已保留在本机。")
     connection.execute("UPDATE documents SET updated_by=%s WHERE id=%s", (actor, document_id))
     connection.execute("UPDATE document_versions SET created_by=%s, changed_objects=%s WHERE document_id=%s AND revision=%s",
                        (actor, changed, document_id, revision))
@@ -365,6 +400,9 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
                              "permissions": permissions},
                     "requestId": request.state.request_id}
         rows = live_objects(conn, did)
+        from app.assignments_api import object_flags, permissions_extra
+        flags, assignments_revision, _mode = object_flags(conn, document, principal.user_id)
+        permissions = {**permissions, **permissions_extra(conn, document, principal.user_id)}
         names = {str(row["id"]): row["name"] for row in conn.execute(
             """SELECT DISTINCT u.id, u.name FROM document_objects o JOIN users u ON u.id = o.updated_by
                WHERE o.document_id=%s""", (did,)).fetchall()}
@@ -374,7 +412,8 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
             if sinceRevision is None or int(row["updated_doc_revision"]) > sinceRevision:
                 item = {"id": str(row["id"]), "kind": row["kind"], "revision": int(row["revision"]),
                         "markdown": row["body"], "updatedBy": _person(row["updated_by"], names.get(str(row["updated_by"]))),
-                        "updatedAt": format_timestamp(row["updated_at"]), "deleted": False}
+                        "updatedAt": format_timestamp(row["updated_at"]), "deleted": False,
+                        **flags.get(str(row["id"]), {})}
                 if row["heading_level"] is not None:
                     item["headingLevel"] = int(row["heading_level"])
                 if sinceRevision is not None:
@@ -399,7 +438,7 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
                                 "location": json.loads(row["location_json"]) if row["location_json"] else None})
         changed_by = _changed_by(conn, did, sinceRevision if sinceRevision is not None else revision, principal.user_id)
         return {"data": {"documentRevision": revision, "objectModel": True, "objects": objects, "changedBy": changed_by,
-                         "permissions": permissions},
+                         "permissions": permissions, "assignmentsRevision": assignments_revision},
                 "requestId": request.state.request_id}
 
 

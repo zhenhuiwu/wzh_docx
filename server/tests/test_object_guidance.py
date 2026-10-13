@@ -32,9 +32,7 @@ def scoped(version_context, monkeypatch):
         connection.execute("UPDATE documents SET markdown_content=%s,format_template=%s WHERE id=%s",
                            (markdown, json.dumps(template, ensure_ascii=False), document["id"]))
         connection.commit()
-    response = client.get(f"/api/v1/documents/{document['id']}/assignments")
-    assert response.status_code == 200, response.text
-    items = response.json()["data"]["items"]
+    items = _objects(client, document["id"])
     monkeypatch.setattr(documents, "_check_word", lambda *_args, **_kwargs: None)
     return client, headers, document, markdown, items
 
@@ -195,6 +193,12 @@ def test_partial_template_target_missing_rejects_affected_selection(scoped):
     assert query(client, headers, doc["id"], headingIndex=1).status_code == 200
 
 
+def _objects(client, document_id):
+    """合并后对象列表取自 /objects（原分支的分工接口已统一到 A07）。"""
+    data = client.get(f"/api/v1/documents/{document_id}/objects").json()["data"]["objects"]
+    return [{"objectId": item["id"], "kind": item["kind"], "text": item["markdown"]} for item in data]
+
+
 def test_imported_template_targets_bind_to_exact_document_objects(version_context, source):
     from app.files import store_bytes
     client, headers, _doc, project, _ = version_context
@@ -214,7 +218,7 @@ def test_imported_template_targets_bind_to_exact_document_objects(version_contex
         assert response.status_code == 200, response.text
         doc = response.json()["data"]
         details = client.get(f"/api/v1/documents/{doc['id']}").json()["data"]
-        objects = client.get(f"/api/v1/documents/{doc['id']}/assignments").json()["data"]["items"]
+        objects = _objects(client, doc["id"])
         duplicates = [item for item in objects if item["text"] == "重复正文。"]
         bindings = details["formatTemplate"]["guidanceTargets"]
         assert bindings[guidance[0]["id"]] == [duplicates[1]["objectId"]]

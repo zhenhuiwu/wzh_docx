@@ -41,6 +41,7 @@ from app.template_import import clean_template
 from app.document_selection import selection_heading_index, SelectionError
 from app.document_commit import _version_markdown, commit_whole, open_counts, replay, request_hash, router as conflicts_router
 from app.document_objects import ensure_document_objects, record_commit, revision_conflict, router as objects_router
+from app.document_assignments import store_rejected
 from app.document_access import (DocumentRow, Need, check_project, document_principal, ensure_project_writable, load_document, member_role,
                                  permissions_of)
 from app.models import format_timestamp
@@ -160,6 +161,8 @@ class DocumentContentPatchBody(BaseModel):
     # 增量审查 M1：显式基准正文（仅 allowMerge）。编辑区停在旧正文、又接着改了已保存过的段落时，客户端用
     # “与上次保存对应的编辑区文字”作基准，已保存过的内容就不会被当成对方的修改；expectedRevision 仍是客户端已知的最新修订。
     baseMarkdown: str | None = Field(default=None, max_length=MAX_CONTENT_CHARS)
+    # A07 §4.1：与 markdownContent 拆出的顶层块一一对应的对象 ID（新块 null）；编写人员在 enforced 文档上必填
+    blockIds: list[str | None] | None = Field(default=None, max_length=20000)
 
 
 class DocumentExportBody(BaseModel):
@@ -218,6 +221,7 @@ class SectionDraftBody(BaseModel):
     instruction: str = Field(default="", max_length=2000)
     scope: Literal["section", "selection", "document"] = "section"
     selection: DocumentSelectionBody | None = None
+    selectionBlockIds: list[str] | None = Field(default=None, max_length=5000)
     # Spec 30 §4.7: block-ID whitelist of the section; operations outside it are rejected.
     blockIds: list[str] | None = Field(default=None, max_length=500)
 
@@ -307,8 +311,7 @@ _AI_KINDS = frozenset({"selection", "ai_section", "ai_document", "diagram"})
 def _save_markdown(connection, document_id: UUID, markdown: str, expected_revision: int, *,
                    format_template: dict | None = None, outline: list | None = None,
                    kind: str = "edit", restored_from_revision: int | None = None, **commit) -> UUID:
-    from app.document_assignments import check_content_write
-    check_content_write(connection, document_id, markdown, identities=commit.get("identities"), moved=commit.get("moved"))
+    # 合并说明：正文的分工检查由 A07 在 record_commit / _sync 内统一执行（document_assignments.enforce）。
     if kind == "restore":
         from app.document_assignments import require_scope_write
         from app.document_objects import current_actor
@@ -428,13 +431,12 @@ def _writing_skill(row) -> dict | None:
 
 @router.patch("/documents/{document_id}/writing-skill")
 def set_document_skill(request: Request, document_id: str, body: DocumentSkillBody) -> dict:
-    from app.document_assignments import require_scope_write
     session = document_principal(request)
     did = _uuid(document_id, "documentId")
     with connect() as conn:
         with conn.transaction(immediate=True):
             row = _document_row(conn, did, session.user_id, _admin(session.roles), "edit")
-            require_scope_write(conn, did, session.user_id)
+            # 合并说明：分工限制由下方 A07 检查（只在设置确有变化时拒绝，details.reason=assignment）
             if row[12] != body.expectedRevision:
                 raise revision_conflict(conn, did, "文档已更新，请关闭设置并刷新后重试。")
             current = _writing_skill(row) or {"mode": "auto", "documentInstructions": ""}
@@ -456,6 +458,11 @@ def set_document_skill(request: Request, document_id: str, body: DocumentSkillBo
                 snapshot = {"mode": body.mode}
             snapshot["documentInstructions"] = body.documentInstructions.strip()
             if snapshot != current:
+                # 27 复验 N-3 / 03 Q-5（待用户确认）：按分工编辑的文档上，整篇的编写规范与写作要求只有项目负责人和管理员能改
+                from app.document_assignments import actor_scope, restricted
+                if restricted(*actor_scope(conn, did, session.user_id)):
+                    raise AppError(403, "FORBIDDEN", "按分工编辑的文档，编写规范和整篇写作要求只有项目负责人可以修改。",
+                                   details={"reason": "assignment"})
                 ensure_document_objects(conn, did)
                 record_current_version(conn, did, expected_revision=row[12])
                 template = {**row[6], "writingSkill": snapshot}
@@ -708,13 +715,13 @@ def create_document(
             """
             INSERT INTO documents
             (id, project_id, name, source_type, template_document_id, original_docx_file_id,
-             format_template, markdown_content, outline, status, owner_id, revision, template_version_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0, %s)
+             format_template, markdown_content, outline, status, owner_id, revision, template_version_id, assignment_mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'draft', %s, 0, %s, %s)
             """,
             [
                 doc_id, pid, name, body.sourceType, template_doc_id, original_file_id,
                 json.dumps(format_template), markdown_content, json.dumps(outline),
-                session.user_id, template_version_id
+                session.user_id, template_version_id, NEW_DOCUMENT_MODE
             ]
         )
         if target_paths:
@@ -728,6 +735,11 @@ def create_document(
             format_template["guidanceTargets"] = targets
             conn.execute("UPDATE documents SET format_template=%s WHERE id=%s", (json.dumps(format_template), doc_id))
         record_current_version(conn, doc_id, expected_revision=0, kind="created")
+        # A07 U-16 / §10.4：编写人员新建的文档整篇默认归创建者（@document）；负责人、管理员新建的不分配
+        if not admin and member_role(conn, pid, session.user_id) == "editor":
+            conn.execute(
+                """INSERT INTO document_object_assignments (document_id, object_id, assignee_id, source, assigned_by, assigned_at)
+                   VALUES (%s, '@document', %s, 'creator', %s, now())""", [doc_id, session.user_id, session.user_id])
         conn.commit()
 
         # 返回创建的文档
@@ -811,7 +823,7 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
                 "templateDocumentName": row[15],
                 "templateName": None if group is None else group[0],
                 "template": template,
-                "permissions": permissions_of(row.project_role, row.admin, row.archived),
+                "permissions": _permissions_a07(conn, row, session.user_id),
             },
             "requestId": request.state.request_id,
         }
@@ -839,38 +851,80 @@ def update_document_content(
     with connect() as conn:
         # 检查文档和版本
         row = _document_row(conn, did, session.user_id, admin, "edit")
-        if body.allowMerge:
-            return _merge_content(request, conn, session, did, row, body)
-        rhash = request_hash({"base": body.expectedRevision, "markdown": body.markdownContent, "kind": "strict",
-                              "memory": body.memory.model_dump() if body.memory else None,
-                              "retract": body.retractMemoryRevision})
-        if body.clientSaveKey and replay(conn, did, session.user_id, body.clientSaveKey, rhash) is not None:
-            return _content_result(request, _document_row(conn, did, session.user_id, admin))
-
-        if row[12] != body.expectedRevision:
-            raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
-
-        if body.memory is not None and _writing_skill(row) is not None:
-            raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
-
-        _check_word(conn, row, body.markdownContent)
-        _save_markdown(conn, did, body.markdownContent, row[12],
-                       kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit",
-                       client_save_key=body.clientSaveKey, request_hash=rhash if body.clientSaveKey else None)
-        if body.memory:
-            record_memory(conn, did, body.memory.instruction, scope=body.memory.scope,
-                          target=body.memory.target, revision=row[12] + 1)
-        if body.retractMemoryRevision is not None:
-            retract_memory(conn, did, body.retractMemoryRevision)
-        conn.commit()
-
-        # 返回更新后的文档
-        row = _document_row(conn, did, session.user_id, admin)
-
-        return _content_result(request, row)
+        block_ids = _checked_block_ids(conn, did, session.user_id, body)
+        try:
+            return _update_content(request, conn, session, did, row, body, block_ids)
+        except AppError as error:
+            if error.code == "SECTION_NOT_ASSIGNED":
+                store_rejected(conn, did, session.user_id, body.expectedRevision, body.markdownContent, block_ids, error)
+            raise
 
 
-def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody) -> dict[str, object]:
+# A07 U-14 / H-9：新建文档默认按分工编辑（已有文档迁移时为 open）
+NEW_DOCUMENT_MODE = "enforced"
+
+
+def _permissions_a07(conn, row, actor: UUID) -> dict:
+    """详情 permissions：A05 字段 + A07 assignmentMode / canAssign / editableHeadings / projectOwners（17 §4.6）。"""
+    from app.assignments_api import permissions_extra
+    return {**permissions_of(row.project_role, row.admin, row.archived), **permissions_extra(conn, row, actor)}
+
+
+def _checked_block_ids(conn, did: UUID, actor: UUID, body: DocumentContentPatchBody) -> list[str | None] | None:
+    """A07 §4.5.2 / §4.5.6：编写人员在 enforced 文档上整篇保存必须带 blockIds，且块数一致。"""
+    from app.document_assignments import actor_scope, restricted
+    from app.markdown_blocks import split
+
+    limited = restricted(*actor_scope(conn, did, actor))
+    if body.blockIds is None:
+        if limited:
+            raise AppError(422, "BLOCK_IDS_REQUIRED", "页面版本过旧，请刷新后再保存。你的内容已保留在本机。")
+        return None
+    if len(body.blockIds) != len(split(body.markdownContent)[1]):
+        if limited:
+            raise AppError(422, "VALIDATION_FAILED", "块标识与正文不一致，请刷新后再保存。",
+                           field_errors=[{"field": "blockIds", "message": "块标识的数量与正文的块数不一致。"}])
+        return None  # 负责人、管理员：忽略不一致的块标识，走服务端兜底配对
+    return list(body.blockIds)
+
+
+def _update_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody,
+                    block_ids: list[str | None] | None) -> dict[str, object]:
+    admin = _admin(session.roles)
+    if body.allowMerge:
+        return _merge_content(request, conn, session, did, row, body, block_ids)
+    rhash = request_hash({"base": body.expectedRevision, "markdown": body.markdownContent, "kind": "strict",
+                          "memory": body.memory.model_dump() if body.memory else None,
+                          "retract": body.retractMemoryRevision})
+    if body.clientSaveKey and replay(conn, did, session.user_id, body.clientSaveKey, rhash) is not None:
+        return _content_result(request, _document_row(conn, did, session.user_id, admin))
+
+    if row[12] != body.expectedRevision:
+        raise revision_conflict(conn, did, "版本冲突，请刷新后重试。")
+
+    if body.memory is not None and _writing_skill(row) is not None:
+        raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
+
+    _check_word(conn, row, body.markdownContent)
+    _save_markdown(conn, did, body.markdownContent, row[12],
+                   kind="undo" if body.retractMemoryRevision is not None else "ai_selection" if body.memory else "edit",
+                   client_save_key=body.clientSaveKey, request_hash=rhash if body.clientSaveKey else None,
+                   identities=block_ids)
+    if body.memory:
+        record_memory(conn, did, body.memory.instruction, scope=body.memory.scope,
+                      target=body.memory.target, revision=row[12] + 1)
+    if body.retractMemoryRevision is not None:
+        retract_memory(conn, did, body.retractMemoryRevision)
+    conn.commit()
+
+    # 返回更新后的文档
+    row = _document_row(conn, did, session.user_id, admin)
+
+    return _content_result(request, row)
+
+
+def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody,
+                   block_ids: list[str | None] | None = None) -> dict[str, object]:
     """allowMerge：以 versions[expectedRevision] 为基线块级三方合并（01 §4.3、§5.2、§5.4）。"""
     if body.memory is not None and _writing_skill(row) is not None:
         raise AppError(422, "VALIDATION_FAILED", "绑定编写规范后，请通过章节、选区或全文采纳接口保存 AI 草稿。")
@@ -883,7 +937,7 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
 
     data = commit_whole(
         conn, document_id=did, actor=session.user_id, base_revision=body.expectedRevision, mine_md=body.markdownContent,
-        base_markdown=body.baseMarkdown,
+        base_markdown=body.baseMarkdown, block_ids=block_ids,
         kind="ai_selection" if memory else "edit", client_save_key=body.clientSaveKey,
         check_word=lambda markdown: _check_word(conn, _document_row(conn, did, session.user_id, admin, "edit"), markdown),
         extra={"memory": memory.model_dump() if memory else None}, after_write=after_write)
@@ -1279,7 +1333,11 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         body.headingIndex = actual_heading
         # Reject protected Word locations before spending a model call.
         with connect() as connection:
-            _check_word(connection, row, _replace_selection(row[7], body.selection, body.selection.text + "（编写位置检查）"))
+            probe = _replace_selection(row[7], body.selection, body.selection.text + "（编写位置检查）")
+            _check_word(connection, row, probe)
+            # 27 复验 M-3：选中文字的 AI 也在调用模型前按所选块的归属预检
+            from app.document_assignments import selection_precheck
+            selection_precheck(connection, did, session.user_id, probe, body.selectionBlockIds, body.selection.text)
     if whole_document and (body.headingIndex is not None or body.selectedText is not None):
         raise AppError(422, "VALIDATION_FAILED", "全文编辑不能同时指定章节或选中文字。")
     if not whole_document and body.headingIndex is None and not (body.selectedText or "").strip():
@@ -1294,6 +1352,11 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         existing = body.selectedText
     if len(existing) > 20000:
         raise AppError(422, "VALIDATION_FAILED", "本节正文超过 20000 字，请选中需要修改的部分。")
+    with connect() as connection:  # A07：调模型之前先查分工范围（不扣额度）
+        from app.document_assignments import ai_precheck
+        # 28 I-4：预检与写作用同一个标题（写作按正则取第 headingIndex 个标题，预检按它的文字核对对象）
+        ai_precheck(connection, did, session.user_id, body.headingIndex, whole_document,
+                    heading_text=str(heading.get("text", "")) if body.headingIndex is not None else None)
     settings = get_settings()
     require_ai("writing", settings)
     base_url, model = settings.ai_base_url.strip().rstrip("/"), settings.ai_model.strip()
@@ -1307,10 +1370,16 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         target_ids = selection_ids(row[7], body.selection.model_dump(), objects) if selected_only else [
             item["id"] for item in objects if item["kind"] != "heading" and
             (whole_document or item["headingIndex"] == (body.headingIndex if body.headingIndex is not None else -1))]
+        if body.blockIds is not None and not selected_only and not whole_document:
+            # Spec 30 §4.2: the writing scope is the blocks of this section the user may change.
+            target_ids = [item for item in target_ids if item in set(body.blockIds)]
+            if not target_ids:
+                raise AppError(409, "AI_SCOPE_VIOLATION", "写作范围内没有你能修改的正文，请刷新后重试。")
         if target_ids:
             require_scope_write(connection, did, session.user_id, target_ids)
-        else:
+        elif whole_document:
             require_manage(connection, did, session.user_id)
+        # 空章节：归属已由上面的 A07 ai_precheck 按标题链判断
         try:
             context = writing_context(row[6] or {}, row[7], objects, None if whole_document else [body.headingIndex if body.headingIndex is not None else -1])
             advice = effective_advice(row[6] or {}, row[7], body.headingIndex, objects, target_ids) if selected_only else None

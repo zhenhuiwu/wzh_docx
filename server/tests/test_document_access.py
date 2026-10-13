@@ -136,7 +136,9 @@ def test_permissions_field_matches_real_calls(members, document_context, role): 
     assert {key: permissions[key] for key in expected} == expected
     assert permissions["projectRole"] == (None if role == "admin" else role)
     listing = client.get(f"/api/v1/projects/{project}/documents").json()["data"]
-    assert listing["items"][0]["permissions"] == permissions == listing["permissions"]
+    # A07：详情的 permissions 另带分工字段（assignmentMode 等，17 §10.6），列表不带；共有字段必须一致
+    legacy = listing["permissions"]
+    assert listing["items"][0]["permissions"] == legacy == {key: permissions[key] for key in legacy}
     saved = client.patch(f"/api/v1/documents/{document['id']}/content",
                          json={"expectedRevision": detail["revision"], "markdownContent": detail["markdownContent"] + "\n\n补充。"},
                          headers=headers)

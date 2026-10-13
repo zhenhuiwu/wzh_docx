@@ -1,5 +1,9 @@
-import { apiRequest } from "./client";
+import { getAllObjects, getAssignments } from "./assignments";
 
+/**
+ * 合并说明：本分支原有一套独立分工接口（同号迁移 118），合并 phase2 时统一到 A07。
+ * 这里把 A07 的对象与生效负责人整理成“编写指导”面板使用的形状；分配负责人请用 A07 的分工面板。
+ */
 export interface DocumentAssignment {
   objectId: string;
   kind: string;
@@ -18,19 +22,28 @@ export interface DocumentAssignmentsState {
   members: Array<{ id: string; name: string }>;
 }
 
-export async function getDocumentAssignments(documentId: string) {
-  const body = await apiRequest<{ data: DocumentAssignmentsState }>(`/documents/${documentId}/assignments`);
-  if (!body?.data) throw new Error("编写分工响应不完整。");
-  return body.data;
+export async function getDocumentAssignments(documentId: string): Promise<DocumentAssignmentsState> {
+  const [objects, view] = await Promise.all([getAllObjects(documentId), getAssignments(documentId)]);
+  const resolved = new Map((view.resolved ?? []).map(item => [item.objectId, item]));
+  return {
+    revision: objects.documentRevision,
+    assignmentsRevision: view.assignmentsRevision,
+    enabled: view.assignmentMode === "enforced",
+    canManage: false,
+    members: [],
+    items: objects.objects.map(item => {
+      const owner = resolved.get(item.id);
+      return { objectId: item.id, kind: item.kind, text: item.markdown, assigneeId: owner?.owners[0]?.id ?? null,
+        assigneeName: owner?.owners.map(person => person.name).join("、") || null, canEdit: owner ? owner.editable : item.editable !== false };
+    }),
+  };
 }
 
-export async function updateDocumentAssignments(documentId: string, input: {
+export async function updateDocumentAssignments(_documentId: string, _input: {
   expectedRevision: number;
   expectedAssignmentsRevision: number;
   enabled: boolean;
   items: Array<{ objectId: string; assigneeId: string | null }>;
-}) {
-  const body = await apiRequest<{ data: DocumentAssignmentsState }>(`/documents/${documentId}/assignments`, { method: "PUT", json: input });
-  if (!body?.data) throw new Error("编写分工保存响应不完整。");
-  return body.data;
+}): Promise<DocumentAssignmentsState> {
+  throw new Error("请在“分工”面板中分配负责人。");
 }
