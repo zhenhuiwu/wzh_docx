@@ -304,3 +304,30 @@ def test_framework_and_task_split_chapters_are_readonly(document_context):  # no
     task = r.json()["data"]
     assert client.delete(f"/api/v1/tasks/{task['id']}?expectedRevision=0", headers=headers).status_code == 204
     assert "需求细化" not in doc(plan["id"])["markdownContent"] and "尚无任务" in doc(plan["id"])["markdownContent"]
+
+
+def test_locked_chapters_endpoint_matches_save_guard(document_context):  # noqa: F811
+    """The editor lock flag lists exactly the chapters the save checkpoint rejects, with heading + body object IDs."""
+    client, headers, project, *_ = document_context
+    tds = _seed_project(document_context)
+    srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
+    plan = _create(client, headers, project, "软件开发计划", tds["dev-plan"])
+    free = client.post(f"/api/v1/projects/{project}/documents", headers=headers,
+                       json={"name": "自建笔记", "markdownContent": "# 运行环境\n\n随便写。\n"})
+
+    def locked(did):
+        r = client.get(f"/api/v1/documents/{did}/locked-chapters", headers=headers)
+        assert r.status_code == 200, r.text
+        return r.json()["data"]["chapters"]
+
+    srs_locked = locked(srs["id"])
+    runtime = next(c for c in srs_locked if c["title"].endswith("运行环境"))
+    assert runtime["kind"] == "framework" and runtime["headingObjectId"]
+    assert not any(c["title"].endswith("功能需求") for c in srs_locked)
+    assert all(c["kind"] != "split" for c in srs_locked)
+    split = next(c for c in locked(plan["id"]) if c["title"].endswith("任务分解"))
+    assert split["kind"] == "split" and split["headingObjectId"] and split["objectIds"]
+    chapters = client.get(f"/api/v1/projects/{project}/documents/{srs['id']}/chapters").json()["data"]["chapters"]
+    assert next(c for c in chapters if c["title"].endswith("运行环境"))["objectId"] == runtime["headingObjectId"]
+    if free.status_code in (200, 201):  # 自建文档的同名章节不受限
+        assert locked(free.json()["data"]["id"]) == []

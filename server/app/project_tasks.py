@@ -582,3 +582,48 @@ def mark_public_seen(request: Request, document_id: str, block_id: str) -> dict:
                             ON CONFLICT(document_id,public_block_id) DO UPDATE SET seen_revision=excluded.seen_revision""",
                          [did, bid, row["revision"]])
     return {"data": {"seenRevision": row["revision"]}, "requestId": request.state.request_id}
+
+
+def locked_chapters(conn, document_id) -> list[dict]:
+    """Chapters guard_locked_chapters rejects edits to, with the object IDs of the heading and its
+    direct body (same rule: built-in chain document, heading key in the locked set, body up to the next heading)."""
+    keys = _locked_sections(conn, document_id)
+    if not keys:
+        return []
+    from app.document_objects import live_objects
+    from app.markdown_blocks import split
+    row = conn.execute("SELECT markdown_content FROM documents WHERE id=%s", [str(document_id)]).fetchone()
+    _prefix, blocks = split((row["markdown_content"] if row else "") or "")
+    objects = live_objects(conn, document_id)
+    mapped = len(objects) == len(blocks) and all(obj["body"] == block.body for obj, block in zip(objects, blocks))
+    out: list[dict] = []
+    current = None
+    seen: set[str] = set()
+    for index, block in enumerate(blocks):
+        if block.kind == "heading":
+            key = chapter_key(heading_text(block.body))
+            current = None
+            if key in keys and key not in seen:
+                seen.add(key)
+                current = {"key": key, "title": heading_text(block.body), "kind": "split" if key == SPLIT_KEY else "framework",
+                           "headingObjectId": str(objects[index]["id"]) if mapped else None, "objectIds": []}
+                out.append(current)
+        elif current is not None and mapped:
+            current["objectIds"].append(str(objects[index]["id"]))
+    return out
+
+
+@router.get("/documents/{document_id}/locked-chapters")
+def get_locked_chapters(request: Request, document_id: str) -> dict:
+    """Read-only chapters of this document (public framework references, the plan's 任务分解) for the editor lock."""
+    principal = document_principal(request)
+    try:
+        did = UUID(document_id)
+    except ValueError:
+        raise AppError(404, "NOT_FOUND", "文档不存在或你无权访问。") from None
+    with connect() as conn:
+        load_document(conn, did, principal.user_id, is_admin(principal))
+        from app.document_objects import ensure_document_objects
+        ensure_document_objects(conn, did)
+        conn.commit()
+        return {"data": {"chapters": locked_chapters(conn, did)}, "requestId": request.state.request_id}
