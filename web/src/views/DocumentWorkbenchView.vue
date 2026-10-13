@@ -50,6 +50,7 @@ import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, bodyBlockAt, chunkBlockById, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { fastPreviewStep } from "../fastPreviewPlan";
+import { atScrollEnd, viewHeadingAt } from "../viewHeading";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, patchObjectsKeepalive, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -892,7 +893,8 @@ function trackViewHeading() {
         found = index;
       }
     }
-    if (found === null && outline.value.length) found = 0;
+    // QA 复验 10：滚到文末显示最后一节（见 viewHeading.ts）
+    found = viewHeadingAt(found, outline.value.length, jumpedHeading, atScrollEnd(scroller.scrollTop, scroller.clientHeight, scroller.scrollHeight));
     if (found !== null && found !== viewHeading.value) viewHeading.value = found;
   });
 }
