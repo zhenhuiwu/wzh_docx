@@ -8,7 +8,8 @@ import { previewDocument, streamDocumentSection } from "../../api/documents";
 import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
-const props = defineProps<{ doc: MyWritingItem; userId: string }>();
+/** inSplit：并排视图里每列只用次级按钮，整页唯一的主按钮是工具栏上的“保存全部” */
+const props = defineProps<{ doc: MyWritingItem; userId: string; inSplit?: boolean }>();
 const emit = defineEmits<{ (event: "dirty", value: boolean): void; (event: "saved"): void; (event: "fragments", value: FragmentSummary[]): void }>();
 
 const phase = ref<"loading" | "ready" | "error">("loading");
@@ -123,7 +124,7 @@ const summaries = computed<FragmentSummary[]>(() => fragments.value.map((fragmen
   return { key: fragment.key, label: fragment.headingPath.at(-1) || "（文档开头）", status };
 }));
 watch(summaries, (value) => emit("fragments", value), { immediate: true });
-defineExpose({ dirty });
+defineExpose({ dirty, save });
 </script>
 
 <template>
@@ -132,7 +133,7 @@ defineExpose({ dirty });
       <span class="tag" :class="pill.tone" role="status">{{ pill.text }}</span>
       <span class="frag-count">{{ phase === "ready" ? `${fragments.length} 处片段` : "" }}</span>
       <router-link class="subtle sm" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">在文档中打开↗</router-link>
-      <button type="button" class="primary sm" :disabled="!dirty || state === 'saving' || phase !== 'ready'" @click="save">{{ state === "saving" ? "正在保存…" : "保存本文档" }}</button>
+      <button type="button" :class="inSplit ? 'ghost sm' : 'primary sm'" :disabled="!dirty || state === 'saving' || phase !== 'ready'" @click="save">{{ state === "saving" ? "正在保存…" : "保存本文档" }}</button>
     </div>
     <p v-if="stateText" class="notice" :class="state === 'failed' ? 'warning' : 'danger'" role="alert">{{ stateText }}
       <router-link v-if="state === 'conflict'" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去处理冲突</router-link>
@@ -151,7 +152,7 @@ defineExpose({ dirty });
       <form v-if="aiOpen === fragment.key" class="ai-form" @submit.prevent="runAi(fragment)">
         <input v-model="aiInstruction" class="control" :aria-label="`AI 编写要求：${fragment.headingPath.at(-1) ?? '片段'}`" placeholder="说明要怎么写，例如：补充接口鉴权要求" :disabled="aiBusy === fragment.key" maxlength="500" />
         <button v-if="aiBusy === fragment.key" type="button" class="ghost" @click="stopAi">停止</button>
-        <button v-else type="submit" class="primary sm" :disabled="!aiInstruction.trim()">生成</button>
+        <button v-else type="submit" :class="inSplit ? 'ghost sm' : 'primary sm'" :disabled="!aiInstruction.trim()">生成</button>
       </form>
       <p v-if="aiBusy === fragment.key" class="notice info" role="status">AI 正在编写本节…</p>
       <p v-else-if="aiNotice[fragment.key]" class="notice" :class="aiNotice[fragment.key].tone" role="status">{{ aiNotice[fragment.key].text }}</p>

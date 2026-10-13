@@ -32,6 +32,17 @@ const secondId = ref<string | null>(null);
 const dirtyDocs = ref<Record<string, boolean>>({});
 const editorDirty = computed(() => Object.values(dirtyDocs.value).some(Boolean));
 function setDirty(id: string, value: boolean) { dirtyDocs.value = { ...dirtyDocs.value, [id]: value }; }
+/** 并排视图：工具栏“保存全部”依次保存两列（每列各自报告冲突/失败） */
+const columnRefs: Array<{ save: () => Promise<void> } | null> = [null, null];
+function setColumnRef(column: number, el: unknown) { columnRefs[column] = (el as { save: () => Promise<void> } | null) ?? null; }
+const splitDirty = computed(() => shownDocs.value.some(doc => dirtyDocs.value[doc.id]));
+const savingAll = ref(false);
+async function saveAll() {
+  if (savingAll.value) return;
+  savingAll.value = true;
+  try { for (const column of [...columnRefs]) await column?.save(); }
+  finally { savingAll.value = false; }
+}
 const fragmentsByDoc = ref<Record<string, FragmentSummary[]>>({});
 function setFragments(id: string, value: FragmentSummary[]) { fragmentsByDoc.value = { ...fragmentsByDoc.value, [id]: value }; }
 const second = computed(() => editable.value.find((item) => item.id === secondId.value && item.id !== active.value?.id)
@@ -225,7 +236,8 @@ const summary = computed(() => {
                 <span class="tab-name" :title="`${doc.name}（${doc.project.name}）`">{{ doc.name }}<template v-if="duplicateNames.has(doc.name)"> · {{ doc.project.name }}</template></span><small>{{ doc.project.name }} · {{ doc.assignedBlockCount }} 处</small>
               </button>
             </div>
-            <span v-else class="split-hint">并排对照两份文档，各自保存。</span>
+            <span v-else class="split-hint">并排对照两份文档，可以各自保存，也可以一起保存。</span>
+            <button v-if="layout === 'split'" type="button" class="primary sm" data-testid="mw-save-all" :disabled="!splitDirty || savingAll" @click="saveAll">{{ savingAll ? "正在保存…" : "保存全部" }}</button>
             <div class="seg" role="group" aria-label="编写视图">
               <button type="button" :class="{ on: layout === 'tabs' }" :aria-pressed="layout === 'tabs'" @click="setLayout('tabs')">按文档</button>
               <button type="button" :class="{ on: layout === 'split' }" :aria-pressed="layout === 'split'" :disabled="editable.length < 2" :title="editable.length < 2 ? '至少要有两份分给你的文档' : ''" @click="setLayout('split')">并排</button>
@@ -242,7 +254,7 @@ const summary = computed(() => {
                   <option v-for="item in editable" :key="item.id" :value="item.id" :disabled="item.id === shownDocs[1 - column]?.id">{{ item.name }}（{{ item.project.name }}）</option>
                 </select>
               </label>
-              <MyDocumentFragments :doc="doc" :user-id="userId" @dirty="setDirty(doc.id, $event)" @fragments="setFragments(doc.id, $event)" @saved="load(false, true)" />
+              <MyDocumentFragments :ref="el => setColumnRef(column, el)" :doc="doc" :user-id="userId" in-split @dirty="setDirty(doc.id, $event)" @fragments="setFragments(doc.id, $event)" @saved="load(false, true)" />
             </section>
           </div>
         </div>
