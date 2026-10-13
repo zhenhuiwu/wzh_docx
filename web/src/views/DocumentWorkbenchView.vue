@@ -44,6 +44,8 @@ import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
+import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
+import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, contentBlockAt, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
@@ -293,6 +295,8 @@ function countText(ids: string[], headings: string[]) {
 const mineCountText = computed(() => assignInfo.value ? countText([...assignInfo.value.editable].filter(id => assignInfo.value!.order.includes(id)), assignInfo.value.headings) : "");
 const mineIntro = computed(() => assignRestricted.value && !mineIntroOff.value && Boolean(assignInfo.value?.editable.size) && !noAssignReadonly
   ? `你负责本文档的 ${mineCountText.value}，其他部分只读。` : "");
+/** Read-only chapters from the server (same rule as the CHAPTER_READONLY save guard). */
+const lockedChapters = ref<LockedChapter[]>([]);
 let ownershipPending: Promise<void> | null = null;
 function refreshOwnership(record = document.value): Promise<void> {
   const task = loadOwnership(record);
@@ -309,15 +313,18 @@ async function loadOwnership(record = document.value) {
   if (!record) return;
   const seq = ++ownershipSeq;
   try {
-    const [data, view] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null)]);
+    const [data, view, chapters] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null), getLockedChapters(record.id).catch(() => [] as LockedChapter[])]);
     if (document.value !== record || seq !== ownershipSeq) return;
     baselineObjects = data.objectModel ? data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown })) : [];
     // 27 复验 M-4：编辑区渲染所依据的那一版对象（ID 与编辑区 data-object-id 一致），“只保存我负责的部分”以它为底
     if (data.objectModel && data.documentRevision === record.revision) baseSnapshot = { revision: record.revision, objects: [...baselineObjects] };
     const locked = new Map<string, string>();
     const editableIds = new Set<string>();
+    lockedChapters.value = chapters;
+    const chapterLocks = chapterLockMap(chapters);
     for (const item of data.objects) {
-      if (item.editable === false) locked.set(item.id, ownerNames(item.owners));
+      if (chapterLocks.has(item.id)) locked.set(item.id, CHAPTER_LOCK_LABEL);
+      else if (item.editable === false) locked.set(item.id, ownerNames(item.owners));
       else editableIds.add(item.id);
     }
     const prev = assignInfo.value;
@@ -340,7 +347,7 @@ function blockIdsFor(content: string): Array<string | null> | undefined {
   return assignBlockIds(content, baselineObjects);
 }
 function lockText(id: string) {
-  return lockedText(assignInfo.value?.locked.get(id) || "", assignInfo.value?.projectOwner || "");
+  return chapterLockMap(lockedChapters.value).get(id) ?? lockedText(assignInfo.value?.locked.get(id) || "", assignInfo.value?.projectOwner || "");
 }
 /** 29 M-6：没有分给我的部分时整篇只读；分工变化时提示得到/失去的部分。 */
 function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<typeof assignInfo.value>) {
@@ -476,6 +483,7 @@ function applyLocks() {
     }
     if (mine.has(id)) node.setAttribute("data-mine", ""); else node.removeAttribute("data-mine");
   }
+  decorateChapterLocks(root, chapterHeadingIds(lockedChapters.value));
 }
 function showLockedHint(node: Element) {
   const rect = node.getBoundingClientRect();
@@ -3933,6 +3941,7 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       }
       const message = apiError.code === "SECTION_NOT_ASSIGNED"
         ? `这次修改没有保存：其中 ${total || 1} 处属于他人负责的部分。`
+        : apiError.code === "CHAPTER_READONLY" ? chapterReadonlyMessage(apiError.details, lockedChapters.value)
         : apiError.code === "BLOCK_IDS_REQUIRED" ? "页面版本过旧，请刷新页面后再保存。你的修改已保留在本机。" : `${apiError.message}你的修改已保留在本机。`;
       blocked.value = { message, content, code: apiError.code };
       void refreshOwnership();
