@@ -171,6 +171,27 @@ textarea {
   font: inherit;
 }
 
+/* 全局链接：主色、无下划线，不用浏览器默认蓝（41 验收）。悬停加深，键盘焦点用统一焦点环。 */
+a,
+a:visited {
+  color: var(--text-link);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--brand-700);
+}
+
+a:active {
+  color: var(--brand-800);
+}
+
+a:focus-visible {
+  outline: none;
+  border-radius: var(--radius-control);
+  box-shadow: var(--focus-shadow);
+}
+
 ::selection {
   background: var(--brand-100);
 }
