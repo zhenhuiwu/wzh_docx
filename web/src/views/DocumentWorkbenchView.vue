@@ -4927,7 +4927,7 @@ onUnmounted(() => {
           </template>
         </DocumentAssignments>
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
-          <section class="ai-preview ai-ghost" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
+          <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
               <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiPendingSuggestions.length ? `AI 建议 ${aiPendingSuggestions.length} 处待处理` : aiComplete && aiSuggestions.length === 0 && aiPreviewHtml === '' && aiScope === 'section' ? '本节无需修改' : aiComplete ? 'AI 草稿' : '生成未完成' }}<template v-if="!aiBusy && aiSuggestionDropped">，有 {{ aiSuggestionDropped }} 处超出范围，已忽略</template></span>
               <button v-if="aiBusy" type="button" class="ghost sm" @click="stopAi">停止</button>
@@ -5213,7 +5213,10 @@ onUnmounted(() => {
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
 .ai-preview-body:empty { display:none; }
-.paper-content.ai-scoping > :deep(:not(.ai-scope):not([data-ai-preview]):not([data-ai-lock="标题已固定"])) { opacity:0.45; pointer-events:none; }
+.paper-content :deep(.ai-out) { opacity:0.45; pointer-events:none; user-select:none; }
+.ai-preview.reviewing { position:fixed; left:50%; bottom:var(--space-6); z-index:20; transform:translateX(-50%); width:auto; max-width:calc(100vw - 2 * var(--space-7)); padding:0 var(--space-3); border-radius:var(--radius-sheet); border:var(--border); background:var(--sheet); box-shadow:var(--shadow-3); }
+.ai-preview.reviewing .ai-preview-tools { position:static; background:transparent; border-bottom:0; }
+.ai-preview.reviewing .ai-preview-status { color:var(--ink); }
 .paper-content :deep(.ai-scope), .paper-content.ai-scoping > :deep(.ai-suggestion) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
 .paper-content :deep(.ai-scope-label) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding:var(--space-2) var(--space-3) 0; color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); user-select:none; }
 .paper-content :deep([data-ai-lock])::after { content:"🔒" attr(data-ai-lock); margin-left:var(--space-2); color:var(--text-tertiary); font-family:var(--font); font-size:var(--text-xs); font-weight:normal; vertical-align:middle; }

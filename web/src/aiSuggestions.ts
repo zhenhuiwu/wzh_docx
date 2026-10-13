@@ -143,6 +143,10 @@ export function markScope(root: HTMLElement, headingIndex: number, denied: Set<s
     node.setAttribute("data-ai-lock", node === heading ? "标题已固定" : "");
   }
   for (const block of scope) block.classList.add("ai-scope");
+  // Everything outside the writing scope is faded and inert (spec 30 §4.2).
+  for (const node of [...root.children] as HTMLElement[]) {
+    if (node !== heading && !node.hasAttribute("data-ai-preview") && !node.classList.contains("ai-scope")) node.classList.add("ai-out");
+  }
   if (scope[0]) scope[0].classList.add("ai-scope-first");
   scope.at(-1)?.classList.add("ai-scope-last");
   const tag = document.createElement("div");
@@ -160,8 +164,8 @@ export function clearScope(root: HTMLElement): void {
   root.classList.remove("ai-scoping");
   root.querySelectorAll("[data-ai-scope-label]").forEach(node => node.remove());
   for (const node of root.querySelectorAll<HTMLElement>("[data-ai-lock]")) node.removeAttribute("data-ai-lock");
-  for (const node of root.querySelectorAll<HTMLElement>(".ai-scope")) {
-    node.classList.remove("ai-scope", "ai-scope-first", "ai-scope-last");
+  for (const node of root.querySelectorAll<HTMLElement>(".ai-scope, .ai-out")) {
+    node.classList.remove("ai-scope", "ai-scope-first", "ai-scope-last", "ai-out");
     if (!node.className) node.removeAttribute("class");
   }
 }
