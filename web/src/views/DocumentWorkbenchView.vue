@@ -4895,6 +4895,16 @@ function headingTopDelta(target: HTMLElement): number | null {
   if (!scroller) return null;
   return target.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + JUMP_TOP_GAP);
 }
+/** 40 R6-1：文末最后几节高度不足一屏时滚不到顶边——按需在文末补留白（只增不减，避免已滚到的位置跳动）。 */
+const tailRoom = ref(0);
+function ensureTailRoom(scroller: HTMLElement, delta: number) {
+  const short = scroller.scrollTop + delta - (scroller.scrollHeight - scroller.clientHeight);
+  if (short > 0) {
+    tailRoom.value += Math.ceil(short);
+    // 立刻生效，后面的 scrollTop 赋值不会被截断
+    scroller.style.setProperty("--tail-room", `${tailRoom.value}px`);
+  }
+}
 function scrollToHeading(index: number) {
   const target = chunks ? chunks.headingElement(index) : editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
   const scroller = desk.value;
@@ -4902,7 +4912,7 @@ function scrollToHeading(index: number) {
   if (!scroller) { target.scrollIntoView({ block: "start" }); return; }
   if (!chunkedEditor.value) {
     const delta = headingTopDelta(target);
-    if (delta !== null) scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" });
+    if (delta !== null) { ensureTailRoom(scroller, delta); scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" }); }
     return;
   }
   // 分段渲染时上方块的高度是估算值：先跳过去，等目标附近渲染出真实高度后再按顶边校正，直到位置稳定（最多 6 帧）
@@ -4910,6 +4920,7 @@ function scrollToHeading(index: number) {
   const settle = () => {
     const delta = headingTopDelta(target);
     if (delta === null) return;
+    ensureTailRoom(scroller, delta);
     const before = scroller.scrollTop;
     if (Math.abs(delta) >= 1) scroller.scrollTop = before + delta;
     // 已对齐，或到了文末滚不动了（scrollTop 不再变）：停
@@ -5335,7 +5346,7 @@ onUnmounted(() => {
               </li>
             </ol>
             <p v-if="findTotal > findHits.length" class="find-more">只列出前 {{ findHits.length }} 处，请输入更多字缩小范围。</p>
-          </div><div ref="desk" class="desk page-scroll" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          </div><div ref="desk" class="desk page-scroll" :style="{ '--tail-room': `${tailRoom}px` }" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -5707,7 +5718,7 @@ onUnmounted(() => {
 .etool select.control:hover:not(:disabled) { background-color:var(--bg-hover); }
 .etool:disabled select.control { opacity:.45; }
 .tool-count { flex:none; padding-left:var(--space-2); color:var(--text-tertiary); font-size:var(--text-xs); white-space:nowrap; }
-.desk { min-height:0; overflow:auto; padding:var(--space-5) var(--space-4) var(--space-7); background:var(--bg-sunken); }
+.desk { min-height:0; overflow:auto; padding:var(--space-5) var(--space-4) calc(var(--space-7) + var(--tail-room, 0px)); background:var(--bg-sunken); }
 .paper { position:relative; width:var(--paper-w); min-height:calc(var(--paper-w) * 1.26); margin:0 auto; padding:72px 96px; background:var(--bg-surface); box-shadow:var(--shadow-paper); }
 .paper-content { min-height:calc(var(--space-7) * 20); outline:none; color:var(--text-primary); font-family:var(--font-doc); font-size:var(--doc-text); line-height:1.75; overflow-wrap:anywhere; }
 /* S16：正文区不画焦点环（光标即焦点提示） */
