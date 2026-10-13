@@ -1,4 +1,4 @@
-"""P0-2 压测：4 人同时打开 360 节大文档（同一篇 / 4 篇不同），测可编辑时间、预览时间、其他接口延迟。
+"""P0-2 / 43 压测：4 人同时打开 360 节大文档（同一篇 / 4 篇不同），测可编辑时间（正文 + 对象 + 快速预览）、预览时间、其他接口延迟。
 
 用法（服务须已启动，账号为系统管理员）：
   LOAD_API=http://127.0.0.1:8095/api/v1 LOAD_ACCOUNT=admin LOAD_PASSWORD=... .venv/bin/python tests/load_preview.py
@@ -62,6 +62,7 @@ def open_document(client: httpx.Client, did: str, start: threading.Event) -> dic
     began = time.perf_counter()
     assert client.get(f"/documents/{did}").status_code == 200
     assert client.get(f"/documents/{did}/objects").status_code == 200
+    assert client.get(f"/documents/{did}/preview/blocks?limit=5000").status_code == 200  # 43 快速预览：编辑区可挂载
     editor = time.perf_counter() - began
     preview = client.get(f"/documents/{did}/preview")
     assert preview.status_code == 200, preview.text[:200]
