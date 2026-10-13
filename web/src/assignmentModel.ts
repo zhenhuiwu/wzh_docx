@@ -58,25 +58,18 @@ export function mineRegions(order: string[], editable: Set<string>): string[] {
 }
 
 /**
- * 只保存我负责的部分（16 §4.6 第 4 条）：以服务器最新对象为底，只采用我能改的对象上的修改；
- * 我在可编辑对象之后新写的块跟着保留；其余（改了别人的、写在别人后面的）放进暂存。顺序按服务器。
- * baseMarkdown（28 复验 N-1 / L-3）：我开始编辑时的服务器正文。给了就按三方合并：
- *   我没改的块用服务器最新（不覆盖别人的并发修改）；我和别人都改了同一块 → conflicts；没改过的过期块不进暂存。
+ * 只保存我负责的部分（16 §4.6 第 4 条）。baseline 是**开始编辑时**那一版的对象（带 ID），editable 是现在归我的对象。
+ * mineIds 给了就按真实 ID 对应（重复文字不会配错）。
+ * 结果仍以这一版为底：我负责的对象采用我的文字（删了就不输出），我在它后面新写的块跟着保留；
+ * 不归我的对象一律还原成这一版的文字，我对它们的修改和写在它们后面的新块放进暂存。
+ * 27 复验 M-4：结果必须按开始编辑时的修订号提交（allowMerge），由服务端三方合并——别人并发改了我没改的块会被并入，
+ * 双方都改了同一块报冲突。这里不再拿服务器最新正文做文字配对（重复文字会配错 ID，造成静默覆盖）。
  */
-export function keepMineOnly(markdown: string, baseline: BaselineObject[], editable: Set<string>, baseMarkdown?: string): { markdown: string; stashed: string[]; conflicts: string[] } {
+export function keepMineOnly(markdown: string, baseline: BaselineObject[], editable: Set<string>, mineIds?: Array<string | null>): { markdown: string; stashed: string[]; blockIds: Array<string | null> } {
   const blocks = splitBlocks(markdown);
-  const baseById = new Map<string, string>();
-  let ids: Array<string | null>;
-  if (baseMarkdown !== undefined) {
-    // 我的正文与开始编辑时的正文对齐（没改的块原样相同），开始时的正文再与服务器最新按 ID 对齐
-    const baseBlocks = splitBlocks(baseMarkdown);
-    const baseIds = assignBlockIds(baseMarkdown, baseline);
-    const kinds = new Map(baseline.map(item => [item.id, item.kind]));
-    const baseObjects = baseBlocks.map((block, index) => ({ id: baseIds[index] ?? `\u0000base${index}`, kind: kinds.get(baseIds[index] ?? "") ?? block.kind ?? "paragraph", markdown: block.body }));
-    baseObjects.forEach(item => baseById.set(item.id, item.markdown));
-    ids = assignBlockIds(markdown, baseObjects as BaselineObject[]).map(id => id && !id.startsWith("\u0000") ? id : null);
-  } else ids = assignBlockIds(markdown, baseline);
-  const same = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.trim() === b.trim();
+  // mineIds：编辑区里每块真实的对象 ID（优先）；没有时退回文字配对（本机草稿等）
+  const known = new Set(baseline.map(item => item.id));
+  const ids = mineIds && mineIds.length === blocks.length ? mineIds.map(id => id && known.has(id) ? id : null) : assignBlockIds(markdown, baseline);
   const mineById = new Map<string, string>();
   const following = new Map<string, string[]>();
   const leading: string[] = [];
@@ -88,29 +81,21 @@ export function keepMineOnly(markdown: string, baseline: BaselineObject[], edita
     else following.set(last, [...(following.get(last) ?? []), block.body]);
   });
   const out: string[] = [];
+  const outIds: Array<string | null> = [];
   const stashed: string[] = [];
-  const conflicts: string[] = [];
+  const emit = (body: string, id: string | null) => { out.push(body); outIds.push(id); };
   const firstEditable = baseline.length > 0 && editable.has(baseline[0].id);
-  if (firstEditable) out.push(...leading); else stashed.push(...leading);
+  if (firstEditable) leading.forEach(body => emit(body, null)); else stashed.push(...leading);
   for (const item of baseline) {
     const mine = mineById.get(item.id);
-    const base = baseById.get(item.id);
-    const threeWay = baseMarkdown !== undefined && base !== undefined;
     if (editable.has(item.id)) {
-      if (!threeWay) { if (mine !== undefined) out.push(mine); }
-      else if (mine === undefined) {
-        // 我删了：别人期间改过就保留别人的并记冲突
-        if (!same(item.markdown, base)) { out.push(item.markdown); conflicts.push(item.id); }
-      } else if (same(mine, base)) out.push(item.markdown);          // 我没改：用服务器最新
-      else if (same(item.markdown, base) || same(mine, item.markdown)) out.push(mine);
-      else { out.push(mine); conflicts.push(item.id); }               // 双方都改了
+      if (mine !== undefined) emit(mine, item.id);
     } else {
-      out.push(item.markdown);
-      const changedByMe = threeWay ? !same(mine, base) : mine !== undefined && mine.trim() !== item.markdown.trim();
-      if (mine !== undefined && changedByMe) stashed.push(mine);
+      emit(item.markdown, item.id);
+      if (mine !== undefined && mine.trim() !== item.markdown.trim()) stashed.push(mine);
     }
     const extra = following.get(item.id) ?? [];
-    if (editable.has(item.id)) out.push(...extra); else stashed.push(...extra);
+    if (editable.has(item.id)) extra.forEach(body => emit(body, null)); else stashed.push(...extra);
   }
-  return { markdown: out.join("\n\n") + "\n", stashed, conflicts };
+  return { markdown: out.join("\n\n") + "\n", stashed, blockIds: outIds };
 }

@@ -23,7 +23,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { assignBlockIds, type BaselineObject } from "../markdownBlocks";
+import { assignBlockIds, splitBlocks, type BaselineObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
@@ -205,6 +205,7 @@ function readStash() {
   } catch { lockedStash.value = ""; }
 }
 let baselineObjects: BaselineObject[] = [];
+let baseSnapshot: { revision: number; objects: BaselineObject[] } | null = null;
 let ownershipSeq = 0;
 const assignMode = computed(() => document.value?.permissions?.assignmentMode ?? null);
 // 管理员 canAssign=true，所以“编写人员且不能分配”就是受限的编写人员（与服务端 restricted 一致）
@@ -239,6 +240,8 @@ async function loadOwnership(record = document.value) {
     const [data, view] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null)]);
     if (document.value !== record || seq !== ownershipSeq) return;
     baselineObjects = data.objectModel ? data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown })) : [];
+    // 27 复验 M-4：编辑区渲染所依据的那一版对象（ID 与编辑区 data-object-id 一致），“只保存我负责的部分”以它为底
+    if (data.objectModel && data.documentRevision === record.revision) baseSnapshot = { revision: record.revision, objects: [...baselineObjects] };
     const locked = new Map<string, string>();
     const editableIds = new Set<string>();
     for (const item of data.objects) {
@@ -3522,6 +3525,33 @@ async function copyRejected() {
   await navigator.clipboard?.writeText(text).then(() => noteAction("已复制你的修改。", 4000), () => noteAction("复制失败，请改用下载。", 6000));
 }
 /** 29 M-3 / 16 §4.6 第 4 条：以服务器最新内容为底，只采用我负责部分的修改；其余放进暂存后保存。 */
+/**
+ * 27 复验 M-4：按编辑区真实的块 ID 取正文（每个带 data-object-id 的块前插不可见标记，转 Markdown 后再拆出来）。
+ * 回车拆段时浏览器会复制属性：同一 ID 只认第一次出现，后面的算新块。有冲突冻结区时不用（返回 null，退回文字配对）。
+ */
+function editorBlocksWithIds(): { markdown: string; ids: Array<string | null> } | null {
+  const root = editor.value;
+  if (!root || Object.keys(frozen.value).length) return null;
+  const copy = root.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("[data-ai-preview]").forEach(node => node.remove());
+  const seen = new Set<string>();
+  for (const node of copy.querySelectorAll<HTMLElement>("[data-object-id]")) {
+    const id = node.getAttribute("data-object-id") || "";
+    if (!id || seen.has(id) || node.querySelector("[data-object-id]")) continue;
+    seen.add(id);
+    node.prepend(window.document.createTextNode(`\uE000${id}\uE001`));
+  }
+  const markdown = editorMarkdown(turndown, DOMPurify.sanitize(copy.innerHTML, { RETURN_DOM: true }) as HTMLElement);
+  const marker = /\uE000([^\uE001]*)\uE001/;
+  const ids: Array<string | null> = [];
+  const bodies = splitBlocks(markdown).map(block => {
+    const hit = marker.exec(block.body);
+    ids.push(hit ? hit[1] : null);
+    return hit ? block.body.replace(marker, "") : block.body;
+  });
+  if (bodies.some(body => body.includes("\uE000"))) return null;
+  return { markdown: bodies.join("\n\n") + "\n", ids };
+}
 async function saveMineOnly() {
   const record = document.value;
   if (!record || savingMine.value) return;
@@ -3529,38 +3559,35 @@ async function saveMineOnly() {
   try {
     if (savePromise) await savePromise.catch(() => undefined);
     const data = await getAllObjects(record.id);
-    const base = data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown }));
     const editableIds = new Set(data.objects.filter(item => item.editable !== false).map(item => item.id));
-    // 28 复验 N-1：三方合并（基准 = 我开始编辑时的服务器正文），我没改的块用最新，不覆盖别人的并发修改
-    const kept = keepMineOnly(markdownContent.value, base, editableIds, savedContent.value);
-    if (kept.conflicts.length) {
-      // 我和别人都改了我负责的同一段：按我的基准修订提交，由服务器走既有的冲突流程（409 OBJECT_CONFLICT → 冲突卡）
-      if (kept.stashed.length) addStash(kept.stashed.join("\n\n"), null, true);
-      pendingKey = null; blocked.value = null; rejected.value = null;
-      if (rejectedOpen.value) rejectedOpen.value = false;
-      try {
-        const merged = await updateDocumentContent(record.id, record.revision, kept.markdown, undefined, undefined,
-          { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds: assignBlockIds(kept.markdown, base) });
-        await acceptContent({ markdownContent: merged.markdownContent ?? kept.markdown, revision: merged.revision, status: merged.status }, { reason: "正在载入保存后的内容…" });
-        savedAt.value = Date.now();
-      } catch (caught) {
-        if (document.value === record) handleSaveError(caught, kept.markdown, "manual", markdownContent.value);
-      }
-      noteAction(`你负责的部分有 ${kept.conflicts.length} 处在你编辑期间也被他人修改过，已按冲突处理，请在冲突面板选择保留哪一版。${kept.stashed.length ? `不归你负责的 ${kept.stashed.length} 段已放入暂存，可以复制。` : ""}`, 12000);
-      return;
-    }
-    const result = await updateDocumentContent(record.id, data.documentRevision, kept.markdown, undefined, undefined,
-      { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds: assignBlockIds(kept.markdown, base) });
-    if (document.value !== record) return;
-    if (kept.stashed.length) { addStash(kept.stashed.join("\n\n"), null, true); }
+    // 27 复验 M-4：以开始编辑时那一版为底（ID 与编辑区一致），按那一版的修订号提交，由服务端三方合并判冲突
+    const latest = data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown }));
+    const base: BaselineObject[] = baseSnapshot?.revision === record.revision ? baseSnapshot.objects
+      : (() => { const ids = assignBlockIds(savedContent.value, latest); return splitBlocks(savedContent.value).map((block, index) => ({ id: ids[index] ?? `\u0000${index}`, kind: block.kind, markdown: block.body })); })();
+    const fromEditor = editorBlocksWithIds();
+    const kept = keepMineOnly(fromEditor?.markdown ?? markdownContent.value, base, editableIds, fromEditor?.ids);
+    const blockIds = kept.blockIds.map(id => id && !id.startsWith("\u0000") ? id : null);
+    if (kept.stashed.length) addStash(kept.stashed.join("\n\n"), null, true);
     pendingKey = null; blocked.value = null; rejected.value = null; assignNotice.value = null; retrying.value = false;
     if (rejectedOpen.value) rejectedOpen.value = false;
+    const stashNote = kept.stashed.length ? `不归你负责的 ${kept.stashed.length} 段已放入暂存，可以复制。` : "";
+    let result: Awaited<ReturnType<typeof updateDocumentContent>>;
+    try {
+      result = await updateDocumentContent(record.id, record.revision, kept.markdown, undefined, undefined,
+        { clientSaveKey: crypto.randomUUID(), allowMerge: true, blockIds });
+    } catch (caught) {
+      // 我和别人都改了我负责的同一段：服务端 409 OBJECT_CONFLICT，走既有冲突流程
+      if (document.value === record) handleSaveError(caught, kept.markdown, "manual", markdownContent.value);
+      if (caught instanceof ApiError && caught.code === "OBJECT_CONFLICT") noteAction(`你负责的部分在你编辑期间也被他人修改过，已按冲突处理，请在冲突面板选择保留哪一版。${stashNote}`, 12000);
+      else noteAction(`没能保存：${messageOf(caught)}`, 8000);
+      return;
+    }
+    if (document.value !== record) return;
     await acceptContent({ markdownContent: result.markdownContent ?? kept.markdown, revision: result.revision, status: result.status }, { reason: "正在载入保存后的内容…" });
     savedAt.value = Date.now();
-    // 跟进：被拒的那次提交已在服务器上记成冲突（我负责的段别人也改了，“我的版本”存为冲突副本）——提示冲突，而不是普通的“已保存”
+    // 被拒的那次提交可能已在服务器上记成冲突（“我的版本”存为冲突副本）——提示冲突，而不是普通的“已保存”
     await refreshConflicts().catch(() => undefined);
     const open = Math.max(mineConflicts.value, frozenOpen.value.filter(entry => !entry.resolved).length);
-    const stashNote = kept.stashed.length ? `不归你负责的 ${kept.stashed.length} 段已放入暂存，可以复制。` : "";
     if (open) noteAction(`你负责的部分有 ${open} 处在你编辑期间也被他人修改过，已按冲突处理，请在冲突面板选择保留哪一版。${stashNote}`, 12000);
     else noteAction(kept.stashed.length ? `已保存你负责部分的修改；其余 ${kept.stashed.length} 段已放入暂存，可以复制。` : "已保存你负责部分的修改。", 8000);
   } catch (caught) {

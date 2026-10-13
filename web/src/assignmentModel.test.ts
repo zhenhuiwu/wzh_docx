@@ -35,18 +35,36 @@ describe("只保存我负责的部分", () => {
     const result = keepMineOnly("# 我的\n\n我的段\n\n# 别人的\n", base, editable);
     expect(result.markdown).toContain("别人的段");
   });
-  it("三方合并：我没改的块用最新、双方都改记冲突、过期未改的别人块不进暂存（28 复验 N-1 / L-3）", () => {
-    const base0 = "# 我的\n\n我的段\n\n# 别人的\n\n别人的段\n";
-    const latest = [
-      { id: "h1", kind: "heading", markdown: "# 我的" }, { id: "p1", kind: "paragraph", markdown: "我的段（负责人改）" },
-      { id: "h2", kind: "heading", markdown: "# 别人的" }, { id: "p2", kind: "paragraph", markdown: "别人的段（孙改）" },
+  it("以开始编辑时那一版为底：别人的块还原、没改过的块原样（交给服务端三方合并）；块标识与输出一一对应", () => {
+    const result = keepMineOnly("# 我的\n\n我的段（改）\n\n# 别人的\n\n别人的段\n", base, editable);
+    expect(result.markdown).toBe("# 我的\n\n我的段（改）\n\n# 别人的\n\n别人的段\n");
+    expect(result.stashed).toEqual([]);
+    expect(result.blockIds).toEqual(["h1", "p1", "h2", "p2"]);
+  });
+  it("重复文字：我改了别人的“无。”只进暂存，不变成新段（27 复验 M-4）", () => {
+    const dup = [
+      { id: "h", kind: "heading", markdown: "# 章" }, { id: "a", kind: "paragraph", markdown: "无。" },
+      { id: "b", kind: "paragraph", markdown: "无。" }, { id: "c", kind: "paragraph", markdown: "无。" },
     ];
-    const untouched = keepMineOnly("# 我的\n\n我的段\n\n我新写的\n\n# 别人的\n\n别人的段\n", latest, editable, base0);
-    expect(untouched.markdown).toContain("我的段（负责人改）");
-    expect(untouched.markdown).toContain("别人的段（孙改）");
-    expect(untouched.stashed).toEqual([]);
-    expect(untouched.conflicts).toEqual([]);
-    const both = keepMineOnly("# 我的\n\n我的段（我改）\n\n# 别人的\n\n别人的段\n", latest, editable, base0);
-    expect(both.conflicts).toEqual(["p1"]);
+    const result = keepMineOnly("# 章\n\n无（我改）。\n\n无。\n\n无（我改）。\n", dup, new Set(["c"]), ["h", "a", "b", "c"]);
+    expect(result.markdown).toBe("# 章\n\n无。\n\n无。\n\n无（我改）。\n");
+    expect(result.stashed).toEqual(["无（我改）。"]);
+    expect(result.blockIds).toEqual(["h", "a", "b", "c"]);
+  });
+  it("按真实 ID：我删了别人的段不删（照基线保留），我删了自己的段才删（27 复验 F4）", () => {
+    const base = [
+      { id: "h", kind: "heading", markdown: "# 章" }, { id: "a", kind: "paragraph", markdown: "甲。" },
+      { id: "b", kind: "paragraph", markdown: "乙。" },
+    ];
+    const other = keepMineOnly("# 章\n\n乙。\n", base, new Set(["b"]), ["h", "b"]);
+    expect(other.markdown).toBe("# 章\n\n甲。\n\n乙。\n");
+    expect(other.blockIds).toEqual(["h", "a", "b"]);
+    const mine = keepMineOnly("# 章\n\n甲。\n", base, new Set(["b"]), ["h", "a"]);
+    expect(mine.markdown).toBe("# 章\n\n甲。\n");
+    expect(mine.blockIds).toEqual(["h", "a"]);
+    // 新块（ID 不在基线里或重复）跟在别人的段后 → 暂存，不进正文
+    const added = keepMineOnly("# 章\n\n甲。\n\n新增。\n\n乙。\n", base, new Set(["b"]), ["h", "a", "zz", "b"]);
+    expect(added.markdown).toBe("# 章\n\n甲。\n\n乙。\n");
+    expect(added.stashed).toEqual(["新增。"]);
   });
 });
