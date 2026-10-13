@@ -1,5 +1,12 @@
 """A05：迁移 116 可单独回滚（先导出审计 CSV、整库备份），回滚后的结构与 115 状态一致，重新迁移能再建回来。"""
-from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
+from app.rollback_migration_118 import rollback as _rb118_only  # A07：118 在 117 之后，先回滚
+from app.rollback_migration_120 import rollback as _rb120  # 任务与模板：120 在 118 之后
+
+
+def _rb118(path, apply=False, force=False):
+    """按 120 → 118 的顺序回滚（120 失败时原样返回其退出码）。"""
+    code = _rb120(path, apply=apply, force=force)
+    return code if code else _rb118_only(path, apply=apply, force=force)
 
 import csv
 import sqlite3
@@ -70,7 +77,7 @@ def test_rollback_116_restores_the_115_schema_and_keeps_members(tmp_path, monkey
             assert connection.execute("select role from project_members where project_id = ?", (str(project),)).fetchone()[0] == "owner"
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql", "120_tasks_templates.sql"]
         assert _recorded(path) == 1
         with sqlite3.connect(path) as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1
@@ -95,7 +102,7 @@ def test_migration_116_on_a_115_database_keeps_old_rows(tmp_path, monkeypatch):
             connection.execute("insert into projects(id, name, owner_id) values (%s, %s, %s)", (project, "旧项目", owner))
             connection.execute("insert into project_members(project_id, user_id, role) values (%s, %s, 'owner')", (project, owner))
             connection.commit()
-        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql"]
+        assert migrate() == ["116_project_members_v2.sql", "117_template_versions.sql", "118_document_assignments.sql", "120_tasks_templates.sql"]
         assert migrate() == []
         with sqlite3.connect(tmp_path / "app.db") as connection:
             assert connection.execute("select members_revision from projects where id = ?", (str(project),)).fetchone()[0] == 1

@@ -31,6 +31,10 @@ def test_rollback_118_restores_117_schema(tmp_path, monkeypatch, capsys):
     config.get_settings.cache_clear()
     try:
         migrate()
+        from app.rollback_migration_120 import rollback as rollback_120
+        assert rollback(path, apply=True, force=True) == 2       # 120 还在
+        assert rollback_120(path, apply=True) == 0
+        capsys.readouterr()
         assert rollback_117(path, apply=True, force=True) == 2   # 118 还在
         assert "rollback_migration_118" in capsys.readouterr().err
         with sqlite3.connect(path) as connection:
@@ -46,7 +50,7 @@ def test_rollback_118_restores_117_schema(tmp_path, monkeypatch, capsys):
         assert list(tmp_path.glob("app.db.before-rollback-118-*.db"))
         assert rollback(path, apply=True) == 0
         assert "不需要回滚" in capsys.readouterr().out
-        assert migrate() == ["118_document_assignments.sql"]
+        assert migrate() == ["118_document_assignments.sql", "120_tasks_templates.sql"]
         with sqlite3.connect(path) as connection:
             assert connection.execute("select count(*) from document_object_assignments").fetchone()[0] == 0
     finally:
@@ -89,7 +93,7 @@ def test_existing_documents_open_new_documents_enforced(tmp_path, monkeypatch):
             assert "assignment_mode" not in columns
             connection.execute("pragma foreign_keys=off")
             connection.execute("insert into documents(id, project_id, name, source_type, owner_id) values ('old','p','旧文档','blank','u')")
-        assert migrate() == ["118_document_assignments.sql"]
+        assert migrate() == ["118_document_assignments.sql", "120_tasks_templates.sql"]
         with sqlite3.connect(path) as connection:
             connection.execute("pragma foreign_keys=off")
             connection.execute("insert into documents(id, project_id, name, source_type, owner_id) values ('new','p','新文档','blank','u')")

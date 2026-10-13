@@ -1,5 +1,12 @@
 """三审：迁移 114 可单独回滚，回滚后重新迁移能再加回来。"""
-from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
+from app.rollback_migration_118 import rollback as _rb118_only  # A07：118 在 117 之后，先回滚
+from app.rollback_migration_120 import rollback as _rb120  # 任务与模板：120 在 118 之后
+
+
+def _rb118(path, apply=False, force=False):
+    """按 120 → 118 的顺序回滚（120 失败时原样返回其退出码）。"""
+    code = _rb120(path, apply=apply, force=force)
+    return code if code else _rb118_only(path, apply=apply, force=force)
 
 import sqlite3
 

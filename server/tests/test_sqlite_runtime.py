@@ -58,6 +58,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             "116_project_members_v2.sql",
             "117_template_versions.sql",
             "118_document_assignments.sql",
+            "120_tasks_templates.sql",
         ]
         assert migrate() == []
         admin_id = create_user(
