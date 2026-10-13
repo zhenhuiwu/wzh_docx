@@ -159,8 +159,8 @@ defineExpose({ dirty, save });
       <p v-else-if="aiNotice[fragment.key]" class="notice" :class="aiNotice[fragment.key].tone" role="status">{{ aiNotice[fragment.key].text }}</p>
       <div v-if="fragment.before" class="context" :title="'前文（他人负责，只读）'">
         <span class="ctx-label">前文 · 只读<template v-if="fragment.beforeSection"> · {{ fragment.beforeSection }}</template></span>
-        <table v-if="ctx(fragment.before).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.before) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
-        <p v-else class="ctx-text">{{ (ctx(fragment.before) as TextView).text }}</p>
+        <table v-if="ctx(fragment.before).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.before) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c" :title="cell">{{ cell }}</td></tr></tbody></table>
+        <p v-else class="ctx-text" :title="(ctx(fragment.before) as TextView).text">{{ (ctx(fragment.before) as TextView).text }}</p>
         <small v-if="ctx(fragment.before).kind === 'table' && (ctx(fragment.before) as TableView).more" class="ctx-more">另有 {{ (ctx(fragment.before) as TableView).more }} 行</small>
       </div>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
@@ -171,8 +171,8 @@ defineExpose({ dirty, save });
       </label>
       <div v-if="fragment.after" class="context" :title="'后文（他人负责，只读）'">
         <span class="ctx-label">后文 · 只读<template v-if="fragment.afterSection"> · {{ fragment.afterSection }}</template></span>
-        <table v-if="ctx(fragment.after).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.after) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
-        <p v-else class="ctx-text">{{ (ctx(fragment.after) as TextView).text }}</p>
+        <table v-if="ctx(fragment.after).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.after) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c" :title="cell">{{ cell }}</td></tr></tbody></table>
+        <p v-else class="ctx-text" :title="(ctx(fragment.after) as TextView).text">{{ (ctx(fragment.after) as TextView).text }}</p>
         <small v-if="ctx(fragment.after).kind === 'table' && (ctx(fragment.after) as TableView).more" class="ctx-more">另有 {{ (ctx(fragment.after) as TableView).more }} 行</small>
       </div>
     </article>
