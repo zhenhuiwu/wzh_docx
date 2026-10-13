@@ -78,14 +78,14 @@ export function refreshSession(): Promise<Session | null> {
 }
 
 export function loginDestination(value: unknown): string {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/projects";
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/";
   try {
     const target = new URL(value, window.location.origin);
     return target.origin === window.location.origin && target.pathname !== "/login"
       ? target.pathname + target.search + target.hash
-      : "/projects";
+      : "/";
   } catch {
-    return "/projects";
+    return "/";
   }
 }
 

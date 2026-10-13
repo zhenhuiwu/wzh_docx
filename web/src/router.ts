@@ -4,6 +4,8 @@ import type { RouteRecordRaw } from "vue-router";
 import { routePermission } from "./access";
 import AppShell from "./layouts/AppShell.vue";
 import { onForbidden, onPasswordChangeRequired, onSessionExpired } from "./api/client";
+import { hasPermission, readSession } from "./session";
+import { refreshMyWritingAccess } from "./myWritingAccess";
 import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired, refreshSession } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
@@ -48,6 +50,11 @@ function withPermissions(records: RouteRecordRaw[]): RouteRecordRaw[] {
   return records;
 }
 
+async function homeDestination() {
+  if (hasPermission(readSession(), "system.manage")) return { name: "projects", replace: true };
+  return (await refreshMyWritingAccess()) ? { name: "my-writing", replace: true } : { name: "projects", replace: true };
+}
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: withPermissions([
@@ -67,8 +74,9 @@ export const router = createRouter({
       path: "/",
       component: AppShell,
       children: [
-        { path: "", redirect: { name: "projects" } },
-        { path: "home", redirect: { name: "projects" } },
+        // 30 §3：编写人员默认落在「我的编写」；系统管理员和看不到「我的编写」的成员落在项目列表。
+        { path: "", name: "home", component: { render: () => null }, beforeEnter: homeDestination },
+        { path: "home", redirect: { name: "home" } },
         {
           path: "my-writing",
           name: "my-writing",
