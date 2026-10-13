@@ -255,7 +255,8 @@ async function loadOwnership(record = document.value) {
     applyLocks();
     noteOwnershipChange(prev, assignInfo.value);
     if (!prev && assignInfo.value.restricted && editableIds.size && !route.hash) void nextTick(() => locateMine(!localDraft.value));
-    if (!prev && assignInfo.value.restricted) settleDraftOwnership();
+    // 28 N-4'：每次取到分工都拆（含改派后重取）；草稿列表还没读进来时由 findLocalDrafts 读完后再拆
+    if (assignInfo.value.restricted) settleDraftOwnership();
   } catch { /* 读不到归属时不锁，保存仍由服务器把关 */ }
 }
 /** 整篇保存附带的块标识：对象模型可用时总是带（编写人员在 enforced 文档上缺了会被 422）。 */
@@ -972,6 +973,8 @@ function findLocalDrafts(record: DocumentRecord) {
   localDrafts.value = drafts;
   localDraft.value = drafts[0] ?? null;
   checkingDrafts.value = false;
+  // 28 N-4'：分工先到、草稿后到（打开时总是这样）——草稿读完后按当前分工拆一次
+  if (assignInfo.value?.restricted) settleDraftOwnership();
   void flushLoadTyping();
   void settlePendingSaves(record);
 }
