@@ -49,6 +49,7 @@ import { listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, bodyBlockAt, chunkBlockById, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
+import { fastPreviewStep } from "../fastPreviewPlan";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, patchObjectsKeepalive, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -1333,9 +1334,28 @@ async function applyPreview(task: Promise<{ value: Awaited<ReturnType<typeof pre
 }
 /** 43：快速预览能对上当前修订就先挂上（可编辑）；整篇预览到了，若还没改过、焦点不在正文，就换成精确版式（保留滚动位置）。 */
 async function applyFastPreview(fastTask: Promise<Awaited<ReturnType<typeof previewBlocks>> | null>, task: Parameters<typeof applyPreview>[0], record: DocumentRecord, version: number) {
-  const fast = await fastTask;
+  let fast = await fastTask;
   if (version !== loadVersion || document.value !== record) return;
-  if (!fast || !fast.objectModel || fast.documentRevision !== record.revision || !fast.blocks.length) { await applyPreview(task, record, version); return; }
+  // 关页后立即重开：后端让快速预览等关页保存落库，它常比刚读到的正文新一版。不再因此退回等整篇预览（冷渲染 5–7 s），
+  // 而是把正文换成同一修订再挂快速预览；快速预览旧了就再取一次（见 fastPreviewPlan）。
+  for (let attempt = 0; ; attempt++) {
+    const step = fastPreviewStep(fast, record.revision, attempt);
+    if (step === "mount") break;
+    if (step === "full") { await applyPreview(task, record, version); return; }
+    if (step === "adoptNewer" && fast && !isDirty.value && !saving.value) {
+      const latest = await getDocument(record.id).catch(() => null);
+      if (version !== loadVersion || document.value !== record) return;
+      if (latest && latest.revision === fast.documentRevision && !isDirty.value && !saving.value) {
+        Object.assign(record, latest);
+        markdownContent.value = latest.markdownContent;
+        savedContent.value = latest.markdownContent;
+        continue;
+      }
+    }
+    fast = await previewBlocks(record.id).catch(() => null);
+    if (version !== loadVersion || document.value !== record) return;
+  }
+  if (!fast) return;
   bodyPending.value = false;
   previewError.value = "";
   showEditorHtml(fastBodyHtml(fast.blocks), true);
