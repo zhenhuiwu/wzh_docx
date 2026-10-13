@@ -1,4 +1,5 @@
 """方案 C：迁移 115 可单独回滚，回滚后重新迁移能再建回来。"""
+from tests.migration_cap import cap_migrations  # noqa: F401
 from app.rollback_migration_118 import rollback as _rb118  # A07：118 在 117 之后，先回滚
 
 import sqlite3

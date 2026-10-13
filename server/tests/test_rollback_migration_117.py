@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tests.migration_cap import cap_migrations  # noqa: F401
 from app.rollback_migration_117 import TABLE, VERSION, rollback
 from tests.test_document_objects_migration import _migrate_until
 from tests.test_rollback_migration_116 import _schema
