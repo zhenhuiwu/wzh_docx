@@ -383,15 +383,24 @@ def document_context(markdown: str, *, heading_index: int | None = None,
     if len(result) > max_chars - 200:
         raise ValueError("目标章节超过上下文预算，请选中需要修改的部分。")
     remaining = max_chars - len(result) - 120
+    # Adjacent sections decide continuity (terms, numbering, what was already
+    # said), so they get up to a third of the remaining budget before excerpts.
+    neighbours = set() if heading_index is None else {heading_index, heading_index + 2}
+    neighbour_size = min(3000, remaining // 6)
+    remaining -= sum(min(len(chunks[index][1]), neighbour_size) + 40 for index in neighbours if index < len(chunks))
     excerpt_size = min(500, max(60, remaining // max(len(chunks), 1) - 150))
     omitted = 0
     for index, (title, content) in enumerate(chunks):
         if not content.strip() or (heading_index is not None and index == heading_index + 1):
             continue
-        excerpt = content[:excerpt_size]
-        if len(content) > excerpt_size:
+        size = neighbour_size if index in neighbours else excerpt_size
+        excerpt = content[:size]
+        if len(content) > size:
             excerpt += "…（本节原文未完整显示）"
-        entry = f"\n其他章节：{title}\n{excerpt}\n"
+        label = ("前一章节" if index == heading_index else "后一章节") if index in neighbours else "其他章节"
+        entry = f"\n{label}：{title}\n{excerpt}\n"
+        if index in neighbours:
+            remaining += min(len(content), neighbour_size) + 40
         if len(entry) > remaining:
             omitted += 1
             continue

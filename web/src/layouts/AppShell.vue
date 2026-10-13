@@ -6,7 +6,7 @@ import StatePanel from "../components/StatePanel.vue";
 import { hasPermission, readSession } from "../session";
 import { ApiError } from "../api/client";
 import { getProject } from "../api/projects";
-import { objectCrumb, projectCrumb, rememberProject } from "../crumbs";
+import { PROJECT_ROUTES, objectCrumb, projectCrumb, projectPageCrumb, rememberProject } from "../crumbs";
 import { flashMessage } from "../flash";
 import { NAV_ITEMS, navVisible } from "../access";
 import { myWritingVisible, refreshMyWritingAccess } from "../myWritingAccess";
@@ -100,8 +100,7 @@ function toggleCollapsed() {
 const pageTitle = computed(() => (typeof route.meta.title === "string" ? route.meta.title : ""));
 const denied = computed(() => typeof route.meta.permission === "string" && !can(route.meta.permission));
 
-const projectRoutes = ["project-baselines", "project", "project-documents", "document"];
-const isProjectRoute = computed(() => projectRoutes.includes(String(route.name)));
+const isProjectRoute = computed(() => PROJECT_ROUTES.includes(String(route.name)));
 const projectsCurrent = computed(() => route.name === "projects" || isProjectRoute.value);
 let crumbRequest = 0;
 watch(() => [route.name, route.params.id] as const, async ([, id]) => {
@@ -136,9 +135,9 @@ const crumbs = computed<Crumb[]>(() => {
     const projectName = projectCrumb.value?.id === id ? projectCrumb.value.name : "";
     const list: Crumb[] = [{ label: "项目", to: { name: "projects" } }];
     if (projectName) list.push({ label: projectName, to: { name: "project", params: { id } } });
-    if (name === "project") list.push({ label: "项目概述" });
-    else if (name === "project-baselines") list.push({ label: "基线" });
-    else list.push({ label: "文档编写", to: name === "document" ? { name: "project-documents", params: { id } } : undefined });
+    const page = projectPageCrumb(name);
+    if (!page.documentList) list.push({ label: page.label });
+    else list.push({ label: page.label, to: name === "document" ? { name: "project-documents", params: { id } } : undefined });
     if (name === "document") list.push({ label: objectName("文档") });
     return list;
   }

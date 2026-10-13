@@ -30,6 +30,9 @@ from app.document_diagrams import router as document_diagrams_router
 from app.document_plans import router as document_plans_router
 from app.document_references import router as document_references_router
 from app.facts import router as facts_router
+from app.doc_chain import router as doc_chain_router
+from app.plan_tasks import router as plan_tasks_router
+from app.project_tasks import router as project_tasks_router
 from app.templates import router as templates_router
 from app.template_versions import router as template_versions_router
 from app.migrate_template_versions import backfill as backfill_template_versions
@@ -129,6 +132,9 @@ def create_app() -> FastAPI:
     api.include_router(projects_router)
     api.include_router(project_members_router)
     api.include_router(jobs_router)
+    api.include_router(doc_chain_router)  # 先于 /templates/{id} 注册，避免 builtin:seed 被吞
+    api.include_router(plan_tasks_router)
+    api.include_router(project_tasks_router)
     api.include_router(templates_router)
     api.include_router(template_versions_router)
     api.include_router(writing_skills_router)

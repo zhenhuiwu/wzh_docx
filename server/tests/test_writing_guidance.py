@@ -3,6 +3,7 @@ import json
 from unittest.mock import Mock
 
 import pytest
+from tests.block_ops_helper import section_answer
 
 import app.documents as documents
 from app.config import get_settings
@@ -121,7 +122,7 @@ def test_draft_uses_persisted_effective_advice(version_context, monkeypatch):
     patch(client, headers, doc["id"], 0, [{"id": "scope-guide", "text": "当前本篇有效要求。"}])
     settings = get_settings().model_copy(update={"ai_base_url": "http://localhost/v1", "ai_model": "offline", "ai_api_key": ""})
     monkeypatch.setattr(documents, "get_settings", lambda: settings)
-    model = Mock(return_value="原始正文。")
+    model = Mock(side_effect=lambda **kwargs: section_answer(kwargs, "原始正文。"))
     monkeypatch.setattr(documents, "draft_section_text", model)
     response = client.post(f"/api/v1/documents/{doc['id']}/sections/draft", headers=headers,
                           json={"expectedRevision": 1, "scope": "section", "headingIndex": 0})

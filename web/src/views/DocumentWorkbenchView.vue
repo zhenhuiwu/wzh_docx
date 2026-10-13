@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from "vue-router";
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
@@ -37,6 +37,7 @@ import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -740,6 +741,21 @@ const guidanceChanged = computed(() => Object.keys(guidanceEdits.value).length >
 let guidanceController: AbortController | undefined;
 const aiDraft = ref("");
 const aiEdits = ref<DocumentEdit[]>([]);
+// Spec 30 §4: in-place block suggestions with per-paragraph accept/reject.
+const aiSuggestions = shallowRef<Suggestion[]>([]);
+const aiSuggestionCursor = ref(0);
+const aiSuggestionDropped = ref(0);
+const aiSuggestionAccepted = ref(0);
+const aiSuggestionTick = ref(0);
+function aiDeniedIds(): Set<string> {
+  return new Set(assignmentState.value?.items.filter(item => !item.canEdit).map(item => item.objectId) || []);
+}
+// Panel header (spec 30 §4.2): how many paragraphs of the section the AI may change.
+const aiScopeParagraphs = computed(() => {
+  void editorVersion.value;
+  return aiScope.value === "section" && selectedHeading.value !== null && editor.value ? scopeCount(editor.value, selectedHeading.value, aiDeniedIds()) : 0;
+});
+const aiPendingSuggestions = computed(() => { void aiSuggestionTick.value; return pendingSuggestions(aiSuggestions.value); });
 const aiComplete = ref(false);
 const aiAllowedModes = ref<("append" | "replace")[]>(["append", "replace"]);
 let draftInstruction = "";
@@ -2317,7 +2333,59 @@ async function addHeading() {
     addingHeading.value = false;
   }
 }
+const suggestionCallbacks: SuggestionCallbacks = {
+  sanitize: html => DOMPurify.sanitize(html, { FORBID_TAGS: ["iframe", "form", "input", "button", "textarea"] }),
+  onResolve: (_item, accepted) => {
+    if (accepted) aiSuggestionAccepted.value += 1;
+    aiSuggestionTick.value += 1;
+    if (!aiPendingSuggestions.value.length) finishSuggestions();
+    else focusSuggestion(Math.min(aiSuggestionCursor.value, aiPendingSuggestions.value.length - 1));
+  },
+};
+function focusSuggestion(position: number) {
+  const items = aiPendingSuggestions.value;
+  if (!items.length) return;
+  aiSuggestionCursor.value = (position + items.length) % items.length;
+  for (const item of aiSuggestions.value) item.control.classList.remove("current");
+  const item = items[aiSuggestionCursor.value];
+  item.control.classList.add("current");
+  item.control.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function resolveAllSuggestions(accepted: boolean) {
+  for (const item of [...aiPendingSuggestions.value]) resolveSuggestion(item, accepted, suggestionCallbacks);
+}
+function resolveCurrentSuggestion(accepted: boolean) {
+  const item = aiPendingSuggestions.value[aiSuggestionCursor.value];
+  if (item) resolveSuggestion(item, accepted, suggestionCallbacks);
+}
+function suggestionKeys(event: KeyboardEvent) {
+  if (!event.altKey || !aiPendingSuggestions.value.length) return;
+  if (event.key === "Enter") resolveCurrentSuggestion(true);
+  else if (event.key === "Backspace") resolveCurrentSuggestion(false);
+  else if (event.key === "ArrowDown") focusSuggestion(aiSuggestionCursor.value + 1);
+  else if (event.key === "ArrowUp") focusSuggestion(aiSuggestionCursor.value - 1);
+  else return;
+  event.preventDefault();
+}
+function finishSuggestions() {
+  window.removeEventListener("keydown", suggestionKeys);
+  const accepted = aiSuggestionAccepted.value;
+  aiSuggestions.value = [];
+  aiSuggestionAccepted.value = 0;
+  clearAiDraft();
+  // Accepted suggestions are now ordinary editor content: the normal save path (blockIds, conflicts) applies.
+  if (accepted) onEditorInput();
+}
 function clearAiDraft() {
+  if (aiPendingSuggestions.value.length) {
+    window.removeEventListener("keydown", suggestionKeys);
+    const items = aiSuggestions.value;
+    aiSuggestions.value = [];
+    for (const item of pendingSuggestions(items)) resolveSuggestion(item, false, { ...suggestionCallbacks, onResolve: () => undefined });
+    if (aiSuggestionAccepted.value) { aiSuggestionAccepted.value = 0; void nextTick(() => onEditorInput()); }
+  }
+  aiSuggestionDropped.value = 0;
+  if (editor.value) clearScope(editor.value);
   aiController?.abort();
   aiController = undefined;
   aiBusy.value = false;
@@ -2637,6 +2705,17 @@ async function generateSection() {
     draftEditorVersion.value = version;
     placeAiPreview();
     showAiProgress("connecting", "正在连接编写服务");
+    const scopeIds = aiScope.value === "section" && index !== null && editor.value ? (() => {
+      const { heading, blocks } = sectionBlocks(editor.value, index);
+      // A07: only blocks this user may change belong to the writing scope (spec 30 §4.2).
+      const denied = aiDeniedIds();
+      return [heading, ...blocks].map(node => node?.getAttribute("data-object-id")).filter((value): value is string => Boolean(value) && !denied.has(value as string));
+    })() : undefined;
+    const headingIndex = index;
+    if (aiScope.value === "section" && index !== null && editor.value) {
+      const count = scopeCount(editor.value, index, aiDeniedIds());
+      markScope(editor.value, index, aiDeniedIds(), `写作范围：${aiTargetTitle.value} · ${count} 段${assignRestricted.value ? " · 我负责" : ""}`);
+    }
     await streamDocumentSection(id, document.value.revision, index, draftInstruction, text, (event) => {
       if (!current() || controller.signal.aborted) return;
       if (editorVersion.value !== version || document.value?.revision !== event.revision || isDirty.value) throw new ApiError(409, "REVISION_CONFLICT", "文档已变化，请重新生成草稿。");
@@ -2655,8 +2734,20 @@ async function generateSection() {
           html = html.replaceAll(`src="${image.ref}"`, `src="data:${image.content_type};base64,${image.data}"`);
         }
       }
+      if (event.type === "done" && event.operations && aiScope.value === "section" && headingIndex !== null && editor.value) {
+        const { suggestions, dropped } = renderSuggestions(editor.value, headingIndex, event.operations, suggestionCallbacks);
+        aiSuggestions.value = suggestions;
+        aiSuggestionDropped.value = dropped;
+        aiSuggestionAccepted.value = 0;
+        aiPreviewHtml.value = "";
+        if (suggestions.length) {
+          window.addEventListener("keydown", suggestionKeys);
+          void nextTick(() => focusSuggestion(0));
+        }
+        return;
+      }
       aiPreviewHtml.value = DOMPurify.sanitize(html, { FORBID_TAGS: [...(aiScope.value === "selection" ? ["img"] : []), "iframe", "form", "input", "button", "textarea"] });
-    }, controller.signal, aiScope.value, draftSelection, aiScope.value === "selection" ? selectionObjectIds() : undefined);
+    }, controller.signal, aiScope.value, draftSelection, aiScope.value === "selection" ? selectionObjectIds() : undefined, scopeIds);
   } catch (error) {
     if (current() && !aiStopped.value) {
       aiComplete.value = false;
@@ -4721,7 +4812,11 @@ onUnmounted(() => {
             <p v-if="!canGenerate" class="pnote">在目录中选择章节，或在正文中选中文字。</p>
             <p v-if="!canGenerate && aiError" class="form-error" role="alert">{{ aiError }}</p>
             <template v-if="canGenerate">
-              <div class="target"><b>{{ aiTargetTitle }}</b><span>{{ aiTargetHint }}</span></div>
+              <div v-if="aiScope === 'section'" class="field">
+                <span class="flabel">写作范围</span>
+                <div class="target scope-box" data-testid="ai-scope-box"><b>{{ aiTargetTitle }}<span class="scope-count">（{{ assignRestricted ? '我负责的' : '共' }} {{ aiScopeParagraphs }} 段）</span></b><span>标题{{ assignRestricted ? '和他人负责的段落' : '' }}不会被修改；单次最多 20 段 / 6000 字。</span></div>
+              </div>
+              <div v-else class="target"><b>{{ aiTargetTitle }}</b><span>{{ aiTargetHint }}</span></div>
               <blockquote v-if="aiScope === 'selection'" class="selected-text">{{ selectedText }}</blockquote>
               <div class="field">
                 <span class="flabel">编写规范</span>
@@ -4832,12 +4927,19 @@ onUnmounted(() => {
           </template>
         </DocumentAssignments>
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
-          <section class="ai-preview ai-ghost" aria-label="AI 实时预览" @input.stop @mouseup.stop @keyup.stop>
+          <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 || (aiBusy && aiScope === 'section') }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
-              <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiComplete ? 'AI 草稿' : '生成未完成' }}</span>
+              <span class="ai-preview-status" role="status">{{ aiBusy ? aiProgressLabel : aiStopped ? '已停止' : aiPendingSuggestions.length ? `AI 建议 ${aiPendingSuggestions.length} 处待处理` : aiComplete && aiSuggestions.length === 0 && aiPreviewHtml === '' && aiScope === 'section' ? '本节无需修改' : aiComplete ? 'AI 草稿' : '生成未完成' }}<template v-if="!aiBusy && aiSuggestionDropped">，有 {{ aiSuggestionDropped }} 处超出范围，已忽略</template></span>
               <button v-if="aiBusy" type="button" class="ghost sm" @click="stopAi">停止</button>
+              <template v-else-if="aiPendingSuggestions.length">
+                <button type="button" class="primary sm" title="Alt+Enter 接受当前一处" @click="resolveAllSuggestions(true)">全部接受</button>
+                <button type="button" class="ghost sm" title="Alt+Backspace 拒绝当前一处" @click="resolveAllSuggestions(false)">全部拒绝</button>
+                <button type="button" class="subtle sm" title="Alt+↑" @click="focusSuggestion(aiSuggestionCursor - 1)">上一处</button>
+                <button type="button" class="subtle sm" title="Alt+↓" @click="focusSuggestion(aiSuggestionCursor + 1)">下一处</button>
+              </template>
+              <button v-else-if="aiComplete && aiScope === 'section' && aiPreviewHtml === '' && !aiDraft.trim()" type="button" class="subtle sm" @click="clearAiDraft">关闭</button>
               <template v-else>
-                <button type="button" class="primary sm" :disabled="!canApplyDraft || (aiScope === 'section' && !aiAllowedModes.includes('replace'))" @click="insertSection('replace')">{{ aiInserting ? '写入中…' : aiScope === 'document' ? '应用全文修改' : aiScope === 'selection' ? '替换选中内容' : '替换本节正文' }}</button>
+                <button type="button" class="primary sm" :disabled="!canApplyDraft || (aiScope === 'section' && !aiAllowedModes.includes('replace'))" @click="insertSection('replace')">{{ aiInserting ? '写入中…' : aiScope === 'document' ? '应用全文修改' : aiScope === 'selection' ? '替换选中内容' : aiAllowedModes.includes('append') ? '替换本节正文' : '应用本节修改' }}</button>
                 <button v-if="aiScope === 'section'" type="button" class="ghost sm" :disabled="!canApplyDraft || !aiAllowedModes.includes('append')" @click="insertSection('append')">追加到本节</button>
                 <p v-if="aiComplete && aiScope === 'section' && !aiAllowedModes.includes('replace')" class="form-error" role="status">本节包含特殊 Word 格式，可追加正文。</p>
                 <button type="button" class="subtle sm" :disabled="aiInserting" @click="clearAiDraft">取消</button>
@@ -5110,6 +5212,21 @@ onUnmounted(() => {
 .ai-preview-tools { position:sticky; top:0; z-index:1; display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); padding:var(--space-2) 0; background:var(--brand-50); border-bottom:1px solid var(--brand-200); font-family:var(--font); }
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
+.ai-preview-body:empty { display:none; }
+.paper-content :deep(.ai-out) { opacity:0.45; pointer-events:none; user-select:none; }
+.ai-preview.reviewing { position:fixed; left:50%; bottom:var(--space-6); z-index:20; transform:translateX(-50%); width:auto; max-width:calc(100vw - 2 * var(--space-7)); padding:0 var(--space-3); border-radius:var(--radius-sheet); border:var(--border); background:var(--sheet); box-shadow:var(--shadow-3); }
+.ai-preview.reviewing .ai-preview-tools { position:static; background:transparent; border-bottom:0; }
+.ai-preview.reviewing .ai-preview-status { color:var(--ink); }
+.paper-content :deep(.ai-scope), .paper-content.ai-scoping > :deep(.ai-suggestion) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
+.paper-content :deep(.ai-scope-label) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding:var(--space-2) var(--space-3) 0; color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); user-select:none; }
+.paper-content :deep([data-ai-lock])::after { content:"🔒" attr(data-ai-lock); margin-left:var(--space-2); color:var(--text-tertiary); font-family:var(--font); font-size:var(--text-xs); font-weight:normal; vertical-align:middle; }
+.scope-box .scope-count { font-weight:normal; }
+.paper-content :deep(.ai-del) { text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
+.paper-content :deep(.ai-suggestion) { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
+.paper-content :deep(.ai-suggestion.current) { outline:2px solid var(--stamp); outline-offset:2px; }
+.paper-content :deep(.ai-ins) { flex:1; background:var(--ok-wash); }
+.paper-content :deep(.ai-suggestion-note) { flex:1; color:var(--fault); font-size:var(--text-sm); }
+.paper-content :deep(.ai-suggestion-actions) { display:flex; gap:var(--space-1); font-family:var(--font); }
 .ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--brand-600); }
 
 /* 底部状态栏 */

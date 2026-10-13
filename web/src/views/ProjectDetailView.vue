@@ -10,6 +10,7 @@ import { documentStatusLabel, listDocuments, type DocumentRecord } from "../api/
 import StatePanel from "../components/StatePanel.vue";
 import { formatDateTime, initialOf } from "../format";
 import ProjectFrame from "../components/ProjectFrame.vue";
+import DocChainView from "../components/DocChainView.vue";
 import { displayText, projectStatuses, statusLabel } from "../projects";
 import { useFieldErrors } from "../fieldErrors";
 
@@ -241,6 +242,7 @@ onBeforeUnmount(() => {
   </section>
   <ProjectFrame v-else ref="frame" :project="project" @archive-changed="onArchiveChanged">
     <div class="overview-body">
+      <DocChainView :project-id="project.id" :readonly="archived" />
       <section class="overview-section" aria-labelledby="overview-title">
         <div class="section-head">
           <h2 id="overview-title" class="section-title">项目概述</h2>

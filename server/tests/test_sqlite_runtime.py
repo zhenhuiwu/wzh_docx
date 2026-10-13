@@ -10,9 +10,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 import json
+from tests.block_ops_helper import section_answer
 
 from app.config import clear_settings_cache
 from app.db import connect, migrate
+from tests.migration_chain import files_from
 from app.identity import create_user
 from app.main import create_app
 from app.document_agent import _skill_files
@@ -53,12 +55,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             "111_document_objects.sql",
             "112_document_changes.sql",
             "113_document_conflicts.sql",
-            "114_document_objects_deleted_after.sql",
-            "115_document_conflict_mine_snapshots.sql",
-            "116_project_members_v2.sql",
-            "117_template_versions.sql",
-            "118_document_assignments.sql",
-            "119_document_baselines.sql",
+            *files_from(114),
         ]
         assert migrate() == []
         admin_id = create_user(
@@ -295,7 +292,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             calls = []
             def fake_draft(**kwargs):
                 calls.append(kwargs)
-                return "清晰的正文。"
+                return section_answer(kwargs, "清晰的正文。")
             monkeypatch.setattr("app.documents.draft_section_text", fake_draft)
             selected_block = next(block for block in selection_blocks(section_source) if block["text"] == "旧正文")
             selected = client.post(

@@ -8,6 +8,7 @@ import { endSession, ensureSession, loginDestination, markPasswordChangeRequired
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
 import ProjectDocumentsView from "./views/ProjectDocumentsView.vue";
+import ProjectPlanView from "./views/ProjectPlanView.vue";
 import ProjectsView from "./views/ProjectsView.vue";
 import TemplateDetailView from "./views/TemplateDetailView.vue";
 import TemplateEditorView from "./views/TemplateEditorView.vue";
@@ -102,6 +103,12 @@ export const router = createRouter({
           name: "project-documents",
           component: ProjectDocumentsView,
           meta: { title: "文档" },
+        },
+        {
+          path: "projects/:id/plan",
+          name: "project-plan",
+          component: ProjectPlanView,
+          meta: { title: "分工" },
         },
         {
           path: "projects/:id/documents/:documentId",
