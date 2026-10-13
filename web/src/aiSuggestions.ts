@@ -21,21 +21,62 @@ export interface SuggestionCallbacks {
   onResolve: (suggestion: Suggestion, accepted: boolean) => void;
 }
 
-/** Top-level editor blocks of section `headingIndex` (heading excluded), and the heading itself. */
-export function sectionBlocks(root: HTMLElement, headingIndex: number): { heading: HTMLElement | null; blocks: HTMLElement[] } {
+/** Placeholders of unmounted chunks (editorChunks): they stand for headings/blocks that are not in the DOM. */
+const CHUNK_ATTR = "data-chunk-ph";
+const CHUNK_HEADINGS_ATTR = "data-chunk-headings";
+const CHUNK_BLOCKS_ATTR = "data-chunk-blocks";
+
+/** Minimal element shape so the lookups below can be unit-tested without a DOM. */
+export interface BlockLike { hasAttribute(name: string): boolean; getAttribute?(name: string): string | null; tagName?: string }
+
+function isPlaceholder(node: BlockLike): boolean { return node.hasAttribute(CHUNK_ATTR); }
+function placeholderCount(node: BlockLike, attr: string): number | null {
+  const value = Number(node.getAttribute?.(attr) ?? NaN);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+export interface SectionBlocks<T> {
+  heading: T | null;
+  blocks: T[];
+  /** Part of the section (or its heading) is in an unmounted chunk: missing targets are "not loaded", not "out of scope". */
+  partial: boolean;
+}
+
+/**
+ * Top-level editor blocks of section `headingIndex` (heading excluded), and the heading itself.
+ * `headingIndex` counts every heading of the document; an unmounted chunk's placeholder counts for the
+ * headings it stands for, so the index stays right in chunked (very large) documents. A placeholder of
+ * unknown size makes positions after it unknowable: the result is then empty and `partial`.
+ * With `headingId` the section is found by its heading's object ID instead of by position.
+ */
+export function sectionBlocks<T extends BlockLike = HTMLElement>(root: { children: ArrayLike<unknown> }, headingIndex: number, headingId?: string | null): SectionBlocks<T> {
+  const children = Array.from(root.children) as T[];
   let count = -1;
-  let heading: HTMLElement | null = null;
-  const blocks: HTMLElement[] = [];
-  for (const node of [...root.children] as HTMLElement[]) {
-    if (node.hasAttribute("data-ai-preview")) continue;
-    if (/^H[1-6]$/.test(node.tagName)) {
-      count += 1;
-      if (count === headingIndex) heading = node;
+  let heading: T | null = null;
+  let partial = false;
+  let inside = false;
+  const blocks: T[] = [];
+  for (const node of children) {
+    if (isPlaceholder(node)) {
+      const headings = placeholderCount(node, CHUNK_HEADINGS_ATTR);
+      if (headingId) { if (inside) { partial = true; if (headings !== 0) break; } continue; }
+      if (headings === null) { if (inside || count < headingIndex) return { heading, blocks: heading ? blocks : [], partial: true }; continue; }
+      if (inside) { partial = true; if (headings > 0) break; continue; }
+      if (count < headingIndex && count + headings >= headingIndex) return { heading: null, blocks: [], partial: true };
+      count += headings;
       continue;
     }
-    if (count === headingIndex) blocks.push(node);
+    if (node.hasAttribute("data-ai-preview")) continue;
+    if (/^H[1-6]$/.test(node.tagName || "")) {
+      count += 1;
+      if (inside) break;
+      if (headingId ? node.getAttribute?.("data-object-id") === headingId : count === headingIndex) { heading = node; inside = true; }
+      continue;
+    }
+    if (inside) blocks.push(node);
   }
-  return { heading, blocks };
+  if (headingId && !heading) partial = children.some(isPlaceholder);
+  return { heading, blocks, partial };
 }
 
 /** A Word heading kept as a paragraph (e.g. "1.1 标识"), marked by the server preview. */
@@ -60,8 +101,8 @@ function button(label: string, title: string, className: string, action: () => v
  * section (or that would replace/delete the locked heading) are dropped and
  * counted, as required by spec 30 §4.4.
  */
-export function renderSuggestions(root: HTMLElement, headingIndex: number, operations: BlockOperation[], callbacks: SuggestionCallbacks): { suggestions: Suggestion[]; dropped: number } {
-  const { heading, blocks } = sectionBlocks(root, headingIndex);
+export function renderSuggestions(root: HTMLElement, headingIndex: number, operations: BlockOperation[], callbacks: SuggestionCallbacks, scopeHeadingId?: string | null): { suggestions: Suggestion[]; dropped: number; unloaded: number } {
+  const { heading, blocks, partial } = sectionBlocks<HTMLElement>(root, headingIndex, scopeHeadingId);
   const byId = new Map<string, HTMLElement>();
   for (const block of blocks) {
     const id = block.getAttribute("data-object-id");
@@ -71,10 +112,13 @@ export function renderSuggestions(root: HTMLElement, headingIndex: number, opera
   const lastAfter = new Map<HTMLElement, HTMLElement>();
   const suggestions: Suggestion[] = [];
   let dropped = 0;
+  let unloaded = 0;
   for (const op of operations) {
     const isHeading = headingId !== null && op.blockId === headingId;
     const target = isHeading ? heading : byId.get(op.blockId);
     // Real headings and Word heading paragraphs (data-word-heading) are locked: only insertAfter anchors.
+    // Located by block object ID only; a target in an unmounted chunk is reported, never guessed by position.
+    if (!target && partial) { unloaded += 1; continue; }
     if (!target || ((isHeading || isWordHeading(target)) && op.op !== "insertAfter")) { dropped += 1; continue; }
     const control = document.createElement("div");
     control.setAttribute("data-ai-preview", "");
@@ -108,7 +152,7 @@ export function renderSuggestions(root: HTMLElement, headingIndex: number, opera
     }
     suggestions.push(suggestion);
   }
-  return { suggestions, dropped };
+  return { suggestions, dropped, unloaded };
 }
 
 /** Accept writes the suggestion into the editor as ordinary content; reject restores the original. */
@@ -165,7 +209,7 @@ export function pending(suggestions: Suggestion[]): Suggestion[] {
  */
 export function markScope(root: HTMLElement, headingIndex: number, denied: Set<string>, label: string): number {
   clearScope(root);
-  const { heading, blocks } = sectionBlocks(root, headingIndex);
+  const { heading, blocks } = sectionBlocks<HTMLElement>(root, headingIndex);
   const scope = blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || ""));
   root.classList.add("ai-scoping");
   for (const node of root.querySelectorAll<HTMLElement>(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6")) {
@@ -221,22 +265,61 @@ export function clearScope(root: HTMLElement): void {
 
 /** Number of section blocks the user may change (for the panel header). */
 export function scopeCount(root: HTMLElement, headingIndex: number, denied: Set<string>): number {
-  return sectionBlocks(root, headingIndex).blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || "")).length;
+  return sectionBlocks<HTMLElement>(root, headingIndex).blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || "")).length;
 }
-
-/** Minimal element shape so the counting below can be unit-tested without a DOM. */
-export interface BlockLike { hasAttribute(name: string): boolean }
 
 /**
  * Top-level body blocks in document order, skipping nodes the editor injects
  * (AI suggestions, scope labels, public reference cards — all `data-ai-preview`).
  * Positional lookups ("第 N 段", server clientIndex) must count only these.
+ * Chunk placeholders are skipped too: in a chunked document use the full block list (ChunkedBody.allBlocks).
  */
 export function contentBlocks<T extends BlockLike>(children: ArrayLike<T>): T[] {
   return Array.from(children).filter(block => !block.hasAttribute("data-ai-preview"));
 }
 
-/** The body block at a server-side clientIndex (which counts body blocks only). */
+/**
+ * The body block at a server-side clientIndex (which counts body blocks of the whole document).
+ * Placeholders count for the blocks they stand for; an index inside (or after an unknown-size) unmounted
+ * chunk returns undefined instead of a wrong block.
+ */
 export function contentBlockAt<T extends BlockLike>(children: ArrayLike<T>, index: number): T | undefined {
-  return Number.isInteger(index) && index >= 0 ? contentBlocks(children)[index] : undefined;
+  if (!Number.isInteger(index) || index < 0) return undefined;
+  let at = 0;
+  for (const node of Array.from(children)) {
+    if (isPlaceholder(node)) {
+      const size = placeholderCount(node, CHUNK_BLOCKS_ATTR);
+      if (size === null || index < at + size) return undefined;
+      at += size;
+      continue;
+    }
+    if (node.hasAttribute("data-ai-preview")) continue;
+    if (at === index) return node;
+    at += 1;
+  }
+  return undefined;
+}
+
+/** Full-document block source of a chunked editor (ChunkedBody). */
+export interface ChunkSource<T> { allBlocks(): Array<{ node: T }>; reveal(node: T): boolean }
+
+/** clientIndex lookup that also reaches unmounted chunks: the block is mounted before it is returned. */
+export function bodyBlockAt<T extends BlockLike>(children: ArrayLike<T>, index: number, chunks?: ChunkSource<T> | null): T | undefined {
+  if (!chunks) return contentBlockAt(children, index);
+  if (!Number.isInteger(index) || index < 0) return undefined;
+  const node = chunks.allBlocks()[index]?.node;
+  if (node) chunks.reveal(node);
+  return node;
+}
+
+/** Element shape for object-ID lookups (a top-level block or something inside it carries data-object-id). */
+export interface IdBlock extends BlockLike { querySelector(selector: string): unknown }
+
+/** A block of a chunked editor by object ID, mounting its chunk when needed; null when the ID is not in the document. */
+export function chunkBlockById<T extends IdBlock>(chunks: ChunkSource<T> | null | undefined, id: string): T | null {
+  if (!chunks || !id) return null;
+  const selector = `[data-object-id="${id.replace(/["\\]/g, "\\$&")}"]`;
+  const found = chunks.allBlocks().find(({ node }) => node.getAttribute?.("data-object-id") === id || Boolean(node.querySelector(selector)))?.node ?? null;
+  if (found) chunks.reveal(found);
+  return found;
 }

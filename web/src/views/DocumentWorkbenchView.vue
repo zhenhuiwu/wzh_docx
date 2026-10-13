@@ -48,7 +48,7 @@ import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, fi
 import { listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
-import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, contentBlockAt, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, bodyBlockAt, chunkBlockById, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -1586,12 +1586,14 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
   for (const id of objectIds || []) {
     const node = root.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(id)}"]`);
     if (node) return (node.closest(".paper-content > *") as HTMLElement | null) || node;
+    const unloaded = chunkBlockById(chunks, id) as HTMLElement | null;
+    if (unloaded) return unloaded;
   }
   const byText = findBlockByText(text);
   if (byText) return byText;
   if (!location) return undefined;
   const path = location.headingPath || [];
-  const blocks = contentBlocks(root.children as HTMLCollectionOf<HTMLElement>);
+  const blocks = chunks ? chunks.allBlocks().map(item => item.node as HTMLElement) : contentBlocks(root.children as HTMLCollectionOf<HTMLElement>);
   let start = 0;
   if (path.length) {
     const last = path[path.length - 1];
@@ -1607,6 +1609,7 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
       if ((tags[location.kind] || /./).test(block.tagName) && ++seen === location.ordinal) { target = block; break; }
     }
   }
+  if (target && !target.isConnected) chunks?.reveal(target);
   return target;
 }
 /** 复审：冲突在正文里的位置。exact=false 表示只按章节路径+序号推测（大致位置）。
@@ -3007,6 +3010,7 @@ async function generateSection() {
       return [heading, ...blocks].map(node => node?.getAttribute("data-object-id")).filter((value): value is string => Boolean(value) && !denied.has(value as string));
     })() : undefined;
     const headingIndex = index;
+    const scopeHeadingId = aiScope.value === "section" && index !== null && editor.value ? sectionBlocks(editor.value, index).heading?.getAttribute("data-object-id") ?? null : null;
     if (aiScope.value === "section" && index !== null && editor.value) {
       const count = scopeCount(editor.value, index, aiDeniedIds());
       markScope(editor.value, index, aiDeniedIds(), `写作范围：${aiTargetTitle.value} · ${count} 段${assignRestricted.value ? " · 我负责" : ""}`);
@@ -3030,9 +3034,10 @@ async function generateSection() {
         }
       }
       if (event.type === "done" && event.operations && aiScope.value === "section" && headingIndex !== null && editor.value) {
-        const { suggestions, dropped } = renderSuggestions(editor.value, headingIndex, event.operations, suggestionCallbacks);
+        const { suggestions, dropped, unloaded } = renderSuggestions(editor.value, headingIndex, event.operations, suggestionCallbacks, scopeHeadingId);
         aiSuggestions.value = suggestions;
-        aiSuggestionDropped.value = dropped;
+        aiSuggestionDropped.value = dropped + unloaded;
+        if (unloaded) noteAction(`有 ${unloaded} 处修改所在的段落尚未加载，已忽略，请重新生成。`, 6000);
         aiSuggestionAccepted.value = 0;
         aiPreviewHtml.value = "";
         if (suggestions.length) {
@@ -4233,7 +4238,8 @@ const assignButton = ref<HTMLButtonElement | null>(null);
 function closeAssign() { assignOpen.value = false; void nextTick(() => assignButton.value?.focus()); }
 function locateViolation(item: Violation) {
   const root = editor.value;
-  const node = nodeOf(item.objectId) ?? (typeof item.clientIndex === "number" ? (root ? contentBlockAt(root.children as HTMLCollectionOf<HTMLElement>, item.clientIndex) ?? null : null) : null);
+  // 40 复验 N6: by object ID first (mounting its chunk); the clientIndex fallback counts the whole document, never the mounted part only.
+  const node = nodeOf(item.objectId) ?? (chunkBlockById(chunks, item.objectId ?? "") as HTMLElement | null) ?? (typeof item.clientIndex === "number" ? (root ? (bodyBlockAt<Element>(root.children, item.clientIndex, chunks) as HTMLElement | undefined) ?? null : null) : null);
   if (!node) { noteAction("这一处已不在正文中（可能被删除）。", 5000); return; }
   node.scrollIntoView({ behavior: "smooth", block: "center" });
   node.classList.add("a07-hit");
