@@ -468,9 +468,15 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             page2.get_by_role("button", name="版本记录", exact=True).click()
         g6()
 
+        def open_members():
+            """首页改版（39bb8cb）后成员表与分工概述收在「成员与权限」里：从右栏入口展开。"""
+            page.goto(f"{WEB}/projects/{pid}")
+            page.get_by_test_id("side-manage-members").click()
+            expect(page.locator("#members-anchor")).to_be_visible(timeout=15000)
+
         @step("G7 成员表“编写分工”列；点数字打开概述按人视图并定位")
         def g7():
-            page.goto(f"{WEB}/projects/{pid}")
+            open_members()
             row = page.locator(f'[data-testid=member-row][data-user-id="{users["lisi"]}"]')
             expect(row.get_by_test_id("member-assign-count")).to_contain_text("1 章", timeout=30000)
             expect(row.get_by_test_id("member-assign-count")).to_contain_text("1 篇文档")
@@ -484,7 +490,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             person.get_by_test_id("overview-assign-person-link").first.click()
             expect(page.get_by_test_id("assign-filter-person")).to_have_value(str(users["lisi"]), timeout=60000)
             expect(page.get_by_test_id("assign-heading")).to_have_count(1)
-            page.goto(f"{WEB}/projects/{pid}")
+            open_members()
         g7()
 
         @step("G8 S-5：降为只读前确认（取消不改；确认后分工清除）")
@@ -508,7 +514,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
 
         @step("G9 概述“编写分工”按文档：已分 / 总章数，未分配可去分配")
         def g9():
-            page.goto(f"{WEB}/projects/{pid}")
+            open_members()
             section = page.get_by_test_id("overview-assign-section")
             section.get_by_role("button", name="按文档").click()
             doc_row = section.locator(f'[data-testid=overview-assign-doc-row][data-document-id="{did}"]')
