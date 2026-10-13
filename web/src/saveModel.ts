@@ -40,7 +40,7 @@ export function classifySaveError(error: ErrorLike): FailureKind {
   // A05 R3（16 §2.10）：项目已归档 → 只读，不能当作“文档被别人更新”的 stale
   if (status === 409 && code === "PROJECT_ARCHIVED") return "readonly";
   // A07（17 §4.5）：越过编写分工 / 分工检查不可用 / 页面过旧没带块标识——不是“被别人更新”，也不能自动重试
-  if ((status === 409 && (code === "SECTION_NOT_ASSIGNED" || code === "ASSIGNMENT_CHECK_UNAVAILABLE")) || (status === 422 && code === "BLOCK_IDS_REQUIRED")) return "assignment";
+  if ((status === 409 && (code === "SECTION_NOT_ASSIGNED" || code === "ASSIGNMENT_CHECK_UNAVAILABLE" || code === "CHAPTER_READONLY")) || (status === 422 && code === "BLOCK_IDS_REQUIRED")) return "assignment";
   if (status === 409) return "stale";
   if (status === 422 && code === "IDEMPOTENCY_KEY_REUSED") return "rekey";
   if (status === 403 && code !== "PASSWORD_CHANGE_REQUIRED") return "readonly";

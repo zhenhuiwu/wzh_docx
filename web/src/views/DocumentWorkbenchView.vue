@@ -14,6 +14,9 @@ import { getDocumentAssignments, type DocumentAssignmentsState } from "../api/do
 import DocumentSkillSettings from "../components/DocumentSkillSettings.vue";
 import SaveStatus from "../components/SaveStatus.vue";
 import LeaveDialog from "../components/LeaveDialog.vue";
+import AiStatusChip from "../components/ai/AiStatusChip.vue";
+import AiSectionEntry from "../components/ai/AiSectionEntry.vue";
+import AiLeaveDialog from "../components/ai/AiLeaveDialog.vue";
 import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
@@ -42,7 +45,9 @@ import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
-import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
+import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
+import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
+import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, contentBlockAt, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
 import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
@@ -291,6 +296,8 @@ function countText(ids: string[], headings: string[]) {
 const mineCountText = computed(() => assignInfo.value ? countText([...assignInfo.value.editable].filter(id => assignInfo.value!.order.includes(id)), assignInfo.value.headings) : "");
 const mineIntro = computed(() => assignRestricted.value && !mineIntroOff.value && Boolean(assignInfo.value?.editable.size) && !noAssignReadonly
   ? `你负责本文档的 ${mineCountText.value}，其他部分只读。` : "");
+/** Read-only chapters from the server (same rule as the CHAPTER_READONLY save guard). */
+const lockedChapters = ref<LockedChapter[]>([]);
 let ownershipPending: Promise<void> | null = null;
 function refreshOwnership(record = document.value): Promise<void> {
   const task = loadOwnership(record);
@@ -307,15 +314,18 @@ async function loadOwnership(record = document.value) {
   if (!record) return;
   const seq = ++ownershipSeq;
   try {
-    const [data, view] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null)]);
+    const [data, view, chapters] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null), getLockedChapters(record.id).catch(() => [] as LockedChapter[])]);
     if (document.value !== record || seq !== ownershipSeq) return;
     baselineObjects = data.objectModel ? data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown })) : [];
     // 27 复验 M-4：编辑区渲染所依据的那一版对象（ID 与编辑区 data-object-id 一致），“只保存我负责的部分”以它为底
     if (data.objectModel && data.documentRevision === record.revision) baseSnapshot = { revision: record.revision, objects: [...baselineObjects] };
     const locked = new Map<string, string>();
     const editableIds = new Set<string>();
+    lockedChapters.value = chapters;
+    const chapterLocks = chapterLockMap(chapters);
     for (const item of data.objects) {
-      if (item.editable === false) locked.set(item.id, ownerNames(item.owners));
+      if (chapterLocks.has(item.id)) locked.set(item.id, CHAPTER_LOCK_LABEL);
+      else if (item.editable === false) locked.set(item.id, ownerNames(item.owners));
       else editableIds.add(item.id);
     }
     const prev = assignInfo.value;
@@ -338,7 +348,7 @@ function blockIdsFor(content: string): Array<string | null> | undefined {
   return assignBlockIds(content, baselineObjects);
 }
 function lockText(id: string) {
-  return lockedText(assignInfo.value?.locked.get(id) || "", assignInfo.value?.projectOwner || "");
+  return chapterLockMap(lockedChapters.value).get(id) ?? lockedText(assignInfo.value?.locked.get(id) || "", assignInfo.value?.projectOwner || "");
 }
 /** 29 M-6：没有分给我的部分时整篇只读；分工变化时提示得到/失去的部分。 */
 function noteOwnershipChange(prev: typeof assignInfo.value, next: NonNullable<typeof assignInfo.value>) {
@@ -474,6 +484,7 @@ function applyLocks() {
     }
     if (mine.has(id)) node.setAttribute("data-mine", ""); else node.removeAttribute("data-mine");
   }
+  decorateChapterLocks(root, chapterHeadingIds(lockedChapters.value));
 }
 function showLockedHint(node: Element) {
   const rect = node.getBoundingClientRect();
@@ -1447,7 +1458,7 @@ function findBlock(location: LocationInfo | null | undefined, objectIds?: string
   if (byText) return byText;
   if (!location) return undefined;
   const path = location.headingPath || [];
-  const blocks = [...root.children] as HTMLElement[];
+  const blocks = contentBlocks(root.children as HTMLCollectionOf<HTMLElement>);
   let start = 0;
   if (path.length) {
     const last = path[path.length - 1];
@@ -1768,6 +1779,22 @@ async function removeMemory() {
   } finally {
     memoryLoading.value = false;
   }
+}
+// Spec 30 §4.1: [AI 编写本节] beside the heading sends the same request as the panel.
+async function startSectionAi() {
+  chooseAiScope("section");
+  await nextTick();
+  if (canStartAi.value) await generateSection();
+}
+// P2-10: leaving with unresolved AI suggestions asks explicitly.
+const aiLeave = ref<{ target: string } | null>(null);
+function leaveDiscardingAi() {
+  const target = aiLeave.value?.target;
+  aiLeave.value = null;
+  clearAiDraft();
+  if (!target) return;
+  leaveBypass = true;
+  void router.push(target).finally(() => { leaveBypass = false; });
 }
 function chooseAiScope(scope: WritingMemory["scope"]) {
   if (aiLocked.value) return;
@@ -4009,6 +4036,7 @@ function handleSaveError(error: unknown, content: string, trigger: "auto" | "man
       }
       const message = apiError.code === "SECTION_NOT_ASSIGNED"
         ? `这次修改没有保存：其中 ${total || 1} 处属于他人负责的部分。`
+        : apiError.code === "CHAPTER_READONLY" ? chapterReadonlyMessage(apiError.details, lockedChapters.value)
         : apiError.code === "BLOCK_IDS_REQUIRED" ? "页面版本过旧，请刷新页面后再保存。你的修改已保留在本机。" : `${apiError.message}你的修改已保留在本机。`;
       blocked.value = { message, content, code: apiError.code };
       void refreshOwnership();
@@ -4040,7 +4068,7 @@ const assignButton = ref<HTMLButtonElement | null>(null);
 function closeAssign() { assignOpen.value = false; void nextTick(() => assignButton.value?.focus()); }
 function locateViolation(item: Violation) {
   const root = editor.value;
-  const node = nodeOf(item.objectId) ?? (typeof item.clientIndex === "number" ? root?.children[item.clientIndex] as HTMLElement | undefined ?? null : null);
+  const node = nodeOf(item.objectId) ?? (typeof item.clientIndex === "number" ? (root ? contentBlockAt(root.children as HTMLCollectionOf<HTMLElement>, item.clientIndex) ?? null : null) : null);
   if (!node) { noteAction("这一处已不在正文中（可能被删除）。", 5000); return; }
   node.scrollIntoView({ behavior: "smooth", block: "center" });
   node.classList.add("a07-hit");
@@ -4474,6 +4502,10 @@ async function leaveDocument(to?: RouteLocationNormalized) {
     noteAction("操作仍在进行，请完成或停止后再离开文档。");
     return false;
   }
+  if (aiPendingSuggestions.value.length) {
+    aiLeave.value = { target: to?.fullPath || "" };
+    return false;
+  }
   if (aiDraft.value && !window.confirm("尚未采纳的 AI 草稿会丢失，是否离开？")) return false;
   window.clearTimeout(autoSaveTimer);
   if (hasUnsaved.value && !readonly.value) {
@@ -4762,6 +4794,7 @@ onUnmounted(() => {
           <span v-if="templateVersion?.legacy" class="tag plain" data-testid="doc-template-legacy" title="本文档创建于模板版本管理之前，使用当时的模板结构，不受之后的模板版本影响。">版本化之前</span>
           <span v-if="templateVersion?.newer" class="tag info" data-testid="doc-template-newer" :title="templateVersion.newer">模板有新版本</span>
           <SaveStatus :state="capsule" :label="capsuleText" :detail="capsuleDetail" @save="save('manual')" @retry="retryNow" @details="locateBlocked" />
+          <AiStatusChip :busy="aiBusy" :pending="aiPendingSuggestions.length" :error="aiError" :stopped="aiStopped" :progress="aiBusy ? aiProgressLabel : ''" :target="aiScope === 'section' ? aiTargetTitle : ''" />
           <span v-if="wholeSave" class="whole-tag" data-testid="whole-save" tabindex="0" aria-describedby="whole-save-tip">整篇保存<span id="whole-save-tip" class="tip" role="tooltip">这份文档暂时只能整篇保存。和他人同时编辑时，冲突按整段对比，不影响保存。</span></span>
         </div>
         <div class="spacer"></div>
@@ -5138,6 +5171,8 @@ onUnmounted(() => {
         <Teleport v-for="item in publicHosts" :key="item.key" :to="item.host">
           <PublicBlockEmbed :document-id="document?.id ?? ''" :reference="item.ref" :plan-link="{ name: 'project-plan', params: { id: route.params.id } }" @seen="loadPublicRefs" />
         </Teleport>
+        <AiSectionEntry v-if="mode === 'edit'" :editor="editor" :heading-index="selectedHeading" :version="editorVersion" :hidden="readonly || Boolean(aiPreviewHost) || aiBusy || Boolean(aiUnavailable('writing'))" :disabled="!canStartAi || aiLocked" @start="startSectionAi" />
+        <AiLeaveDialog v-if="aiLeave" :count="aiPendingSuggestions.length" @stay="aiLeave = null" @leave="leaveDiscardingAi" />
         <Teleport v-if="aiPreviewHost" :to="aiPreviewHost">
           <section class="ai-preview ai-ghost" :class="{ reviewing: aiPendingSuggestions.length > 0 || (aiBusy && aiScope === 'section') }" :aria-label="aiPendingSuggestions.length ? 'AI 建议确认' : 'AI 实时预览'" @input.stop @mouseup.stop @keyup.stop>
             <div class="ai-preview-tools">
@@ -5434,20 +5469,10 @@ onUnmounted(() => {
 .ai-preview-status { margin-right:auto; color:var(--brand-700); font-size:var(--text-sm); font-weight:var(--weight-semibold); }
 .ai-preview-body { padding-top:var(--space-2); min-height:var(--space-7); }
 .ai-preview-body:empty { display:none; }
-.paper-content :deep(.ai-out) { opacity:0.45; pointer-events:none; user-select:none; }
 .ai-preview.reviewing { position:fixed; left:50%; bottom:var(--space-6); z-index:20; transform:translateX(-50%); width:auto; max-width:calc(100vw - 2 * var(--space-7)); padding:0 var(--space-3); border-radius:var(--radius-sheet); border:var(--border); background:var(--sheet); box-shadow:var(--shadow-3); }
 .ai-preview.reviewing .ai-preview-tools { position:static; background:transparent; border-bottom:0; }
 .ai-preview.reviewing .ai-preview-status { color:var(--ink); }
-.paper-content :deep(.ai-scope), .paper-content.ai-scoping > :deep(.ai-suggestion) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
-.paper-content :deep(.ai-scope-label) { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding:var(--space-2) var(--space-3) 0; color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); user-select:none; }
-.paper-content :deep([data-ai-lock])::after { content:"🔒" attr(data-ai-lock); margin-left:var(--space-2); color:var(--text-tertiary); font-family:var(--font); font-size:var(--text-xs); font-weight:normal; vertical-align:middle; }
 .scope-box .scope-count { font-weight:normal; }
-.paper-content :deep(.ai-del) { text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
-.paper-content :deep(.ai-suggestion) { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
-.paper-content :deep(.ai-suggestion.current) { outline:2px solid var(--stamp); outline-offset:2px; }
-.paper-content :deep(.ai-ins) { flex:1; background:var(--ok-wash); }
-.paper-content :deep(.ai-suggestion-note) { flex:1; color:var(--fault); font-size:var(--text-sm); }
-.paper-content :deep(.ai-suggestion-actions) { display:flex; gap:var(--space-1); font-family:var(--font); }
 .ai-preview-body.writing::after { content:''; display:inline-block; width:1px; height:1em; background:var(--brand-600); }
 
 /* 底部状态栏 */

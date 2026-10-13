@@ -6,6 +6,7 @@
  * Suggestion nodes carry `data-ai-preview`, so serialization ignores them.
  */
 import type { BlockOperation } from "./api/documents";
+import "./styles/aiInplace.css";
 
 export interface Suggestion {
   op: BlockOperation;
@@ -86,10 +87,8 @@ export function renderSuggestions(root: HTMLElement, headingIndex: number, opera
       inserted.innerHTML = callbacks.sanitize(op.html);
       control.append(inserted);
     } else {
-      const note = document.createElement("span");
-      note.className = "ai-suggestion-note";
-      note.textContent = "建议删除上一段";
-      control.append(note);
+      // The ✓/✕ of a deletion sit on the right of the struck-through paragraph itself.
+      control.className = "ai-suggestion ai-suggestion-inline";
     }
     if (op.op !== "insertAfter") target.classList.add("ai-del");
     const suggestion: Suggestion = { op, target, inserted, control, resolved: false };
@@ -100,9 +99,13 @@ export function renderSuggestions(root: HTMLElement, headingIndex: number, opera
       button("✕", "拒绝这一处", "subtle sm", () => resolveSuggestion(suggestion, false, callbacks)),
     );
     control.append(actions);
-    const anchor = lastAfter.get(target) ?? target;
-    anchor.after(control);
-    lastAfter.set(target, control);
+    if (op.op === "delete") {
+      target.append(control);
+    } else {
+      const anchor = lastAfter.get(target) ?? target;
+      anchor.after(control);
+      lastAfter.set(target, control);
+    }
     suggestions.push(suggestion);
   }
   return { suggestions, dropped };
@@ -119,6 +122,8 @@ export function resolveSuggestion(suggestion: Suggestion, accepted: boolean, cal
     const id = op.op === "replace" ? target.getAttribute("data-object-id") : null;
     const first = nodes[0];
     if (id && first instanceof HTMLElement) first.setAttribute("data-object-id", id);
+    const template = formatTemplate(op, target);
+    if (template) for (const node of nodes) if (node instanceof HTMLElement && node.tagName === template.tagName) copyFormat(template, node);
     control.replaceWith(...nodes);
   } else {
     control.remove();
@@ -128,6 +133,24 @@ export function resolveSuggestion(suggestion: Suggestion, accepted: boolean, cal
     else target.classList.remove("ai-del");
   }
   callbacks.onResolve(suggestion, accepted);
+}
+
+/** The body block whose Word formatting an accepted suggestion takes over (P2-9: keep indent and gutter). */
+function formatTemplate(op: BlockOperation, target: HTMLElement): HTMLElement | null {
+  if (op.op === "replace") return target;
+  if (/^H[1-6]$/.test(target.tagName) || isWordHeading(target)) {
+    let next = target.nextElementSibling as HTMLElement | null;
+    while (next && (next.hasAttribute("data-ai-preview") || isWordHeading(next))) next = next.nextElementSibling as HTMLElement | null;
+    return next && !/^H[1-6]$/.test(next.tagName) ? next : null;
+  }
+  return target;
+}
+
+function copyFormat(from: HTMLElement, to: HTMLElement) {
+  const style = from.getAttribute("style");
+  if (style && !to.getAttribute("style")) to.setAttribute("style", style);
+  const mine = from.getAttribute("data-mine");
+  if (mine !== null) to.setAttribute("data-mine", mine);
 }
 
 export function pending(suggestions: Suggestion[]): Suggestion[] {
@@ -147,8 +170,9 @@ export function markScope(root: HTMLElement, headingIndex: number, denied: Set<s
   root.classList.add("ai-scoping");
   for (const node of root.querySelectorAll<HTMLElement>(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6")) {
     node.setAttribute("data-ai-lock", node === heading ? "标题已固定" : "");
+    if (node === heading) appendLock(node);
   }
-  for (const node of blocks) if (isWordHeading(node)) node.setAttribute("data-ai-lock", "标题已固定");
+  for (const node of blocks) if (isWordHeading(node)) { node.setAttribute("data-ai-lock", "标题已固定"); appendLock(node); }
   for (const block of scope) block.classList.add("ai-scope");
   // Everything outside the writing scope is faded and inert (spec 30 §4.2).
   for (const node of [...root.children] as HTMLElement[]) {
@@ -169,8 +193,24 @@ export function markScope(root: HTMLElement, headingIndex: number, denied: Set<s
   return scope.length;
 }
 
+const LOCK_SVG = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="1.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>';
+
+/** Lock badge after the heading text (same icon as the outline); "标题已固定" is its tooltip. */
+function appendLock(node: HTMLElement) {
+  const lock = document.createElement("span");
+  lock.setAttribute("data-ai-preview", "");
+  lock.contentEditable = "false";
+  lock.className = "ai-lock";
+  lock.title = "标题已固定";
+  lock.setAttribute("role", "img");
+  lock.setAttribute("aria-label", "标题已固定");
+  lock.innerHTML = LOCK_SVG;
+  node.append(lock);
+}
+
 export function clearScope(root: HTMLElement): void {
   root.classList.remove("ai-scoping");
+  root.querySelectorAll(".ai-lock").forEach(node => node.remove());
   root.querySelectorAll("[data-ai-scope-label]").forEach(node => node.remove());
   for (const node of root.querySelectorAll<HTMLElement>("[data-ai-lock]")) node.removeAttribute("data-ai-lock");
   for (const node of root.querySelectorAll<HTMLElement>(".ai-scope, .ai-out")) {
@@ -182,4 +222,21 @@ export function clearScope(root: HTMLElement): void {
 /** Number of section blocks the user may change (for the panel header). */
 export function scopeCount(root: HTMLElement, headingIndex: number, denied: Set<string>): number {
   return sectionBlocks(root, headingIndex).blocks.filter(block => !isWordHeading(block) && !denied.has(block.getAttribute("data-object-id") || "")).length;
+}
+
+/** Minimal element shape so the counting below can be unit-tested without a DOM. */
+export interface BlockLike { hasAttribute(name: string): boolean }
+
+/**
+ * Top-level body blocks in document order, skipping nodes the editor injects
+ * (AI suggestions, scope labels, public reference cards — all `data-ai-preview`).
+ * Positional lookups ("第 N 段", server clientIndex) must count only these.
+ */
+export function contentBlocks<T extends BlockLike>(children: ArrayLike<T>): T[] {
+  return Array.from(children).filter(block => !block.hasAttribute("data-ai-preview"));
+}
+
+/** The body block at a server-side clientIndex (which counts body blocks only). */
+export function contentBlockAt<T extends BlockLike>(children: ArrayLike<T>, index: number): T | undefined {
+  return Number.isInteger(index) && index >= 0 ? contentBlocks(children)[index] : undefined;
 }

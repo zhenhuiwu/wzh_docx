@@ -1,0 +1,18 @@
+/* AI in-place editing inside the editor (spec 30 §4). Nodes are created by aiSuggestions.ts, so these rules are global. */
+.paper-content .ai-out { opacity:0.45; pointer-events:none; user-select:none; }
+.paper-content .ai-scope, .paper-content.ai-scoping > .ai-suggestion { border-left:2px solid var(--stamp); background:var(--stamp-wash); padding-left:var(--space-3); }
+/* P1-6: the scope label is its own line with breathing room */
+.paper-content .ai-scope-label { display:block; margin:var(--space-2) 0 0; padding:var(--space-2) var(--space-3); border-left:2px solid var(--stamp); background:var(--stamp-wash); color:var(--stamp); font-family:var(--font); font-size:var(--text-sm); line-height:var(--leading-sm); text-indent:0; user-select:none; }
+/* P1-6: lock icon to the right of the heading text, never over the number; "标题已固定" is the tooltip */
+.paper-content .ai-lock { display:inline-flex; align-items:center; margin-left:var(--space-2); vertical-align:middle; color:var(--text-tertiary); text-indent:0; cursor:default; }
+.paper-content .ai-lock .ico { width:var(--icon-sm); height:var(--icon-sm); fill:none; stroke:currentColor; stroke-width:1.6; }
+/* P1-6: one blue line only — hide the assignment gutter while the scope frame is shown */
+.paper-content.ai-scoping [data-mine]::after, .paper-content.ai-scoping [data-a07-lock]::before { display:none !important; }
+.paper-content .ai-del { position:relative; text-decoration:line-through; color:var(--fault); background:var(--fault-wash); }
+.paper-content .ai-suggestion { position:relative; display:flex; align-items:flex-start; gap:var(--space-2); margin:var(--space-1) 0; border-left:2px solid var(--stamp); }
+.paper-content .ai-suggestion.current { outline:2px solid var(--stamp); outline-offset:2px; }
+.paper-content .ai-ins { flex:1; background:var(--ok-wash); }
+.paper-content .ai-suggestion-actions { display:flex; gap:var(--space-1); font-family:var(--font); text-indent:0; }
+/* P2-9: deletion ✓/✕ sit on the right of the struck paragraph itself */
+.paper-content .ai-del:has(> .ai-suggestion-inline) { padding-right:calc(var(--space-7) + var(--space-5)); }
+.paper-content .ai-suggestion-inline { position:absolute; top:0; right:0; margin:0; border-left:0; background:transparent; text-decoration:none; }
