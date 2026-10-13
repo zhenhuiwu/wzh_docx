@@ -4887,18 +4887,33 @@ async function format(command: string, value?: string) {
   onEditorInput();
   await refreshEditorFormatting();
 }
+/** 40 R5.1-3：跳转后目标标题停在视口顶边下 JUMP_TOP_GAP px，落在“当前章节”判定线（顶边 + 8px，见 trackViewHeading）之内，
+ * 目录高亮 / 第 x/N 节 / 状态栏显示的就是用户点的那一节（原先 block:center 会停在中部，高亮落后一两节）。 */
+const JUMP_TOP_GAP = 4;
+function headingTopDelta(target: HTMLElement): number | null {
+  const scroller = desk.value;
+  if (!scroller) return null;
+  return target.getBoundingClientRect().top - (scroller.getBoundingClientRect().top + JUMP_TOP_GAP);
+}
 function scrollToHeading(index: number) {
   const target = chunks ? chunks.headingElement(index) : editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
+  const scroller = desk.value;
   if (!target) return;
-  if (!chunkedEditor.value) { target.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
-  // 分段渲染时上方块的高度是估算值：先跳过去，等目标附近渲染出真实高度后再校正，直到位置稳定（最多 6 帧）
-  let last = Number.NaN;
+  if (!scroller) { target.scrollIntoView({ block: "start" }); return; }
+  if (!chunkedEditor.value) {
+    const delta = headingTopDelta(target);
+    if (delta !== null) scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" });
+    return;
+  }
+  // 分段渲染时上方块的高度是估算值：先跳过去，等目标附近渲染出真实高度后再按顶边校正，直到位置稳定（最多 6 帧）
   let tries = 0;
   const settle = () => {
-    target.scrollIntoView({ block: "center" });
-    const top = target.getBoundingClientRect().top;
-    if (Math.abs(top - last) < 1 || ++tries >= 6) return;
-    last = top;
+    const delta = headingTopDelta(target);
+    if (delta === null) return;
+    const before = scroller.scrollTop;
+    if (Math.abs(delta) >= 1) scroller.scrollTop = before + delta;
+    // 已对齐，或到了文末滚不动了（scrollTop 不再变）：停
+    if (Math.abs(delta) < 1 || (Math.abs(scroller.scrollTop - before) < 1 && tries > 0) || ++tries >= 6) { trackViewHeading(); return; }
     requestAnimationFrame(settle);
   };
   settle();
