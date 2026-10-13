@@ -3740,6 +3740,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       record.revision = result.revision;
       record.status = result.status;
       record.markdownContent = serverText;
+      scheduleKeepaliveBase(record);
       mergeBase = null;
       domBase = dsend;
       let rerender = false;
@@ -4525,6 +4526,24 @@ function onOnline() {
   if (isDirty.value && !readonly.value) { failures.value = 0; failingSince = null; void save("auto"); }
 }
 function onOffline() { online.value = false; }
+/**
+ * QA 复验 11：大文档 Ctrl+S（整篇 /content 保存）后修订号前进，但关页按块保存的基准（keepaliveBase）还停在打开时那一版，
+ * 关页时 onPageHide 因修订对不上不发 keepalive，修改只留在本机草稿；重开后自动恢复草稿要先 PATCH /content 才可编辑（+0.8–1.3 s）。
+ * 保存成功后（只对超过 keepalive 上限、关页要走按块保存的大文档）稍后重取对象，把基准前移到刚保存的修订。
+ */
+let keepaliveTimer: number | undefined;
+function scheduleKeepaliveBase(record: DocumentRecord) {
+  window.clearTimeout(keepaliveTimer);
+  if (new Blob([record.markdownContent]).size <= 60000) return;
+  keepaliveTimer = window.setTimeout(() => {
+    const revision = record.revision;
+    void getAllObjects(record.id).then(data => {
+      if (document.value !== record || record.revision !== revision || data.documentRevision !== revision) return;
+      keepaliveBase = data.objectModel ? { revision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null;
+    }).catch(() => undefined);
+  }, KEEPALIVE_BASE_DELAY_MS);
+}
+const KEEPALIVE_BASE_DELAY_MS = 300;
 /** 01 §6.5：关闭页面时用 keepalive 发出最后一次保存；键先写入草稿，下次打开按键核对是否落库。 */
 function onPageHide() {
   const record = document.value;
