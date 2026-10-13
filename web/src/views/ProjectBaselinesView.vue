@@ -215,7 +215,7 @@ async function submit() {
                 </table>
               </div>
               <section v-if="comparing" class="compare-card" :aria-label="`${comparing.name} 对比`">
-                <div class="compare-head"><h3>{{ comparing.name }}：{{ comparing.to ? `版本 ${comparing.seq} → ${detail.label}` : `${detail.label} → 当前` }}</h3><button type="button" class="ghost" @click="comparing = null">关闭对比</button></div>
+                <div class="compare-head"><h3>{{ comparing.name }}：{{ comparing.to ? `v${comparing.seq} → v${comparing.to}（${detail.label}）` : `${detail.label}（v${comparing.seq}）→ 当前` }}</h3><button type="button" class="ghost" @click="comparing = null">关闭对比</button></div>
                 <DiffView :key="`${comparing.documentId}-${comparing.seq}-${comparing.to ?? 'current'}`" :document-id="comparing.documentId" :base="comparing.seq" :compare="comparing.to ?? 'current'" />
               </section>
             </template>

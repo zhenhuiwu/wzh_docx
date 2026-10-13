@@ -208,6 +208,9 @@ def test_upstream_new_baseline_is_baseline_based(document_context):  # noqa: F81
     r = client.post(f"/api/v1/projects/{project}/baselines", headers=headers, json={"name": "评审", "documentIds": [srs, plan]})
     assert r.status_code == 201, r.text
     assert node(plan)["baselineSeq"] == 1 and node(plan)["upstreamChanged"] is False
+    # 41 复验：文档版本记作 v{n}，项目基线记作 B{n}，两种编号不再混用
+    assert r.json()["data"]["label"] == "B1"
+    assert all(v["label"].startswith("v") for v in client.get(f"/api/v1/documents/{srs}/baselines").json()["data"]["items"])
     client.post(f"/api/v1/projects/{project}/baselines", headers=headers, json={"name": "无变化", "documentIds": [srs]})
     assert node(plan)["upstreamChanged"] is False  # 新基线但上游版本没变
     edit(srs)

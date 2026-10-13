@@ -252,7 +252,7 @@ const summary = computed(() => {
           <h2 class="group-title"><router-link class="text" :to="{ name: 'project', params: { id: group.id } }">{{ group.name }}</router-link></h2>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>文档</th><th>我的角色</th><th>状态</th><th>分给我的</th><th>最近基线</th><th>更新时间</th><th class="actions">操作</th></tr></thead>
+              <thead><tr><th>文档</th><th>我的角色</th><th>状态</th><th>分给我的</th><th>最近版本</th><th>更新时间</th><th class="actions">操作</th></tr></thead>
               <tbody>
                 <tr v-for="doc in group.docs" :key="doc.id">
                   <td class="name">{{ doc.name }}</td>

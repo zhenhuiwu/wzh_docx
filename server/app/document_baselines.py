@@ -105,7 +105,7 @@ def _json(value, default):
 
 def _public(row) -> dict:
     return {
-        "id": str(row["id"]), "seq": row["seq"], "label": f"B{row['seq']}", "message": row["message"],
+        "id": str(row["id"]), "seq": row["seq"], "label": f"v{row['seq']}", "message": row["message"],
         "kind": row["kind"], "revertedFromSeq": row["reverted_from_seq"], "revision": row["revision"],
         "sectionCount": row["section_count"], "paragraphCount": row["paragraph_count"],
         "createdAt": format_timestamp(row["created_at"]),
