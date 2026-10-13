@@ -4,7 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type Rout
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
-import { CHUNK_ATTR, ChunkedBody, quickBodyHtml } from "../editorChunks";
+import { CHUNK_ATTR, ChunkedBody, quickBodyHtml, searchBlocks, textRange, type SearchHit } from "../editorChunks";
 import DocumentAssignments from "../components/DocumentAssignments.vue";
 import DocumentBlockGuidance from "../components/DocumentBlockGuidance.vue";
 import DocumentReferences from "../components/DocumentReferences.vue";
@@ -848,19 +848,25 @@ const viewHeading = ref<number | null>(null);
 const shownHeading = computed(() => viewHeading.value ?? selectedHeading.value);
 const outlinePosition = computed(() => shownHeading.value === null ? null : shownHeading.value + 1);
 let viewFrame = 0;
+/** 查找跳转后短时间内不按滚动重算当前章节（跳转本身触发的滚动会把高亮带到上一节） */
+let viewPinnedUntil = 0;
 function trackViewHeading() {
-  if (viewFrame) return;
+  if (viewFrame || Date.now() < viewPinnedUntil) return;
   viewFrame = requestAnimationFrame(() => {
     viewFrame = 0;
     const root = editor.value, scroller = desk.value;
     if (!root || !scroller) return;
     const top = scroller.getBoundingClientRect().top + 96;
-    const list = chunks ? chunks.mountedHeadings() : [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].map((element, index) => ({ element, index }));
-    let found: number | null = null;
-    for (const item of list) {
-      if (item.element.getBoundingClientRect().top <= top) found = item.index;
-      else { if (found === null) found = Math.max(0, item.index - 1); break; }
+    let found: number | null;
+    if (chunks) found = chunks.headingAtLine(top);
+    else {
+      found = null;
+      for (const [index, element] of [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].entries()) {
+        if (element.getBoundingClientRect().top > top) break;
+        found = index;
+      }
     }
+    if (found === null && outline.value.length) found = 0;
     if (found !== null && found !== viewHeading.value) viewHeading.value = found;
   });
 }
@@ -890,6 +896,94 @@ function releaseChunks() {
   placePublicEmbeds();
   void nextTick(() => { layoutWordTabs(); applyConflictMarks(); });
 }
+// ---------- 正文内搜索（Ctrl+F）：浏览器自带查找找不到未挂载段里的文字，改为在整篇块文字里找 ----------
+const findOpen = ref(false);
+const findQuery = ref("");
+const findInput = ref<HTMLInputElement | null>(null);
+const findHits = shallowRef<SearchHit[]>([]);
+const findTotal = ref(0);
+const findActive = ref(-1);
+let findBlocks: Element[] = [];
+let findTimer: number | undefined;
+function findBlockList(): Element[] {
+  if (chunks) return chunks.allBlocks().map(item => item.node);
+  return editor.value ? ([...editor.value.children] as Element[]).filter(node => !node.hasAttribute("data-ai-preview")) : [];
+}
+function runFind() {
+  findBlocks = findBlockList();
+  let heading = -1;
+  const headings = findBlocks.map(node => /^H[1-6]$/.test(node.tagName) ? ++heading : heading);
+  const result = searchBlocks(findBlocks.map(node => node.textContent || ""), headings, findQuery.value);
+  findHits.value = result.hits;
+  findTotal.value = result.total;
+  findActive.value = -1;
+  clearFindMark();
+}
+function scheduleFind() {
+  window.clearTimeout(findTimer);
+  findTimer = window.setTimeout(runFind, 150);
+}
+watch(findQuery, scheduleFind);
+watch(editorVersion, () => { if (findOpen.value && findQuery.value.trim()) scheduleFind(); });
+function openFind() {
+  const picked = window.getSelection()?.toString().trim();
+  if (picked && picked.length <= 100 && !picked.includes("\n")) findQuery.value = picked;
+  findOpen.value = true;
+  void nextTick(() => { findInput.value?.focus(); findInput.value?.select(); if (findQuery.value.trim()) runFind(); });
+}
+function closeFind() {
+  findOpen.value = false;
+  clearFindMark();
+  editor.value?.focus({ preventScroll: true });
+}
+type HighlightRegistry = { set(name: string, value: unknown): void; delete(name: string): void };
+function findRegistry(): { registry: HighlightRegistry; make: (range: Range) => unknown } | null {
+  const css = (window as unknown as { CSS?: { highlights?: HighlightRegistry } }).CSS;
+  const Ctor = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+  return css?.highlights && Ctor ? { registry: css.highlights, make: range => new Ctor(range) } : null;
+}
+function clearFindMark() { findRegistry()?.registry.delete("doc-find"); }
+/** 点结果：所在段没挂上先挂上，再滚到匹配处并高亮（光标放在匹配处，所在段不会被卸载） */
+function goToHit(position: number) {
+  const hit = findHits.value[position];
+  if (!hit) return;
+  let block = findBlocks[hit.block];
+  if (block && !block.isConnected) chunks?.reveal(block);
+  if (!block?.isConnected || !(block.textContent || "").toLocaleLowerCase().startsWith(findQuery.value.trim().toLocaleLowerCase(), hit.offset)) {
+    runFind();
+    return;
+  }
+  findActive.value = position;
+  const range = textRange(block, hit.offset, hit.length);
+  if (!range) return;
+  const rect = range.getBoundingClientRect(), view = desk.value?.getBoundingClientRect();
+  if (desk.value && view) desk.value.scrollTop += rect.top - view.top - view.height / 3;
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range.cloneRange());
+  const marks = findRegistry();
+  if (marks) marks.registry.set("doc-find", marks.make(range));
+  // 结果所在章节作为当前章节（目录高亮与状态栏指向匹配处）
+  viewPinnedUntil = Date.now() + 400;
+  viewHeading.value = hit.heading < 0 ? null : hit.heading;
+  void nextTick(() => window.document.querySelector<HTMLElement>(`[data-find-pos="${position}"]`)?.scrollIntoView({ block: "nearest" }));
+}
+function stepFind(delta: number) {
+  if (!findHits.value.length) return;
+  const count = findHits.value.length;
+  goToHit(findActive.value < 0 ? (delta > 0 ? 0 : count - 1) : (findActive.value + delta + count) % count);
+}
+function onFindKey(event: KeyboardEvent) {
+  if (event.key === "Enter") { event.preventDefault(); stepFind(event.shiftKey ? -1 : 1); }
+  else if (event.key === "Escape") { event.preventDefault(); closeFind(); }
+}
+function interceptFind(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "f" || mode.value !== "edit" || !editor.value) return;
+  event.preventDefault();
+  openFind();
+}
+const findHeadingText = (hit: SearchHit) => hit.heading < 0 ? "（文档开头）" : outline.value[hit.heading]?.text || `第 ${hit.heading + 1} 节`;
+
 /** 版式预览还没到（或失败）时显示的只读正文 */
 const bodyPending = ref(false);
 const previewError = ref("");
@@ -933,6 +1027,11 @@ const currentSection = computed(() => shownHeading.value === null ? "" : outline
 /** 状态栏的页数估算：A4 正文约每页 1500 字 */
 const pageEstimate = computed(() => Math.max(1, Math.ceil(totalChars.value / 1500)));
 watch(selectedHeading, () => { viewHeading.value = null; });
+/** 目录高亮跟着视口走：普通目录把高亮项滚进可见区（虚拟目录在组件里滚） */
+watch(shownHeading, index => {
+  if (index === null || outlineVirtual.value) return;
+  void nextTick(() => window.document.querySelector<HTMLElement>(`.olist [data-outline-index="${index}"]`)?.scrollIntoView({ block: "nearest" }));
+});
 // 重塑：右侧面板（原稿/版式预览时只保留版本记录）
 const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value || assignmentsOpen.value || referencesOpen.value || assignOpen.value || rejectedOpen.value)));
 const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
@@ -3151,6 +3250,7 @@ function onEditorInput(event?: Event) {
   if (!editor.value) return;
   layoutWordTabs();
   lastInputAt = Date.now();
+  chunks?.markEdited(window.getSelection()?.anchorNode ?? null);
   aiUndo.value = null;
   syncValueFromEditor();
   if (frozenPending.value) scheduleSnapshot();
@@ -4720,6 +4820,7 @@ onMounted(() => {
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
   updateTimer = window.setInterval(() => void checkOthersUpdated(), 45000);
   window.addEventListener("resize", scheduleMarks);
+  window.addEventListener("keydown", interceptFind, true);
   window.addEventListener("keydown", bufferLockedTyping, true);
   window.addEventListener("keydown", guardLockedKey, true);
   window.addEventListener("compositionstart", guardLockedComposition, true);
@@ -4750,6 +4851,7 @@ onUnmounted(() => {
   window.clearInterval(clockTimer);
   window.clearInterval(updateTimer);
   window.removeEventListener("resize", scheduleMarks);
+  window.removeEventListener("keydown", interceptFind, true);
   window.removeEventListener("keydown", bufferLockedTyping, true);
   window.removeEventListener("keydown", guardLockedKey, true);
   window.removeEventListener("compositionstart", guardLockedComposition, true);
@@ -4994,9 +5096,9 @@ onUnmounted(() => {
           </div>
           <p v-if="outline.length === 0" class="oempty">暂无标题</p>
           <p v-else-if="!outlineShown.length" class="oempty">{{ outlineSearch.trim() ? '没有匹配的标题' : outlineMode === 'mine' ? '没有分给你的章节' : outlineMode === 'todo' ? '没有待编写的章节' : outlineMode === 'conflict' ? '没有冲突' : '没有匹配的标题' }}</p>
-          <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="selectedHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
+          <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="shownHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
           <div v-else class="olist">
-            <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: selectedHeading === entry.index, empty: entry.info?.empty }]" :aria-current="selectedHeading === entry.index ? 'true' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
+            <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: shownHeading === entry.index, empty: entry.info?.empty }]" :data-outline-index="entry.index" :aria-current="shownHeading === entry.index ? 'location' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
               <span class="otext">{{ entry.item.text }}</span>
               <svg v-if="!entry.mine" class="ico olock" data-testid="outline-lock" viewBox="0 0 24 24" role="img" aria-label="只读"><rect x="5" y="11" width="14" height="9" rx="1.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
               <i v-if="conflictHeadings.has(entry.item.text)" class="omark danger outline-dot conflict" role="img" title="本章节有冲突待处理" aria-label="有冲突"></i>
@@ -5032,7 +5134,24 @@ onUnmounted(() => {
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
           <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
-          <p v-if="bodyPending && mode === 'edit'" class="body-pending" :class="{ failed: previewError }" role="status"><template v-if="previewError">编辑稿没能生成：{{ previewError }} 正文可以先阅读。<button type="button" class="ghost sm" @click="retryPreview">重试</button></template><template v-else>正在准备编辑稿，正文可以先阅读…</template></p><div ref="desk" class="desk page-scroll" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <p v-if="bodyPending && mode === 'edit'" class="body-pending" :class="{ failed: previewError }" role="status"><template v-if="previewError">编辑稿没能生成：{{ previewError }} 正文可以先阅读。<button type="button" class="ghost sm" @click="retryPreview">重试</button></template><template v-else>正在准备编辑稿，正文可以先阅读…</template></p><div v-if="findOpen && mode === 'edit'" class="doc-find" role="search" aria-label="在正文中查找" data-testid="doc-find">
+            <div class="find-row">
+              <input ref="findInput" v-model="findQuery" class="control sm" type="search" placeholder="在全文中查找" aria-label="查找内容" @keydown="onFindKey" />
+              <span class="find-count" role="status">{{ !findQuery.trim() ? "" : findTotal ? `${findActive >= 0 ? findActive + 1 : "—"}/${findTotal}` : "无结果" }}</span>
+              <button type="button" class="subtle sm" aria-label="上一个" :disabled="!findHits.length" @click="stepFind(-1)">↑</button>
+              <button type="button" class="subtle sm" aria-label="下一个" :disabled="!findHits.length" @click="stepFind(1)">↓</button>
+              <button type="button" class="subtle sm" aria-label="关闭查找" @click="closeFind">✕</button>
+            </div>
+            <ol v-if="findHits.length" class="find-list" aria-label="查找结果">
+              <li v-for="(hit, position) in findHits" :key="`${hit.block}:${hit.offset}`">
+                <button type="button" class="find-hit" :class="{ on: position === findActive }" :data-find-pos="position" :aria-current="position === findActive ? 'true' : undefined" @click="goToHit(position)">
+                  <span class="find-sec">{{ findHeadingText(hit) }}</span>
+                  <span class="find-snip">{{ hit.snippet.before }}<mark>{{ hit.snippet.match }}</mark>{{ hit.snippet.after }}</span>
+                </button>
+              </li>
+            </ol>
+            <p v-if="findTotal > findHits.length" class="find-more">只列出前 {{ findHits.length }} 处，请输入更多字缩小范围。</p>
+          </div><div ref="desk" class="desk page-scroll" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -5359,6 +5478,20 @@ onUnmounted(() => {
 /* 长文档分段渲染：屏幕外的块跳过布局和绘制，高度沿用上次测得的值（auto），没测过时按一行估算 */
 .body-pending { position:absolute; top:var(--space-3); left:50%; z-index:3; transform:translateX(-50%); display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-1) var(--space-3); border-radius:var(--radius-control); background:var(--bg-surface); box-shadow:var(--shadow-2); color:var(--text-secondary); font-size:var(--text-sm); }
 .body-pending.failed { color:var(--danger-700); }
+.doc-find { position:absolute; top:calc(44px + var(--space-3)); /* 格式工具栏（.etool，44px）下方 */ right:var(--space-5); z-index:4; display:flex; flex-direction:column; width:400px; max-height:60vh; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-control); background:var(--bg-surface); box-shadow:var(--shadow-2); }
+.find-row { display:flex; align-items:center; gap:var(--space-1); }
+.find-row input { flex:1; min-width:0; }
+.find-count { min-width:56px; color:var(--text-tertiary); font-size:var(--text-xs); text-align:right; }
+.find-list { flex:1; min-height:0; overflow:auto; margin:var(--space-2) 0 0; padding:0; list-style:none; }
+.find-hit { display:flex; flex-direction:column; gap:2px; width:100%; padding:var(--space-1) var(--space-2); border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font-family:var(--font); font-size:var(--text-sm); text-align:left; cursor:pointer; }
+.find-hit:hover { background:var(--bg-hover); }
+.find-hit.on { background:var(--bg-active); }
+.find-hit:focus-visible { outline:var(--focus-outline); outline-offset:-2px; }
+.find-sec { color:var(--text-tertiary); font-size:var(--text-xs); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.find-snip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.find-snip mark { background:var(--warning-200); color:inherit; }
+.find-more { margin:var(--space-1) 0 0; color:var(--text-tertiary); font-size:var(--text-xs); }
+:global(::highlight(doc-find)) { background-color:var(--warning-200); }
 .paper-content > .chunk-placeholder { overflow-anchor:none; pointer-events:none; user-select:none; }
 :deep(.public-embed-host) { margin:var(--space-3) 0; user-select:none; }
 .olist { flex:1; min-height:0; overflow:auto; padding:var(--space-2); display:flex; flex-direction:column; gap:1px; }
