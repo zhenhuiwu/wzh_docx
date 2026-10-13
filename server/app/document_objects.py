@@ -387,6 +387,25 @@ def _changed_by(connection, document_id: UUID, since: int, me: UUID) -> list[dic
     return [{"id": str(row["actor_id"]), "name": row["name"], "objects": int(row["objects"])} for row in rows]
 
 
+@router.get("/documents/{document_id}/preview/blocks")
+def get_preview_blocks(request: Request, document_id: str, offset: int = Query(default=0, ge=0),
+                       limit: int = Query(default=500, ge=1, le=5000)) -> dict:
+    """43 快速预览：按对象给出 HTML 片段（不经 Word 往返），供编辑区先挂载；整篇版式预览仍走 /preview。"""
+    from app.fast_preview import blocks
+    principal = document_principal(request)
+    did = _uuid(document_id, "documentId")
+    with connect() as conn:
+        load_document(conn, did, principal.user_id, is_admin(principal), "read")
+        available = ensure_committed(conn, did)
+        revision = int(conn.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()["revision"])
+        items = blocks(conn, did, revision, live_objects(conn, did)) if available else []
+        page = items[offset:offset + limit]
+        return {"data": {"documentRevision": revision, "objectModel": bool(available), "total": len(items),
+                         "offset": offset, "limit": limit, "blocks": page,
+                         "nextOffset": offset + len(page) if offset + len(page) < len(items) else None},
+                "requestId": request.state.request_id}
+
+
 @router.get("/documents/{document_id}/objects")
 def get_objects(request: Request, document_id: str, sinceRevision: int | None = Query(default=None, ge=0)) -> dict:
     principal = document_principal(request)
@@ -408,6 +427,8 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
         names = {str(row["id"]): row["name"] for row in conn.execute(
             """SELECT DISTINCT u.id, u.name FROM document_objects o JOIN users u ON u.id = o.updated_by
                WHERE o.document_id=%s""", (did,)).fetchall()}
+        from app.fast_preview import word_heading_levels
+        word_levels = word_heading_levels(conn, did, rows)
         objects: list[dict] = []
         previous: UUID | None = None
         for row in rows:
@@ -418,6 +439,10 @@ def get_objects(request: Request, document_id: str, sinceRevision: int | None = 
                         **flags.get(str(row["id"]), {})}
                 if row["heading_level"] is not None:
                     item["headingLevel"] = int(row["heading_level"])
+                if (word_level := word_levels.get(str(row["id"]))) is not None:
+                    # 43：Word 正文样式标题（与整篇预览 data-word-heading 同一判断），编辑区按标题锁定
+                    item["isWordHeading"] = True
+                    item["wordHeadingLevel"] = word_level
                 if sinceRevision is not None:
                     item["afterObjectId"] = None if previous is None else str(previous)
                 objects.append(item)
