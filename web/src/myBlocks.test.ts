@@ -101,3 +101,8 @@ describe("Markdown 转义（P2-3）", () => {
   it("keeps plain backslash text", () => expect(unescapeMarkdown("C:\\path")).toBe("C:\\path"));
   it("unescapes brackets and stars", () => expect(unescapeMarkdown("\\[注\\] \\*重点\\*")).toBe("[注] *重点*"));
 });
+
+describe("固定标题显示（R6 遗留）", () => {
+  it("unescapes Word heading text without # marks", () => expect(headingText("1\\.1 总体要求")).toBe("1.1 总体要求"));
+  it("unescapes markdown heading", () => expect(headingText("### 3\\.2\\.1 接口\\_定义")).toBe("3.2.1 接口_定义"));
+});
