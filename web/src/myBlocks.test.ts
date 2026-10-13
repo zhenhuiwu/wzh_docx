@@ -94,3 +94,10 @@ describe("来源说明不当上下文（复验 P2-2）", () => {
     expect(isTemplateFiller(doc[1].markdown)).toBe(false);
   });
 });
+
+import { headingText, unescapeMarkdown } from "./myBlocks";
+describe("Markdown 转义（P2-3）", () => {
+  it("unescapes numbered headings", () => expect(headingText("## 1\\.1 总体要求")).toBe("1.1 总体要求"));
+  it("keeps plain backslash text", () => expect(unescapeMarkdown("C:\\path")).toBe("C:\\path"));
+  it("unescapes brackets and stars", () => expect(unescapeMarkdown("\\[注\\] \\*重点\\*")).toBe("[注] *重点*"));
+});

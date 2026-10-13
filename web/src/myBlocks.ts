@@ -15,8 +15,12 @@ export interface Fragment {
   afterSection: string;
 }
 
-function headingText(markdown: string): string {
-  return markdown.replace(/^#{1,6}\s+/, "").replace(/\s+#*\s*$/, "").trim();
+/** 复验 P2-3：去掉 Markdown 转义（如 "1\\.1" → "1.1"），标题按用户看到的文字显示。 */
+export function unescapeMarkdown(text: string): string {
+  return text.replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, "$1");
+}
+export function headingText(markdown: string): string {
+  return unescapeMarkdown(markdown.replace(/^#{1,6}\s+/, "").replace(/\s+#*\s*$/, "").trim());
 }
 function level(markdown: string): number {
   return /^(#{1,6})\s/.exec(markdown)?.[1].length ?? 1;
