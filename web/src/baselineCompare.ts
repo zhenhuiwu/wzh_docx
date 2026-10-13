@@ -9,3 +9,10 @@ export function crossSummary(states: CrossState[], fromLabel: string, toLabel: s
   if (removed) parts.push(`${removed} 份未纳入 ${toLabel}`);
   return parts.join("，");
 }
+
+/** 基线对比右侧标题（41 复验 f31c8eb）：文档版本用 v{n}，基线放括号里，与依赖链「v1 → v2（B2）」同一写法。 */
+export function crossTitle(base: number | null, compare: number | "current" | null, baselines: string): string {
+  const to = compare === "current" ? "当前" : compare === null ? null : `v${compare}`;
+  const versions = base !== null && to ? `v${base} → ${to}` : base !== null ? `v${base}` : to ?? "";
+  return `${versions}（${baselines}）`;
+}

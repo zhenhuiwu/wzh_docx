@@ -10,7 +10,7 @@ import ProjectFrame from "../components/ProjectFrame.vue";
 import StatePanel from "../components/StatePanel.vue";
 import DiffView from "../components/baselines/DiffView.vue";
 import { formatDateTime } from "../format";
-import { crossSummary } from "../baselineCompare";
+import { crossSummary, crossTitle } from "../baselineCompare";
 
 const route = useRoute();
 const projectId = computed(() => String(route.params.id));
@@ -178,7 +178,7 @@ async function submit() {
           <div class="cross-diff">
             <StatePanel v-if="!crossActive" kind="empty" title="选择左侧的文档查看变化" text="" />
             <template v-else>
-              <div class="compare-head"><h3>{{ crossActive.name }}：{{ cross.label }}</h3><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: crossActive.id } }">打开文档</router-link></div>
+              <div class="compare-head"><h3>{{ crossActive.name }}：{{ crossTitle(crossActive.base, crossActive.compare, cross.label) }}</h3><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: crossActive.id } }">打开文档</router-link></div>
               <StatePanel v-if="crossActive.state === 'same'" kind="empty" title="这份文档没有变化" text="" />
               <StatePanel v-else-if="crossActive.base === null || crossActive.compare === null" kind="empty" :title="crossActive.note" :text="crossActive.base === null ? '这份文档只在后一个基线里，没有可比的旧版本。' : '这份文档没有纳入后一个基线，不算变化。'" />
               <DiffView v-else :key="`${crossActive.id}:${crossActive.base}:${crossActive.compare}`" :document-id="crossActive.id" :base="crossActive.base" :compare="crossActive.compare" />

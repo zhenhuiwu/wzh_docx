@@ -8,3 +8,13 @@ describe("基线对比摘要", () => {
     expect(crossSummary(["same"], "B1", "当前")).toBe("没有文档变化");
   });
 });
+
+import { crossTitle } from "./baselineCompare";
+
+describe("基线对比标题", () => {
+  it("版本用 v，基线放括号", () => {
+    expect(crossTitle(1, 2, "B1 → B2")).toBe("v1 → v2（B1 → B2）");
+    expect(crossTitle(1, "current", "B1 → 当前")).toBe("v1 → 当前（B1 → 当前）");
+    expect(crossTitle(null, 3, "B1 → B2")).toBe("v3（B1 → B2）");
+  });
+});
