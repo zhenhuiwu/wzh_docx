@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from collections import OrderedDict
@@ -136,8 +137,8 @@ def warm_after_commit(document_id, revision: int) -> threading.Thread | None:
                     rows = live_objects(connection, document_id)
                     _compute(connection, (str(document_id), int(current["revision"])), document_id, rows)
                 connection.rollback()
-        except Exception:  # noqa: BLE001 - 预热失败不影响保存；真正请求时再算
-            pass
+        except Exception as exc:  # noqa: BLE001 - 预热失败不影响保存；真正请求时再算
+            logging.getLogger(__name__).info("fast preview warm failed: %s", exc)
         finally:
             with _lock:
                 _warming.pop(key, None)
