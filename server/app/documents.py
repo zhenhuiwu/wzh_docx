@@ -1795,30 +1795,22 @@ def suspected_heading_ids(objects: list[dict]) -> set[str]:
 
 
 def _render_job(connection, row, *, selection: bool):
-    """(缓存键, 渲染函数)。渲染函数不碰数据库连接，可在后台线程执行。"""
+    """(缓存键, 渲染参数)。渲染在 preview_cache 的进程池里执行，不碰数据库连接。"""
     from app import preview_cache
-    from app.docx_preview import render_document_html
     file = connection.execute("SELECT storage_key FROM files WHERE id = %s AND status = 'stored'", [row[5]]).fetchone()
     if file is None:
         raise AppError(404, "NOT_FOUND", "原始 Word 文件不存在。")
     path = resolve_object(get_settings().file_data_dir, file[0])
     markdown, images, outline = row[7], row[6].get("images", []), bool(row[6].get("wordOutlineHeadings"))
-
-    def render() -> str:
-        html = render_document_html(path, markdown, images, outline_headings=outline)
-        if selection:
-            from app.document_selection import decorate_selection_html
-            html = decorate_selection_html(markdown, html)
-        return html
     key = ("selection:" if selection else "word:") + preview_cache.key_of(str(file[0]), markdown, images, outline)
-    return key, render
+    return key, (str(path), markdown, images, outline, selection)
 
 
 def _cached_html(connection, row, *, selection: bool) -> str:
     from app import preview_cache
-    key, render = _render_job(connection, row, selection=selection)
+    key, job = _render_job(connection, row, selection=selection)
     try:
-        return preview_cache.get(key, render)
+        return preview_cache.get(key, job)
     except ValueError as exc:
         raise AppError(422, "PREVIEW_UNSUPPORTED", str(exc)) from None
 
@@ -1833,10 +1825,10 @@ def warm_preview(connection, row) -> None:
     if not row[5]:
         return
     try:
-        key, render = _render_job(connection, row, selection=True)
+        key, job = _render_job(connection, row, selection=True)
     except AppError:
         return
-    preview_cache.warm(key, render)
+    preview_cache.warm(key, job)
 
 
 @router.get("/documents/{document_id}/original-preview")
