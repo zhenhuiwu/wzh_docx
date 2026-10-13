@@ -15,6 +15,7 @@ from io import BytesIO
 import base64
 import math
 import re
+import threading
 from typing import Sequence
 
 import markdown
@@ -102,11 +103,20 @@ class _Block:
     elements: list[CT_P | CT_Tbl]
 
 
+_LOCAL = threading.local()
+
+
+def _markdown_html(content: str) -> str:
+    """N1：每线程复用一个 Markdown 实例（每次 markdown.markdown 都新建实例并加载扩展，
+    大文档逐对象取纯文本时占一半以上；同 document_selection._render）。输出与 markdown.markdown 相同。"""
+    renderer = getattr(_LOCAL, "markdown", None)
+    if renderer is None:
+        renderer = _LOCAL.markdown = markdown.Markdown(extensions=["tables", "fenced_code"])
+    return renderer.reset().convert(content)
+
+
 def _html_blocks(content: str) -> list:
-    root = html.fragment_fromstring(
-        markdown.markdown(content, extensions=["tables", "fenced_code"]),
-        create_parent="div",
-    )
+    root = html.fragment_fromstring(_markdown_html(content), create_parent="div")
     # 工作台重塑轮：正文里的 HTML 注释在 Word 中没有对应内容，整体去掉（保留其后的文字），
     # 不再把 lxml 的英文报错（“Input object is not an XML element: HtmlComment”）抛给用户，也不把注释文字写进 Word。
     for comment in list(root.iter(etree.Comment)):
