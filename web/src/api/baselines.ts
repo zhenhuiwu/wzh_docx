@@ -49,3 +49,8 @@ export const createProjectBaseline = (projectId: string, name: string, documentI
 
 export const listMyWriting = (offset = 0, limit = 20, q = "") =>
   data<Page<MyWritingItem>>(`/my-writing?offset=${offset}&limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+
+export interface PatchResult { documentRevision: number; merged: boolean }
+/** 按块保存（A07 硬限制与方案 C 冲突处理都在服务端）；atomic：有冲突整体拒绝，不会只存一半。 */
+export const patchBlocks = (documentId: string, baseDocumentRevision: number, ops: { op: "update"; objectId: string; baseRevision: number; markdown: string }[], clientSaveKey: string) =>
+  data<PatchResult>(`/documents/${documentId}/objects/patch`, { method: "POST", json: { clientSaveKey, baseDocumentRevision, atomic: true, ops }, timeoutMs: 60000 });
