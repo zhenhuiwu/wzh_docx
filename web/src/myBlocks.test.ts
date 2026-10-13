@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds } from "./myBlocks";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, contextView, isPlaceholderText, isTemplateFiller, wordHeadingIds } from "./myBlocks";
 
 const o = (id: string, kind: string, markdown: string, revision = 1) => ({ id, kind, markdown, revision });
 const r = (objectId: string, owners: string[], editable = true) => ({ objectId, kind: "paragraph", owners: owners.map((id) => ({ id, name: id })), via: "explicit", viaObjectId: null, editable, readonlyReason: null });
@@ -50,7 +50,7 @@ describe("isPlaceholderText", () => {
     expect(isPlaceholderText("（在此编写本章内容。）")).toBe(true);
     expect(isPlaceholderText(" (请在此填写接口说明) ")).toBe(true);
     expect(isPlaceholderText("接口 2 的输入说明。")).toBe(false);
-    expect(isPlaceholderText("（公共框架：引用文档，各文档引用同一内容。）")).toBe(false);
+    expect(isPlaceholderText("（公共框架：引用文档，各文档引用同一内容。）")).toBe(false); // 工作台待编写统计不把框架章节算作待写
     expect(isPlaceholderText("（在此编写本章内容。）补充了正文")).toBe(false);
   });
 });
@@ -70,5 +70,18 @@ describe("applyAiOperations", () => {
 describe("wordHeadingIds", () => {
   it("collects object ids flagged isWordHeading by /objects", () => {
     expect([...wordHeadingIds([{ id: "a", isWordHeading: true }, { id: "b" }, { id: "c", isWordHeading: true }])]).toEqual(["a", "c"]);
+  });
+});
+
+describe("contextView / 公共框架占位 / 前后文章节", () => {
+  it("表格转成行列（去掉分隔行），普通文字去掉 Markdown 标记", () => {
+    expect(contextView("| 名称 | **版本** |\n|---|---|\n| A | 1 |")).toEqual({ kind: "table", rows: [["名称", "版本"], ["A", "1"]], more: 0 });
+    expect(contextView("## 标题\n- [链接](x) 与 `代码`")).toEqual({ kind: "text", text: "标题\n链接 与 代码" });
+  });
+  it("公共框架说明文字算模板占位，不当上下文", () => {
+    expect(isTemplateFiller("（公共框架：软件运行环境，各文档引用同一内容。）")).toBe(true);
+    const doc = [o("h1", "heading", "# 1 范围"), o("a", "paragraph", "真正的前文"), o("f", "paragraph", "（公共框架：术语，各文档引用同一内容。）"), o("h2", "heading", "## 1.2 引用"), o("b", "paragraph", "我的段")];
+    const [only] = buildFragments(doc, [r("b", ["me"]), r("h2", ["me"])], "me");
+    expect([only.before, only.beforeSection]).toEqual(["真正的前文", "1 范围"]);
   });
 });

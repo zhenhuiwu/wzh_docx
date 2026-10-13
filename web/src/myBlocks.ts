@@ -10,6 +10,9 @@ export interface Fragment {
   lockedHeadings: Record<string, true>;
   before: string | null;
   after: string | null;
+  /** 前后文所在章节（标题路径，文档开头为空串） */
+  beforeSection: string;
+  afterSection: string;
 }
 
 function headingText(markdown: string): string {
@@ -31,18 +34,30 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
   let headings = -1;
   // 界面复验 P1-5：按章节分工时片段前后紧挨的是标题，原先因此总是没有上下文。改为跨过标题找最近的正文块；
   // 那一块也是我的（相邻片段）就不重复显示。
+  // 每个对象所在章节的标题路径（前后文标注“属于哪一节”）
+  const sectionOf: string[] = [];
+  {
+    const trail: string[] = [];
+    for (const object of objects) {
+      if (object.kind === "heading") trail.splice(level(object.markdown) - 1, trail.length, headingText(object.markdown));
+      sectionOf.push(trail.join(" › "));
+    }
+  }
+  let found = "";
   const context = (from: number, step: 1 | -1): string | null => {
+    found = "";
     for (let i = from; i >= 0 && i < objects.length; i += step) {
       if (objects[i].kind === "heading") continue;
       if (mine(objects[i])) return null;
       // 模板占位（“（在此编写本章内容。）”）不算上下文，继续往外找
-      if (isPlaceholderText(objects[i].markdown) || !objects[i].markdown.trim()) continue;
+      if (isTemplateFiller(objects[i].markdown) || !objects[i].markdown.trim()) continue;
+      found = sectionOf[i];
       return objects[i].markdown;
     }
     return null;
   };
   const close = (index: number) => {
-    if (current) current.after = context(index, 1);
+    if (current) { current.after = context(index, 1); current.afterSection = found; }
     current = null;
   };
   objects.forEach((object, index) => {
@@ -56,7 +71,7 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
     }
     if (mine(object)) {
       if (!current) {
-        current = { key: object.id, headingPath: [...path], headingIndex: headings < 0 ? null : headings, blocks: [], lockedHeadings: {}, before: context(index - 1, -1), after: null };
+        current = { key: object.id, headingPath: [...path], headingIndex: headings < 0 ? null : headings, blocks: [], lockedHeadings: {}, before: context(index - 1, -1), beforeSection: found, after: null, afterSection: "" };
         fragments.push(current);
       }
       current.blocks.push(object);
@@ -89,6 +104,14 @@ const PLACEHOLDER = /^[（(][^（）()\n]*(在此|请在|待编写|待补充|填
 export function isPlaceholderText(markdown: string): boolean {
   return PLACEHOLDER.test(markdown.trim());
 }
+/** 复验 2：公共框架的说明文字（“（公共框架：…，各文档引用同一内容。）”）在我的编写里按模板占位处理：不当上下文，输入框里显示为占位提示。
+ * 工作台目录的“待编写”统计不受影响（框架章节不需要编写）。 */
+export function isFrameworkNote(markdown: string): boolean {
+  return /^[（(]公共框架[：:][^\n]*[）)]$/.test(markdown.trim());
+}
+export function isTemplateFiller(markdown: string): boolean {
+  return isPlaceholderText(markdown) || isFrameworkNote(markdown);
+}
 
 /** 验收 40 P1-1：AI 编写本节的块操作可能在 draft 或 done 事件里给出。只把本片段里的 replace 填进草稿，其余计为跳过。 */
 export interface AiBlockOp { op: string; blockId: string; content: string }
@@ -107,4 +130,18 @@ export function applyAiOperations(operations: AiBlockOp[] | undefined, ids: Set<
 /** 验收 40 P2-4 / 43：/objects 里标了 isWordHeading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
 export function wordHeadingIds(objects: Array<{ id: string; isWordHeading?: boolean }>): Set<string> {
   return new Set(objects.filter((item) => item.isWordHeading).map((item) => item.id));
+}
+
+/** 前后文的显示形式（复验：并排视图里直接显示 Markdown 会露出表格竖线）：表格给行列，其余去掉 Markdown 标记成纯文字。 */
+export type ContextView = { kind: "table"; rows: string[][]; more: number } | { kind: "text"; text: string };
+export function contextView(markdown: string, maxRows = 4): ContextView {
+  const lines = markdown.trim().split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 2 && lines.every((line) => line.startsWith("|"))) {
+    const rows = lines.filter((line) => !/^\|?[\s:|-]+\|?$/.test(line)).map((line) => line.replace(/^\||\|$/g, "").split("|").map((cell) => plain(cell)));
+    return { kind: "table", rows: rows.slice(0, maxRows), more: Math.max(0, rows.length - maxRows) };
+  }
+  return { kind: "text", text: lines.map((line) => plain(line.replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/^>\s?/, ""))).join("\n") };
+}
+function plain(text: string): string {
+  return text.replace(/!\[[^\]]*\]\([^)]*\)/g, "[图片]").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/<br\s*\/?>/gi, " ").replace(/\\(.)/g, "$1").replace(/[*_`~]/g, "").trim();
 }
