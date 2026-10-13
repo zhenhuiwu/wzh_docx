@@ -253,7 +253,7 @@ const savingMine = ref(false);
 /** 29 M-6：分工变化提示。 */
 const assignNotice = ref<{ tone: "info" | "warning"; text: string; locate?: boolean; saveMine?: boolean } | null>(null);
 const mineIntroOff = ref(false);
-const outlineFilter = ref<"all" | "mine" | null>(null);
+const outlineFilter = ref<"all" | "mine" | "todo" | "conflict" | null>(null);
 const noAssignNotice = ref("");
 let noAssignReadonly = false;
 // 复验 N-1：暂存按“用户 + 文档”存，只保留本次连续输入（来源块 + 时间），换块或停顿 20 秒后重新开始
@@ -811,7 +811,7 @@ const capsuleDetail = computed(() => {
 const outline = computed(() => documentHeadings(markdownContent.value));
 const outlineInfo = computed(() => outlineEntries(markdownContent.value));
 /** 29 M-1：目录按“我的部分”筛选（受限编写人员默认）。目录第 i 个标题对应对象里第 i 个标题。 */
-const outlineMode = computed(() => assignRestricted.value ? outlineFilter.value ?? "mine" : "all");
+const outlineMode = computed(() => assignRestricted.value ? outlineFilter.value ?? "mine" : outlineFilter.value === "mine" ? "all" : outlineFilter.value ?? "all");
 const outlineMineFlags = computed(() => outline.value.map((_item, index) => {
   const id = assignInfo.value?.headings[index];
   return !assignRestricted.value || (id ? assignInfo.value!.editable.has(id) : false);
@@ -820,7 +820,8 @@ const outlineMineCount = computed(() => outlineMineFlags.value.filter(Boolean).l
 const outlineShown = computed(() => {
   const query = outlineSearch.value.trim();
   return outline.value.map((item, index) => ({ item, index, info: outlineInfo.value[index], mine: outlineMineFlags.value[index] }))
-    .filter(entry => (!query || entry.item.text.includes(query)) && (outlineMode.value === "all" || entry.mine));
+    .filter(entry => (!query || entry.item.text.includes(query)) && (outlineMode.value === "all" || (outlineMode.value === "mine" ? entry.mine
+      : outlineMode.value === "todo" ? Boolean(entry.info?.todo) && entry.mine : conflictHeadings.value.has(entry.item.text))));
 });
 // ---------- 长文档（30 §3.3）：目录虚拟化 + 正文分段渲染 ----------
 /** 超过这么多条目录才虚拟化；短文档保持原样（所有条目都在 DOM 里）。 */
@@ -830,7 +831,27 @@ const CHUNKED_MIN_SECTIONS = 60;
 const CHUNKED_MIN_CHARS = 60000;
 const outlineVirtual = computed(() => outlineShown.value.length > OUTLINE_VIRTUAL_MIN);
 const outlineJump = ref("");
-const outlinePosition = computed(() => selectedHeading.value === null ? null : selectedHeading.value + 1);
+/** 验收 P2-6：滚动正文时“当前章节 / 第 x/N 节”跟着视口走（不改选中章节，不影响 AI 范围） */
+const viewHeading = ref<number | null>(null);
+const shownHeading = computed(() => viewHeading.value ?? selectedHeading.value);
+const outlinePosition = computed(() => shownHeading.value === null ? null : shownHeading.value + 1);
+let viewFrame = 0;
+function trackViewHeading() {
+  if (viewFrame) return;
+  viewFrame = requestAnimationFrame(() => {
+    viewFrame = 0;
+    const root = editor.value, scroller = desk.value;
+    if (!root || !scroller) return;
+    const top = scroller.getBoundingClientRect().top + 96;
+    const list = chunks ? chunks.mountedHeadings() : [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].map((element, index) => ({ element, index }));
+    let found: number | null = null;
+    for (const item of list) {
+      if (item.element.getBoundingClientRect().top <= top) found = item.index;
+      else { if (found === null) found = Math.max(0, item.index - 1); break; }
+    }
+    if (found !== null && found !== viewHeading.value) viewHeading.value = found;
+  });
+}
 function jumpToSection() {
   const n = Number(outlineJump.value);
   if (!Number.isInteger(n) || n < 1 || n > outline.value.length) return;
@@ -893,10 +914,13 @@ function placePublicEmbeds() {
 }
 watch(() => document.value?.id, () => { publicRefs.value = []; publicHosts.value = []; void loadPublicRefs(); });
 
-const pendingSections = computed(() => outlineInfo.value.filter(item => item.empty).length);
+const pendingSections = computed(() => outlineInfo.value.filter(item => item.todo).length);
 const totalChars = computed(() => countChars(markdownContent.value));
 const sectionChars = computed(() => selectedHeading.value === null ? null : outlineInfo.value[selectedHeading.value]?.chars ?? null);
-const currentSection = computed(() => selectedHeading.value === null ? "" : outline.value[selectedHeading.value]?.text || "");
+const currentSection = computed(() => shownHeading.value === null ? "" : outline.value[shownHeading.value]?.text || "");
+/** 状态栏的页数估算：A4 正文约每页 1500 字 */
+const pageEstimate = computed(() => Math.max(1, Math.ceil(totalChars.value / 1500)));
+watch(selectedHeading, () => { viewHeading.value = null; });
 // 重塑：右侧面板（原稿/版式预览时只保留版本记录）
 const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value || assignmentsOpen.value || referencesOpen.value || assignOpen.value || rejectedOpen.value)));
 const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
@@ -4927,12 +4951,14 @@ onUnmounted(() => {
               <button type="submit" class="primary sm" :disabled="addingHeading || saving || aiLocked || readonly || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到目录" }}</button>
             </div>
           </form>
-          <div v-if="assignRestricted && outline.length" class="seg ofilter" role="group" aria-label="目录筛选">
+          <div v-if="outline.length" class="seg ofilter" role="group" aria-label="目录筛选">
             <button type="button" :class="{ on: outlineMode === 'all' }" :aria-pressed="outlineMode === 'all'" data-testid="outline-filter-all" @click="outlineFilter = 'all'">全部</button>
-            <button type="button" :class="{ on: outlineMode === 'mine' }" :aria-pressed="outlineMode === 'mine'" data-testid="outline-filter-mine" @click="outlineFilter = 'mine'">我的部分 {{ outlineMineCount }}</button>
+            <button v-if="assignRestricted" type="button" :class="{ on: outlineMode === 'mine' }" :aria-pressed="outlineMode === 'mine'" data-testid="outline-filter-mine" @click="outlineFilter = 'mine'">我的部分 {{ outlineMineCount }}</button>
+            <button type="button" :class="{ on: outlineMode === 'todo' }" :aria-pressed="outlineMode === 'todo'" data-testid="outline-filter-todo" @click="outlineFilter = 'todo'">待编写</button>
+            <button type="button" :class="{ on: outlineMode === 'conflict' }" :aria-pressed="outlineMode === 'conflict'" data-testid="outline-filter-conflict" @click="outlineFilter = 'conflict'">有冲突</button>
           </div>
           <p v-if="outline.length === 0" class="oempty">暂无标题</p>
-          <p v-else-if="!outlineShown.length" class="oempty">{{ outlineMode === 'mine' && !outlineSearch.trim() ? '没有分给你的章节' : '没有匹配的标题' }}</p>
+          <p v-else-if="!outlineShown.length" class="oempty">{{ outlineSearch.trim() ? '没有匹配的标题' : outlineMode === 'mine' ? '没有分给你的章节' : outlineMode === 'todo' ? '没有待编写的章节' : outlineMode === 'conflict' ? '没有冲突' : '没有匹配的标题' }}</p>
           <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="selectedHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
           <div v-else class="olist">
             <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: selectedHeading === entry.index, empty: entry.info?.empty }]" :aria-current="selectedHeading === entry.index ? 'true' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
@@ -4971,7 +4997,7 @@ onUnmounted(() => {
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
           <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
-          <p v-if="bodyPending && mode === 'edit'" class="body-pending" :class="{ failed: previewError }" role="status"><template v-if="previewError">编辑稿没能生成：{{ previewError }} 正文可以先阅读。<button type="button" class="ghost sm" @click="retryPreview">重试</button></template><template v-else>正在准备编辑稿，正文可以先阅读…</template></p><div ref="desk" class="desk page-scroll"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <p v-if="bodyPending && mode === 'edit'" class="body-pending" :class="{ failed: previewError }" role="status"><template v-if="previewError">编辑稿没能生成：{{ previewError }} 正文可以先阅读。<button type="button" class="ghost sm" @click="retryPreview">重试</button></template><template v-else>正在准备编辑稿，正文可以先阅读…</template></p><div ref="desk" class="desk page-scroll" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -5136,7 +5162,7 @@ onUnmounted(() => {
 
       <!-- 第 9 步：底部状态栏 -->
       <footer class="ws-status">
-        <span class="cur">当前：{{ currentSection || '未选择章节' }}</span><span class="sep" aria-hidden="true"></span><span class="num">全文 {{ totalChars.toLocaleString('zh-CN') }} 字</span>
+        <span class="cur">当前：{{ currentSection || '未选择章节' }}</span><span class="sep" aria-hidden="true"></span><span class="num">全文 {{ totalChars.toLocaleString('zh-CN') }} 字 · 约 {{ pageEstimate }} 页</span>
         <span class="spacer"></span>
         <template v-if="lastEditor"><span>最近由 {{ lastEditor.name }} 修改于 {{ shortTime(lastEditor.at) }}</span><span class="sep" aria-hidden="true"></span></template>
         <span>Ctrl+S 立即保存</span>
