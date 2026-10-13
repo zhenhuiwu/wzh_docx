@@ -29,26 +29,38 @@ export function buildFragments(objects: DocObject[], resolved: ResolvedObject[] 
   const path: string[] = [];
   let current: Fragment | null = null;
   let headings = -1;
+  // 界面复验 P1-5：按章节分工时片段前后紧挨的是标题，原先因此总是没有上下文。改为跨过标题找最近的正文块；
+  // 那一块也是我的（相邻片段）就不重复显示。
+  const context = (from: number, step: 1 | -1): string | null => {
+    for (let i = from; i >= 0 && i < objects.length; i += step) {
+      if (objects[i].kind === "heading") continue;
+      if (mine(objects[i])) return null;
+      // 模板占位（“（在此编写本章内容。）”）不算上下文，继续往外找
+      if (isPlaceholderText(objects[i].markdown) || !objects[i].markdown.trim()) continue;
+      return objects[i].markdown;
+    }
+    return null;
+  };
+  const close = (index: number) => {
+    if (current) current.after = context(index, 1);
+    current = null;
+  };
   objects.forEach((object, index) => {
     if (object.kind === "heading") {
       headings += 1;
       const depth = level(object.markdown);
       path.splice(depth - 1, path.length, headingText(object.markdown));
       if (current && mine(object)) current.lockedHeadings[object.id] = true;
-      else if (current) current = null; // 标题已在片段路径里显示，不再当上下文
+      else close(index);
       return;
     }
     if (mine(object)) {
       if (!current) {
-        const prev = objects[index - 1];
-        current = { key: object.id, headingPath: [...path], headingIndex: headings < 0 ? null : headings, blocks: [], lockedHeadings: {}, before: prev && prev.kind !== "heading" && !mine(prev) ? prev.markdown : null, after: null };
+        current = { key: object.id, headingPath: [...path], headingIndex: headings < 0 ? null : headings, blocks: [], lockedHeadings: {}, before: context(index - 1, -1), after: null };
         fragments.push(current);
       }
       current.blocks.push(object);
-    } else if (current) {
-      current.after = object.markdown;
-      current = null;
-    }
+    } else close(index);
   });
   return fragments;
 }
@@ -92,14 +104,7 @@ export function applyAiOperations(operations: AiBlockOp[] | undefined, ids: Set<
   return { applied, skipped };
 }
 
-/** 验收 40 P2-4：编辑稿 HTML 里标了 data-word-heading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
-export function wordHeadingIds(html: string): Set<string> {
-  const ids = new Set<string>();
-  for (const match of html.matchAll(/<[a-z0-9]+\b[^>]*>/gi)) {
-    const tag = match[0];
-    if (!/\sdata-word-heading(?:=|\s|>)/.test(tag)) continue;
-    const id = /\sdata-object-id="([^"]+)"/.exec(tag)?.[1];
-    if (id) ids.add(id);
-  }
-  return ids;
+/** 验收 40 P2-4 / 43：/objects 里标了 isWordHeading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
+export function wordHeadingIds(objects: Array<{ id: string; isWordHeading?: boolean }>): Set<string> {
+  return new Set(objects.filter((item) => item.isWordHeading).map((item) => item.id));
 }

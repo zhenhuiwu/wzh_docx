@@ -146,10 +146,30 @@ export async function previewDocument(id: string): Promise<{ html: string; objec
   return body.data;
 }
 
+/** 43 快速预览：按对象生成的 HTML 片段（不经 Word 往返，版式近似），编辑区先用它挂载。 */
+export interface PreviewBlock { objectId: string; revision: number; kind: string; html: string; headingLevel?: number; wordHeadingLevel?: number }
+export interface PreviewBlocks { documentRevision: number; objectModel: boolean; blocks: PreviewBlock[] }
+export async function previewBlocks(id: string): Promise<PreviewBlocks> {
+  const blocks: PreviewBlock[] = [];
+  let offset: number | null = 0, revision = -1, objectModel = true;
+  while (offset !== null) {
+    const body: { data: { documentRevision: number; objectModel: boolean; blocks: PreviewBlock[]; nextOffset: number | null } } | null | undefined =
+      await apiRequest(`/documents/${id}/preview/blocks?offset=${offset}&limit=5000`);
+    if (!body?.data) throw new Error("快速预览响应不完整。");
+    // 翻页期间文档被改了：页与页对不上，交给整篇预览
+    if (revision >= 0 && body.data.documentRevision !== revision) throw new Error("文档已变化。");
+    revision = body.data.documentRevision;
+    objectModel = objectModel && body.data.objectModel;
+    blocks.push(...body.data.blocks);
+    offset = body.data.nextOffset;
+  }
+  return { documentRevision: revision, objectModel, blocks };
+}
+
 /** 他人更新（02 §3.3，界面验收 M6）：sinceRevision 之后变化的对象与修改人汇总。 */
 export interface ObjectsSince {
   documentRevision: number; objectModel: boolean; changedBy: Array<Person & { objects: number }>;
-  objects: Array<{ id: string; deleted: boolean; markdown?: string; updatedBy?: Person | null; deletedBy?: Person | null }>;
+  objects: Array<{ id: string; deleted: boolean; markdown?: string; isWordHeading?: boolean; wordHeadingLevel?: number; updatedBy?: Person | null; deletedBy?: Person | null }>;
   /** A05（17 B-8）：轮询带当前权限，权限调整/归档在 45 秒内生效。 */
   permissions?: DocumentPermissions;
 }
