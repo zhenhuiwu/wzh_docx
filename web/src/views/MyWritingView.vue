@@ -20,8 +20,11 @@ const phase = ref<"loading" | "ready" | "error" | "denied">("loading");
 const loadingMore = ref(false);
 const errorText = ref("");
 const query = ref("");
-const filter = ref<"all" | "assigned" | "owned">("all");
-const mode = ref<"list" | "edit">("list");
+/** 30 §3.2：筛选只有 项目 + 待编写|全部|有冲突（作用于任务树） */
+const filter = ref<"todo" | "all" | "conflict">("all");
+const projectFilter = ref("");
+/** 验收 P1-5：默认直接进入任务树 + 片段；文档列表是次要入口 */
+const mode = ref<"list" | "edit">("edit");
 const activeId = ref<string | null>(null);
 /** 并排视图（Q-7：最多 2 列）：第二列的文档 */
 const layout = ref<"tabs" | "split">("tabs");
@@ -35,9 +38,17 @@ const second = computed(() => editable.value.find((item) => item.id === secondId
   ?? editable.value.find((item) => item.id !== active.value?.id) ?? null);
 const shownDocs = computed(() => [active.value, layout.value === "split" ? second.value : null].filter(Boolean) as MyWritingItem[]);
 const statusText = { todo: "待编写", written: "已写", conflict: "冲突", rejected: "被拒保存" } as const;
+function blocksShown(docId: string): FragmentSummary[] {
+  const all = fragmentsByDoc.value[docId] ?? [];
+  if (filter.value === "todo") return all.filter((item) => item.status === "todo");
+  if (filter.value === "conflict") return all.filter((item) => item.status === "conflict" || item.status === "rejected");
+  return all;
+}
 const tree = computed(() => {
   const map = new Map<string, { id: string; name: string; docs: MyWritingItem[] }>();
   for (const item of editable.value) {
+    // 还没读到片段的文档先留着；读到后按筛选隐藏没有匹配块的文档
+    if (filter.value !== "all" && fragmentsByDoc.value[item.id] && !blocksShown(item.id).length) continue;
     const group = map.get(item.project.id) ?? { id: item.project.id, name: item.project.name, docs: [] };
     group.docs.push(item); map.set(item.project.id, group);
   }
@@ -120,11 +131,19 @@ async function load(append = false, silent = false) {
 }
 onMounted(async () => {
   if ((await refreshMyWritingAccess()) === false) { phase.value = "denied"; return; }
-  void load();
+  await load();
+  // 没有分给我的块（如只负责整篇的文档负责人）：直接显示文档列表
+  if (!editable.value.length) mode.value = "list";
 });
 
-const visible = computed(() => items.value.filter((item) =>
-  filter.value === "all" || (filter.value === "assigned" ? item.assignedBlockCount > 0 : item.myRole === "owner")));
+const projects = computed(() => [...new Map(items.value.map((item) => [item.project.id, item.project.name])).entries()]);
+const visible = computed(() => items.value.filter((item) => !projectFilter.value || item.project.id === projectFilter.value));
+/** 同名文档（如两个项目各有一份“软件开发计划”）在标签上带项目名 */
+const duplicateNames = computed(() => {
+  const count = new Map<string, number>();
+  for (const item of editable.value) count.set(item.name, (count.get(item.name) ?? 0) + 1);
+  return new Set([...count].filter(([, n]) => n > 1).map(([name]) => name));
+});
 const groups = computed(() => {
   const map = new Map<string, { id: string; name: string; docs: MyWritingItem[] }>();
   for (const item of visible.value) {
@@ -153,21 +172,25 @@ const summary = computed(() => {
         <label class="sr-only" for="my-writing-q">按文档名称查询</label>
         <input id="my-writing-q" v-model="query" class="control" type="search" placeholder="按文档名称查询" :disabled="phase === 'loading'" />
         <button type="submit" class="ghost" :disabled="phase === 'loading'">查询</button>
-        <div class="segmented" role="group" aria-label="视图">
-          <button type="button" :class="mode === 'list' ? 'primary' : 'ghost'" :aria-pressed="mode === 'list'" @click="setMode('list')">文档列表</button>
-          <button type="button" :class="mode === 'edit' ? 'primary' : 'ghost'" :aria-pressed="mode === 'edit'" :disabled="!editable.length" :title="editable.length ? '' : '没有分给你的块'" @click="setMode('edit')">按文档编写</button>
+        <label class="sr-only" for="my-writing-project">项目</label>
+        <select id="my-writing-project" v-model="projectFilter" class="control project-pick" :disabled="phase === 'loading'">
+          <option value="">全部项目</option>
+          <option v-for="[id, name] in projects" :key="id" :value="id">{{ name }}</option>
+        </select>
+        <span class="spacer"></span>
+        <div v-if="mode === 'edit'" class="seg" role="group" aria-label="筛选任务">
+          <button v-for="option in ([['todo', '待编写'], ['all', '全部'], ['conflict', '有冲突']] as const)" :key="option[0]" type="button"
+            :class="{ on: filter === option[0] }" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</button>
         </div>
-        <div class="segmented" role="group" aria-label="筛选">
-          <button v-for="option in ([['all', '全部'], ['assigned', '分给我的'], ['owned', '我负责的文档']] as const)" :key="option[0]" type="button"
-            :class="filter === option[0] ? 'primary' : 'ghost'" :aria-pressed="filter === option[0]" @click="filter = option[0]">{{ option[1] }}</button>
-        </div>
+        <button type="button" class="subtle" :aria-pressed="mode === 'list'" :disabled="mode === 'list' && !editable.length" @click="setMode(mode === 'list' ? 'edit' : 'list')">{{ mode === "list" ? "返回编写" : "文档列表" }}</button>
       </form>
       <StatePanel v-if="phase === 'denied'" kind="denied" title="只读成员没有「我的编写」" text="你在项目里是只读或评审角色，可以从项目进入文档查看。" />
       <StatePanel v-else-if="phase === 'loading'" kind="loading" text="正在读取你负责的文档…" />
       <StatePanel v-else-if="phase === 'error'" kind="error" title="没能加载" :text="errorText"><button type="button" class="ghost" @click="load()">重试</button></StatePanel>
-      <StatePanel v-else-if="!visible.length" kind="empty" :title="query ? '没有匹配的文档' : '目前没有分配给你的部分。'" :text="query ? '' : '负责人分配后会出现在这里。'" />
+      <StatePanel v-else-if="!visible.length" kind="empty" :title="query || projectFilter ? '没有匹配的文档' : '目前没有分配给你的部分。'" :text="query || projectFilter ? '' : '负责人分配后会出现在这里。'" />
       <div v-else-if="mode === 'edit' && active" class="workspace">
         <nav class="task-tree" aria-label="我的任务">
+          <p v-if="!tree.length" class="tree-empty" role="status">{{ filter === "todo" ? "没有待编写的部分。" : "没有冲突。" }}<button type="button" class="subtle sm" @click="filter = 'all'">看全部</button></p>
           <ul id="mw-tree" role="tree" aria-label="项目 › 文档 › 块" @keydown="treeKey">
             <li v-for="group in tree" :key="group.id" role="treeitem" :aria-expanded="!collapsed.has(group.id)" aria-level="1">
               <button type="button" class="node project-node" data-tree-node @click="toggleNode(group.id)">
@@ -180,8 +203,8 @@ const summary = computed(() => {
                     <span class="label" :title="doc.name">{{ doc.name }}</span>
                     <small>{{ (fragmentsByDoc[doc.id] ?? []).filter((item) => item.status === "written").length }}/{{ fragmentsByDoc[doc.id]?.length ?? doc.assignedBlockCount }}</small>
                   </button>
-                  <ul v-if="!collapsed.has(doc.id) && fragmentsByDoc[doc.id]?.length" role="group">
-                    <li v-for="block in fragmentsByDoc[doc.id]" :key="block.key" role="treeitem" aria-level="3">
+                  <ul v-if="!collapsed.has(doc.id) && blocksShown(doc.id).length" role="group">
+                    <li v-for="block in blocksShown(doc.id)" :key="block.key" role="treeitem" aria-level="3">
                       <button type="button" class="node block-node" data-tree-node @click="revealBlock(doc.id, block.key)">
                         <span class="label" :title="block.label">{{ block.label }}</span>
                         <span class="state" :class="block.status">{{ statusText[block.status] }}</span>
@@ -199,13 +222,13 @@ const summary = computed(() => {
               <button v-for="(doc, index) in editable" :id="`mw-tab-${doc.id}`" :key="doc.id" type="button" role="tab" class="doc-tab"
                 :class="{ on: doc.id === active.id }" :aria-selected="doc.id === active.id" :tabindex="doc.id === active.id ? 0 : -1"
                 aria-controls="mw-panel" @click="selectDoc(doc.id)" @keydown="onTabKey($event, index)">
-                <span class="tab-name" :title="doc.name">{{ doc.name }}</span><small>{{ doc.project.name }} · {{ doc.assignedBlockCount }} 处</small>
+                <span class="tab-name" :title="`${doc.name}（${doc.project.name}）`">{{ doc.name }}<template v-if="duplicateNames.has(doc.name)"> · {{ doc.project.name }}</template></span><small>{{ doc.project.name }} · {{ doc.assignedBlockCount }} 处</small>
               </button>
             </div>
             <span v-else class="split-hint">并排对照两份文档，各自保存。</span>
-            <div class="segmented" role="group" aria-label="编写视图">
-              <button type="button" :class="layout === 'tabs' ? 'primary' : 'ghost'" :aria-pressed="layout === 'tabs'" @click="setLayout('tabs')">按文档</button>
-              <button type="button" :class="layout === 'split' ? 'primary' : 'ghost'" :aria-pressed="layout === 'split'" :disabled="editable.length < 2" :title="editable.length < 2 ? '至少要有两份分给你的文档' : ''" @click="setLayout('split')">并排</button>
+            <div class="seg" role="group" aria-label="编写视图">
+              <button type="button" :class="{ on: layout === 'tabs' }" :aria-pressed="layout === 'tabs'" @click="setLayout('tabs')">按文档</button>
+              <button type="button" :class="{ on: layout === 'split' }" :aria-pressed="layout === 'split'" :disabled="editable.length < 2" :title="editable.length < 2 ? '至少要有两份分给你的文档' : ''" @click="setLayout('split')">并排</button>
             </div>
           </div>
           <div v-if="layout === 'tabs'" id="mw-panel" role="tabpanel" :aria-labelledby="`mw-tab-${active.id}`">
@@ -226,7 +249,7 @@ const summary = computed(() => {
       </div>
       <div v-else class="groups">
         <section v-for="group in groups" :key="group.id" class="group" :aria-label="group.name">
-          <h2 class="group-title"><router-link :to="{ name: 'project', params: { id: group.id } }">{{ group.name }}</router-link></h2>
+          <h2 class="group-title"><router-link class="text" :to="{ name: 'project', params: { id: group.id } }">{{ group.name }}</router-link></h2>
           <div class="table-wrap">
             <table>
               <thead><tr><th>文档</th><th>我的角色</th><th>状态</th><th>分给我的</th><th>最近基线</th><th>更新时间</th><th class="actions">操作</th></tr></thead>
@@ -238,7 +261,7 @@ const summary = computed(() => {
                   <td>{{ doc.assignedBlockCount ? `${doc.assignedBlockCount} 处` : "—" }}</td>
                   <td><span v-if="doc.latestBaseline" class="tag plain">{{ doc.latestBaseline }}</span><span v-else class="muted">未建立</span></td>
                   <td>{{ formatDateTime(doc.updatedAt) }}</td>
-                  <td class="actions"><button v-if="doc.assignedBlockCount" type="button" class="ghost" @click="startEdit(doc.id)">在此编写</button> <router-link class="ghost" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去编写</router-link></td>
+                  <td class="actions"><button v-if="doc.assignedBlockCount" type="button" class="subtle sm" @click="startEdit(doc.id)">在此编写</button> <router-link class="ghost sm" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去编写</router-link></td>
                 </tr>
               </tbody>
             </table>
@@ -253,14 +276,20 @@ const summary = computed(() => {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); }
 .toolbar .control { width: 320px; }
-.segmented { display: flex; gap: var(--space-1); margin-left: auto; }
+.spacer { flex: 1; }
+.project-pick { width: 200px !important; }
+.seg { display: inline-flex; flex: none; padding: 2px; background: var(--gray-100); border-radius: var(--radius-control); }
+.seg button { height: var(--control-h-sm); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-control) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); white-space: nowrap; cursor: pointer; }
+.seg button.on { background: var(--bg-surface); color: var(--text-primary); font-weight: var(--weight-medium); box-shadow: var(--shadow-1); }
+.seg button:disabled { cursor: not-allowed; opacity: .45; }
+.seg button:focus-visible { outline: var(--focus-outline); outline-offset: 1px; }
+.tree-empty { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); color: var(--ink-secondary); font-size: var(--text-sm); }
 .groups { display: flex; flex-direction: column; gap: var(--space-5); }
 .group-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
 .name { overflow-wrap: anywhere; }
 .actions { text-align: right; white-space: nowrap; }
 .muted { color: var(--ink-tertiary); }
 .more { align-self: center; }
-.segmented + .segmented { margin-left: var(--space-3); }
 .workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .task-tree { position: sticky; top: var(--space-3); max-height: calc(100vh - 220px); overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius-sheet); padding: var(--space-2); background: var(--sheet); }
 .task-tree ul { list-style: none; margin: 0; padding: 0; }

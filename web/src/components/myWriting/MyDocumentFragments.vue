@@ -4,8 +4,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
-import { streamDocumentSection } from "../../api/documents";
-import { aiFragmentTooLarge, buildFragments, changedOps, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { previewDocument, streamDocumentSection } from "../../api/documents";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 const props = defineProps<{ doc: MyWritingItem; userId: string }>();
@@ -18,9 +18,18 @@ const fragments = ref<Fragment[]>([]);
 const drafts = ref<Record<string, string>>({});
 const state = ref<"idle" | "saving" | "saved" | "conflict" | "forbidden" | "failed">("idle");
 const stateText = ref("");
-const openContext = ref(new Set<string>());
+const placeholders = ref<Record<string, string>>({});
+/** 验收 40 P2-4：Word 正文样式的标题块锁定（服务端 /objects/patch 同样拒绝）。编辑稿到了才知道是哪些块。 */
+const lockedHeadings = ref<Set<string>>(new Set());
+async function loadLockedHeadings() {
+  const id = props.doc.id;
+  try {
+    const preview = await previewDocument(id);
+    if (id === props.doc.id) lockedHeadings.value = wordHeadingIds(preview.html);
+  } catch { /* 读不到时不锁；服务端仍会拒绝修改标题块 */ }
+}
 
-const blocks = computed<DocObject[]>(() => fragments.value.flatMap((fragment) => fragment.blocks));
+const blocks = computed<DocObject[]>(() => fragments.value.flatMap((fragment) => fragment.blocks).filter((block) => !lockedHeadings.value.has(block.id)));
 const ops = computed(() => changedOps(blocks.value, drafts.value));
 const dirty = computed(() => ops.value.length > 0);
 watch(dirty, (value) => emit("dirty", value), { immediate: true });
@@ -31,8 +40,11 @@ async function load() {
     const [objects, view] = await Promise.all([getAllObjects(props.doc.id), getAssignments(props.doc.id)]);
     revision.value = objects.documentRevision;
     fragments.value = buildFragments(objects.objects, view.resolved, props.userId);
-    drafts.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.map((b) => [b.id, b.markdown])));
+    // 模板占位文字不放进输入框（显示为占位提示）；不改就不提交
+    placeholders.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.filter((b) => isPlaceholderText(b.markdown)).map((b) => [b.id, b.markdown.trim()])));
+    drafts.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.map((b) => [b.id, placeholders.value[b.id] ? "" : b.markdown])));
     phase.value = "ready";
+    void loadLockedHeadings();
   } catch (error) {
     errorText.value = error instanceof ApiError ? error.message : "暂时不能连接服务。";
     phase.value = "error";
@@ -66,16 +78,16 @@ async function runAi(fragment: Fragment) {
   if (aiBusy.value || !aiInstruction.value.trim()) return;
   aiBusy.value = fragment.key;
   aiAbort = new AbortController();
-  const ids = new Set(fragment.blocks.map((block) => block.id));
+  const ids = new Set(fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).map((block) => block.id));
   let applied = 0; let skipped = 0;
+  const seen = new Set<string>();
   const notice = (tone: "success" | "warning" | "danger", text: string) => { aiNotice.value = { ...aiNotice.value, [fragment.key]: { tone, text } }; };
   try {
     await streamDocumentSection(props.doc.id, revision.value, fragment.headingIndex, aiInstruction.value.trim(), undefined, (event) => {
-      if (event.type !== "draft" || !event.operations) return;
-      for (const op of event.operations) {
-        if (op.op === "replace" && ids.has(op.blockId) && op.content.trim()) { drafts.value[op.blockId] = op.content; applied += 1; }
-        else skipped += 1;
-      }
+      // 块操作在 done 事件里（有的服务端版本也会在 draft 里先给）
+      if (event.type !== "draft" && event.type !== "done") return;
+      const result = applyAiOperations(event.operations, ids, drafts.value, seen);
+      applied += result.applied; skipped += result.skipped;
     }, aiAbort.signal, "section", undefined, undefined, [...ids]);
     if (!applied) notice("warning", "AI 没有给出可填入的修改。");
     else notice(skipped ? "warning" : "success", `AI 已改写 ${applied} 段，确认后点“保存本文档”。${skipped ? `另有 ${skipped} 处增删段落的建议需在文档中操作。` : ""}`);
@@ -90,11 +102,6 @@ async function runAi(fragment: Fragment) {
 function stopAi() { aiAbort?.abort(); }
 onBeforeUnmount(() => aiAbort?.abort());
 
-function toggleContext(key: string) {
-  const next = new Set(openContext.value);
-  if (next.has(key)) next.delete(key); else next.add(key);
-  openContext.value = next;
-}
 function onBeforeUnload(event: BeforeUnloadEvent) { if (dirty.value) event.preventDefault(); }
 window.addEventListener("beforeunload", onBeforeUnload);
 onBeforeUnmount(() => window.removeEventListener("beforeunload", onBeforeUnload));
@@ -112,7 +119,7 @@ const summaries = computed<FragmentSummary[]>(() => fragments.value.map((fragmen
   const ids = new Set(fragment.blocks.map((block) => block.id));
   const touched = ops.value.some((op) => ids.has(op.objectId));
   const status = touched && state.value === "conflict" ? "conflict" : touched && state.value === "forbidden" ? "rejected"
-    : fragment.blocks.every((block) => !(drafts.value[block.id] ?? block.markdown).trim()) ? "todo" : "written";
+    : fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).every((block) => { const text = (drafts.value[block.id] ?? block.markdown).trim(); return !text || isPlaceholderText(text); }) ? "todo" : "written";
   return { key: fragment.key, label: fragment.headingPath.at(-1) || "（文档开头）", status };
 }));
 watch(summaries, (value) => emit("fragments", value), { immediate: true });
@@ -124,8 +131,8 @@ defineExpose({ dirty });
     <div class="frag-bar">
       <span class="tag" :class="pill.tone" role="status">{{ pill.text }}</span>
       <span class="frag-count">{{ phase === "ready" ? `${fragments.length} 处片段` : "" }}</span>
-      <router-link class="ghost" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">在文档中打开↗</router-link>
-      <button type="button" class="primary" :disabled="!dirty || state === 'saving' || phase !== 'ready'" @click="save">{{ state === "saving" ? "正在保存…" : "保存本文档" }}</button>
+      <router-link class="subtle sm" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">在文档中打开↗</router-link>
+      <button type="button" class="primary sm" :disabled="!dirty || state === 'saving' || phase !== 'ready'" @click="save">{{ state === "saving" ? "正在保存…" : "保存本文档" }}</button>
     </div>
     <p v-if="stateText" class="notice" :class="state === 'failed' ? 'warning' : 'danger'" role="alert">{{ stateText }}
       <router-link v-if="state === 'conflict'" :to="{ name: 'document', params: { id: doc.project.id, documentId: doc.id } }">去处理冲突</router-link>
@@ -139,23 +146,23 @@ defineExpose({ dirty });
       <header class="frag-head">
         <svg class="lock" viewBox="0 0 16 16" role="img" aria-label="标题锁定"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>
         <strong class="path">{{ fragment.headingPath.join(" › ") || "（文档开头）" }}</strong>
-        <button v-if="fragment.before || fragment.after" type="button" class="subtle" :aria-expanded="openContext.has(fragment.key)" @click="toggleContext(fragment.key)">{{ openContext.has(fragment.key) ? "收起上下文" : "显示上下文" }}</button>
-        <button type="button" class="ghost" :aria-expanded="aiOpen === fragment.key" :disabled="state === 'saving' || (aiBusy !== null && aiBusy !== fragment.key) || aiFragmentTooLarge(fragment, drafts)" :title="aiFragmentTooLarge(fragment, drafts) ? '本节超过 20 段或 6000 字，请在文档中选中部分后使用 AI' : ''" @click="openAi(fragment.key)">AI 编写本节</button>
+        <button type="button" class="subtle sm" :aria-expanded="aiOpen === fragment.key" :disabled="state === 'saving' || (aiBusy !== null && aiBusy !== fragment.key) || aiFragmentTooLarge(fragment, drafts)" :title="aiFragmentTooLarge(fragment, drafts) ? '本节超过 20 段或 6000 字，请在文档中选中部分后使用 AI' : ''" @click="openAi(fragment.key)">AI 编写本节</button>
       </header>
       <form v-if="aiOpen === fragment.key" class="ai-form" @submit.prevent="runAi(fragment)">
         <input v-model="aiInstruction" class="control" :aria-label="`AI 编写要求：${fragment.headingPath.at(-1) ?? '片段'}`" placeholder="说明要怎么写，例如：补充接口鉴权要求" :disabled="aiBusy === fragment.key" maxlength="500" />
         <button v-if="aiBusy === fragment.key" type="button" class="ghost" @click="stopAi">停止</button>
-        <button v-else type="submit" class="primary" :disabled="!aiInstruction.trim()">生成</button>
+        <button v-else type="submit" class="primary sm" :disabled="!aiInstruction.trim()">生成</button>
       </form>
       <p v-if="aiBusy === fragment.key" class="notice info" role="status">AI 正在编写本节…</p>
       <p v-else-if="aiNotice[fragment.key]" class="notice" :class="aiNotice[fragment.key].tone" role="status">{{ aiNotice[fragment.key].text }}</p>
-      <p v-if="openContext.has(fragment.key) && fragment.before" class="context">{{ fragment.before }}</p>
+      <p v-if="fragment.before" class="context" :title="'前文（他人负责，只读）'"><span class="ctx-label">前文 · 只读</span>{{ fragment.before }}</p>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
         <span class="sr-only">{{ fragment.headingPath.at(-1) ?? "片段" }} 第 {{ index + 1 }} 段</span>
-        <textarea v-model="drafts[block.id]" class="control" rows="3" :disabled="state === 'saving'" :aria-invalid="!drafts[block.id]?.trim()"></textarea>
-        <span v-if="!drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
+        <p v-if="lockedHeadings.has(block.id)" class="locked-heading"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>{{ block.markdown }}<small>标题已固定</small></p>
+        <textarea v-else v-model="drafts[block.id]" class="control" rows="3" :placeholder="placeholders[block.id] || '在此编写这一段'" :disabled="state === 'saving'" :aria-invalid="!placeholders[block.id] && !drafts[block.id]?.trim()"></textarea>
+        <span v-if="!lockedHeadings.has(block.id) && !placeholders[block.id] && !drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
       </label>
-      <p v-if="openContext.has(fragment.key) && fragment.after" class="context">{{ fragment.after }}</p>
+      <p v-if="fragment.after" class="context" :title="'后文（他人负责，只读）'"><span class="ctx-label">后文 · 只读</span>{{ fragment.after }}</p>
     </article>
   </section>
 </template>
@@ -168,9 +175,12 @@ defineExpose({ dirty });
 .frag-head { display: flex; align-items: center; gap: var(--space-2); }
 .path { overflow-wrap: anywhere; margin-right: auto; }
 .lock { width: var(--icon-sm); height: var(--icon-sm); fill: none; stroke: var(--ink-secondary); stroke-width: 1.4; flex: none; }
-.context { margin: 0; padding: var(--space-2); color: var(--ink-tertiary); background: var(--bg-subtle); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.context { margin: 0; padding: var(--space-2); color: var(--ink-tertiary); background: var(--bg-subtle); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ctx-label { display: block; margin-bottom: 2px; font-size: var(--text-xs); color: var(--ink-tertiary); }
 .ai-form { display: flex; gap: var(--space-2); }
 .ai-form input { flex: 1; }
+.locked-heading { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-1) 0; font-weight: var(--weight-semibold); color: var(--ink); }
+.locked-heading small { color: var(--ink-tertiary); font-size: var(--text-xs); font-weight: var(--weight-regular); }
 .block { display: flex; flex-direction: column; gap: var(--space-1); }
 .block textarea { width: 100%; min-height: calc(var(--control-h) * 2); font-family: var(--font-doc); font-size: var(--text-md); line-height: var(--leading-md); resize: vertical; height: auto; }
 .skeleton span { display: block; height: var(--space-4); background: var(--bg-subtle); border-radius: var(--radius-control); }

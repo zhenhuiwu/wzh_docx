@@ -225,6 +225,11 @@
   cursor: pointer;
 }
 
+/* 验收 P1-8：用作链接时不显示浏览器默认下划线，悬停才显示 */
+a.text {
+  text-decoration: none;
+}
+
 .text.danger {
   color: var(--danger-600);
 }

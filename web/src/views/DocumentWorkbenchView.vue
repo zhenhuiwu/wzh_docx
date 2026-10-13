@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type Rout
 import { readSession } from "../session";
 import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
+import { CHUNK_ATTR, ChunkedBody, quickBodyHtml } from "../editorChunks";
 import DocumentAssignments from "../components/DocumentAssignments.vue";
 import DocumentBlockGuidance from "../components/DocumentBlockGuidance.vue";
 import DocumentReferences from "../components/DocumentReferences.vue";
@@ -252,7 +253,7 @@ const savingMine = ref(false);
 /** 29 M-6：分工变化提示。 */
 const assignNotice = ref<{ tone: "info" | "warning"; text: string; locate?: boolean; saveMine?: boolean } | null>(null);
 const mineIntroOff = ref(false);
-const outlineFilter = ref<"all" | "mine" | null>(null);
+const outlineFilter = ref<"all" | "mine" | "todo" | "conflict" | null>(null);
 const noAssignNotice = ref("");
 let noAssignReadonly = false;
 // 复验 N-1：暂存按“用户 + 文档”存，只保留本次连续输入（来源块 + 时间），换块或停顿 20 秒后重新开始
@@ -784,7 +785,7 @@ let autoSaveTimer: number | undefined;
 let layoutNeedsRefresh = false;
 
 const isDirty = computed(() => markdownContent.value !== savedContent.value);
-const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value);
+const editable = computed(() => !aiLocked.value && !addingHeading.value && !readonly.value && !bodyPending.value);
 const historyRestoreBlocked = computed(() => readonly.value ? "你没有修改正文的权限，不能恢复版本。" : assignRestricted.value ? "按分工编辑的文档只有项目负责人能恢复版本。" : isDirty.value || saving.value ? "当前还有修改未保存，保存后才能恢复版本。" : localDraft.value ? "请先处理本机草稿（恢复、下载或舍弃），再恢复版本。" : "");
 // 方案 C：冻结区里还没存成冲突副本的续写也算 1 处未保存修改
 const pendingCount = computed(() => (isDirty.value ? Math.max(1, changedBlockCount(savedContent.value, markdownContent.value)) : 0) + frozenUnsaved.value + (sinkUnsaved.value ? 1 : 0) + sinkBacklog.value.length + leftovers.value.length);
@@ -810,7 +811,7 @@ const capsuleDetail = computed(() => {
 const outline = computed(() => documentHeadings(markdownContent.value));
 const outlineInfo = computed(() => outlineEntries(markdownContent.value));
 /** 29 M-1：目录按“我的部分”筛选（受限编写人员默认）。目录第 i 个标题对应对象里第 i 个标题。 */
-const outlineMode = computed(() => assignRestricted.value ? outlineFilter.value ?? "mine" : "all");
+const outlineMode = computed(() => assignRestricted.value ? outlineFilter.value ?? "mine" : outlineFilter.value === "mine" ? "all" : outlineFilter.value ?? "all");
 const outlineMineFlags = computed(() => outline.value.map((_item, index) => {
   const id = assignInfo.value?.headings[index];
   return !assignRestricted.value || (id ? assignInfo.value!.editable.has(id) : false);
@@ -819,7 +820,8 @@ const outlineMineCount = computed(() => outlineMineFlags.value.filter(Boolean).l
 const outlineShown = computed(() => {
   const query = outlineSearch.value.trim();
   return outline.value.map((item, index) => ({ item, index, info: outlineInfo.value[index], mine: outlineMineFlags.value[index] }))
-    .filter(entry => (!query || entry.item.text.includes(query)) && (outlineMode.value === "all" || entry.mine));
+    .filter(entry => (!query || entry.item.text.includes(query)) && (outlineMode.value === "all" || (outlineMode.value === "mine" ? entry.mine
+      : outlineMode.value === "todo" ? Boolean(entry.info?.todo) && entry.mine : conflictHeadings.value.has(entry.item.text))));
 });
 // ---------- 长文档（30 §3.3）：目录虚拟化 + 正文分段渲染 ----------
 /** 超过这么多条目录才虚拟化；短文档保持原样（所有条目都在 DOM 里）。 */
@@ -829,7 +831,27 @@ const CHUNKED_MIN_SECTIONS = 60;
 const CHUNKED_MIN_CHARS = 60000;
 const outlineVirtual = computed(() => outlineShown.value.length > OUTLINE_VIRTUAL_MIN);
 const outlineJump = ref("");
-const outlinePosition = computed(() => selectedHeading.value === null ? null : selectedHeading.value + 1);
+/** 验收 P2-6：滚动正文时“当前章节 / 第 x/N 节”跟着视口走（不改选中章节，不影响 AI 范围） */
+const viewHeading = ref<number | null>(null);
+const shownHeading = computed(() => viewHeading.value ?? selectedHeading.value);
+const outlinePosition = computed(() => shownHeading.value === null ? null : shownHeading.value + 1);
+let viewFrame = 0;
+function trackViewHeading() {
+  if (viewFrame) return;
+  viewFrame = requestAnimationFrame(() => {
+    viewFrame = 0;
+    const root = editor.value, scroller = desk.value;
+    if (!root || !scroller) return;
+    const top = scroller.getBoundingClientRect().top + 96;
+    const list = chunks ? chunks.mountedHeadings() : [...root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")].map((element, index) => ({ element, index }));
+    let found: number | null = null;
+    for (const item of list) {
+      if (item.element.getBoundingClientRect().top <= top) found = item.index;
+      else { if (found === null) found = Math.max(0, item.index - 1); break; }
+    }
+    if (found !== null && found !== viewHeading.value) viewHeading.value = found;
+  });
+}
 function jumpToSection() {
   const n = Number(outlineJump.value);
   if (!Number.isInteger(n) || n < 1 || n > outline.value.length) return;
@@ -837,6 +859,28 @@ function jumpToSection() {
   selectHeading(n - 1);
 }
 const chunkedEditor = computed(() => outline.value.length >= CHUNKED_MIN_SECTIONS || markdownContent.value.length >= CHUNKED_MIN_CHARS);
+/** 验收 P0-2：正文按章节分段挂载（editorChunks.ts）。只在普通阅读/输入时启用；AI、冲突等需要整篇 DOM 的操作开始前整篇挂上。 */
+let chunks: ChunkedBody | null = null;
+const mountedBlocks = ref(0);
+function chunkMounted() {
+  applyLocks();
+  placePublicEmbeds();
+  mountedBlocks.value = chunks?.mountedBlockCount ?? 0;
+  void nextTick(() => { layoutWordTabs(); applyConflictMarks(); });
+}
+function releaseChunks() {
+  if (!chunks) return;
+  const current = chunks;
+  chunks = null;
+  current.destroy(true);
+  mountedBlocks.value = 0;
+  applyLocks();
+  placePublicEmbeds();
+  void nextTick(() => { layoutWordTabs(); applyConflictMarks(); });
+}
+/** 版式预览还没到（或失败）时显示的只读正文 */
+const bodyPending = ref(false);
+const previewError = ref("");
 
 // ---------- 公共内容引用（30 §3.4 PublicBlockEmbed）：只读卡片放在引用章节标题后，不进入正文 ----------
 const publicRefs = ref<PublicRef[]>([]);
@@ -870,10 +914,13 @@ function placePublicEmbeds() {
 }
 watch(() => document.value?.id, () => { publicRefs.value = []; publicHosts.value = []; void loadPublicRefs(); });
 
-const pendingSections = computed(() => outlineInfo.value.filter(item => item.empty).length);
+const pendingSections = computed(() => outlineInfo.value.filter(item => item.todo).length);
 const totalChars = computed(() => countChars(markdownContent.value));
 const sectionChars = computed(() => selectedHeading.value === null ? null : outlineInfo.value[selectedHeading.value]?.chars ?? null);
-const currentSection = computed(() => selectedHeading.value === null ? "" : outline.value[selectedHeading.value]?.text || "");
+const currentSection = computed(() => shownHeading.value === null ? "" : outline.value[shownHeading.value]?.text || "");
+/** 状态栏的页数估算：A4 正文约每页 1500 字 */
+const pageEstimate = computed(() => Math.max(1, Math.ceil(totalChars.value / 1500)));
+watch(selectedHeading, () => { viewHeading.value = null; });
 // 重塑：右侧面板（原稿/版式预览时只保留版本记录）
 const panelShown = computed(() => historyOpen.value || (mode.value === "edit" && (aiOpen.value || conflictOpen.value || assignmentsOpen.value || referencesOpen.value || assignOpen.value || rejectedOpen.value)));
 const aiTargetTitle = computed(() => aiScope.value === "document" ? document.value?.name || "" : aiScope.value === "selection" ? "选中内容" : outline.value[selectedHeading.value ?? -1]?.text || "");
@@ -1057,6 +1104,8 @@ async function load() {
   guidanceError.value = "";
   clearAiDraft();
   phase.value = "loading";
+  bodyPending.value = false;
+  previewError.value = "";
   errorText.value = "";
   orphanDrafts.value = []; orphanStash.value = "";
   loadErrorStatus.value = 0;
@@ -1066,7 +1115,8 @@ async function load() {
     browserTab = browserTabIdentity().current;
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const fetched = await getDocument(id);
-    const preview = await previewDocument(id);
+    // 验收 P0-2：版式预览（整篇 Word 排版）可能很慢，不等它：先显示只读正文，预览到了再换成可编辑的编辑稿
+    const previewTask = previewDocument(id).then(value => ({ value, error: null as unknown }), (error: unknown) => ({ value: null, error }));
     const assignments = await getDocumentAssignments(id).catch(() => null);
     if (id !== documentId.value || version !== loadVersion) return;
     document.value = fetched;
@@ -1089,7 +1139,10 @@ async function load() {
     phase.value = "ready";
     await nextTick();
     if (id !== documentId.value || version !== loadVersion) return;
-    showEditorHtml(preview.html, preview.objectModel);
+    bodyPending.value = true;
+    previewError.value = "";
+    showEditorHtml(quickBodyHtml(record.markdownContent));
+    void applyPreview(previewTask, record, version);
     void refreshOwnership(record);
     if (route.query.assign === "1") assignOpen.value = true;
     assignInitialFilter.value = route.query.filter === "unassigned" ? "unassigned" : typeof route.query.person === "string" ? `person:${route.query.person}` : "all";
@@ -1116,6 +1169,20 @@ async function load() {
       } catch { orphanDrafts.value = []; orphanStash.value = ""; }
     }
   }
+}
+async function applyPreview(task: Promise<{ value: Awaited<ReturnType<typeof previewDocument>> | null; error: unknown }>, record: DocumentRecord, version: number) {
+  const result = await task;
+  if (version !== loadVersion || document.value !== record) return;
+  if (!result.value) { previewError.value = messageOf(result.error); return; }
+  bodyPending.value = false;
+  previewError.value = "";
+  showEditorHtml(result.value.html, result.value.objectModel);
+}
+function retryPreview() {
+  const record = document.value;
+  if (!record) return;
+  previewError.value = "";
+  void applyPreview(previewDocument(record.id).then(value => ({ value, error: null as unknown }), (error: unknown) => ({ value: null, error })), record, loadVersion);
 }
 function resetSaveState() {
   window.clearTimeout(retryTimer);
@@ -1724,9 +1791,17 @@ function showEditorHtml(html: string, mapped?: boolean) {
   if (editor.value) {
     // 方案 C：冻结区节点不随重绘替换（光标、组字、撤销栈都在这些节点上），重绘后放回服务器上这一段的位置
     const kept = detachFrozen(editor.value);
+    const keep = chunks ? chunks.mountedIndexes : undefined;
+    chunks?.destroy();
+    chunks = null;
     // 测试 L3：服务端把目录/域段落标成 contenteditable=false（data-word-protected）。
     editor.value.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["contenteditable"] });
     reattachFrozen(editor.value, kept);
+    if (chunkedEditor.value && !Object.keys(frozen.value).length && !aiOpen.value && !conflictOpen.value) {
+      chunks = new ChunkedBody(editor.value, desk.value, { onMount: chunkMounted, onUnmount: () => queueMicrotask(() => { placePublicEmbeds(); mountedBlocks.value = chunks?.mountedBlockCount ?? 0; }) });
+      chunks.build(keep);
+      mountedBlocks.value = chunks.mountedBlockCount;
+    } else mountedBlocks.value = 0;
     paperStyle.value = {};
     try {
       const page = JSON.parse(editor.value.firstElementChild?.getAttribute("data-word-page") || "{}");
@@ -2621,10 +2696,13 @@ function captureEditorTarget() {
     if (lastText) range.setEnd(lastText, lastText.length);
   }
   const headings = [...editor.value.querySelectorAll("h1,h2,h3,h4,h5,h6")];
-  const index = headings.map((heading) => heading.contains(range.startContainer) || Boolean(heading.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING)).lastIndexOf(true);
+  const local = headings.map((heading) => heading.contains(range.startContainer) || Boolean(heading.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING)).lastIndexOf(true);
+  // 分段挂载时 DOM 里的标题不全：按段记录的全文序号算
+  const index = chunks ? chunks.headingIndexAt(range.startContainer) ?? local : local;
+  const headingEl = index < 0 ? undefined : chunks ? chunks.mountedHeadings().find(item => item.index === index)?.element : headings[index];
   const parts = selectionParts(range);
   const text = parts?.text || range.toString();
-  const insideHeading = index >= 0 && headings[index].contains(range.startContainer) && headings[index].contains(range.endContainer);
+  const insideHeading = Boolean(headingEl?.contains(range.startContainer) && headingEl.contains(range.endContainer));
   // 27 复验 M-3：选区碰到只读（他人负责 / 未分配）内容时不能用 AI 改写
   const touchesLocked = !range.collapsed && [...editor.value.querySelectorAll("[data-a07-lock]")].some(node => range.intersectsNode(node));
   if (touchesLocked && text.trim()) {
@@ -3489,6 +3567,13 @@ function incrementalText(copy: HTMLElement): string {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const block of [...copy.children] as HTMLElement[]) {
+    const chunkIndex = block.getAttribute(CHUNK_ATTR);
+    if (chunkIndex !== null && chunks) {
+      // 卸载的段：节点不在 DOM 里，不会被编辑；按段缓存（逐块转换，与整篇转换一致）
+      const value = chunks.markdownOf(Number(chunkIndex), nodes => incrementalText(wrapNodes(nodes)));
+      if (value) out.push(value);
+      continue;
+    }
     const key = block.outerHTML;
     seen.add(key);
     let value = blockMarkdownCache.get(key);
@@ -3503,12 +3588,22 @@ function incrementalText(copy: HTMLElement): string {
   if (blockMarkdownCache.size > seen.size * 2 + 64) for (const key of [...blockMarkdownCache.keys()]) if (!seen.has(key)) blockMarkdownCache.delete(key);
   return out.join("\n\n");
 }
+function wrapNodes(nodes: Element[]): HTMLElement {
+  const wrap = window.document.createElement("div");
+  for (const node of nodes) wrap.appendChild(node.cloneNode(true));
+  wrap.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
+    node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
+    if (!node.classList.length) node.removeAttribute("class");
+  });
+  return wrap;
+}
 /** 编辑区文字（Markdown）。冲突/他人更新标记只用于显示，不进入正文；方案 C：冻结区换成服务器上这一段的版本，冻结区文字记进 mine。 */
 function editorText(): string {
-  if (!editor.value) return markdownContent.value;
+  if (!editor.value || bodyPending.value) return markdownContent.value;
   const root = editor.value;
   const copy = root.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll("[data-ai-preview]").forEach((node) => node.remove());
+  copy.querySelectorAll(`[data-ai-preview]:not([${CHUNK_ATTR}])`).forEach((node) => node.remove());
+  if (Object.keys(frozen.value).length || !chunkedEditor.value || incrementalOk !== true) chunks?.inflate(copy);
   copy.querySelectorAll(".blk-conflict,.blk-updated,.blk-flash").forEach((node) => {
     node.classList.remove("blk-conflict", "blk-updated", "blk-flash");
     if (!node.classList.length) node.removeAttribute("class");
@@ -3973,8 +4068,9 @@ async function copyRejected() {
  */
 function editorBlocksWithIds(): { markdown: string; ids: Array<string | null> } | null {
   const root = editor.value;
-  if (!root || Object.keys(frozen.value).length) return null;
+  if (!root || bodyPending.value || Object.keys(frozen.value).length) return null;
   const copy = root.cloneNode(true) as HTMLElement;
+  chunks?.inflate(copy);
   copy.querySelectorAll("[data-ai-preview]").forEach(node => node.remove());
   const seen = new Set<string>();
   for (const node of copy.querySelectorAll<HTMLElement>("[data-object-id]")) {
@@ -4490,7 +4586,7 @@ async function format(command: string, value?: string) {
   await refreshEditorFormatting();
 }
 function scrollToHeading(index: number) {
-  const target = editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
+  const target = chunks ? chunks.headingElement(index) : editor.value?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")[index];
   if (!target) return;
   if (!chunkedEditor.value) { target.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
   // 分段渲染时上方块的高度是估算值：先跳过去，等目标附近渲染出真实高度后再校正，直到位置稳定（最多 6 帧）
@@ -4601,7 +4697,11 @@ onMounted(() => {
   window.addEventListener("focusin", onEditorFocusIn);
   void load();
 });
+// 需要整篇 DOM 的操作（AI、冲突处理、冻结区）开始前整篇挂上
+watch([aiOpen, conflictOpen, () => Object.keys(frozen.value).length], ([ai, conflict, frozenCount]) => { if (ai || conflict || frozenCount) releaseChunks(); });
 onUnmounted(() => {
+  chunks?.destroy();
+  chunks = null;
   guidanceController?.abort();
   stopTabWatch();
   loadVersion += 1;
@@ -4851,12 +4951,14 @@ onUnmounted(() => {
               <button type="submit" class="primary sm" :disabled="addingHeading || saving || aiLocked || readonly || !headingTitle.trim()">{{ addingHeading ? "添加中..." : "添加到目录" }}</button>
             </div>
           </form>
-          <div v-if="assignRestricted && outline.length" class="seg ofilter" role="group" aria-label="目录筛选">
+          <div v-if="outline.length" class="seg ofilter" role="group" aria-label="目录筛选">
             <button type="button" :class="{ on: outlineMode === 'all' }" :aria-pressed="outlineMode === 'all'" data-testid="outline-filter-all" @click="outlineFilter = 'all'">全部</button>
-            <button type="button" :class="{ on: outlineMode === 'mine' }" :aria-pressed="outlineMode === 'mine'" data-testid="outline-filter-mine" @click="outlineFilter = 'mine'">我的部分 {{ outlineMineCount }}</button>
+            <button v-if="assignRestricted" type="button" :class="{ on: outlineMode === 'mine' }" :aria-pressed="outlineMode === 'mine'" data-testid="outline-filter-mine" @click="outlineFilter = 'mine'">我的部分 {{ outlineMineCount }}</button>
+            <button type="button" :class="{ on: outlineMode === 'todo' }" :aria-pressed="outlineMode === 'todo'" data-testid="outline-filter-todo" @click="outlineFilter = 'todo'">待编写</button>
+            <button type="button" :class="{ on: outlineMode === 'conflict' }" :aria-pressed="outlineMode === 'conflict'" data-testid="outline-filter-conflict" @click="outlineFilter = 'conflict'">有冲突</button>
           </div>
           <p v-if="outline.length === 0" class="oempty">暂无标题</p>
-          <p v-else-if="!outlineShown.length" class="oempty">{{ outlineMode === 'mine' && !outlineSearch.trim() ? '没有分给你的章节' : '没有匹配的标题' }}</p>
+          <p v-else-if="!outlineShown.length" class="oempty">{{ outlineSearch.trim() ? '没有匹配的标题' : outlineMode === 'mine' ? '没有分给你的章节' : outlineMode === 'todo' ? '没有待编写的章节' : outlineMode === 'conflict' ? '没有冲突' : '没有匹配的标题' }}</p>
           <OutlineVirtualList v-else-if="outlineVirtual" :entries="outlineShown" :selected="selectedHeading" :disabled="opBusy" :conflicts="conflictHeadings" :updated="updatedHeadings" @select="selectHeading" />
           <div v-else class="olist">
             <button v-for="entry in outlineShown" :key="entry.index" type="button" class="oitem outline-item" :class="[`l${Math.min((entry.info?.depth ?? 0) + 1, 4)}`, { on: selectedHeading === entry.index, empty: entry.info?.empty }]" :aria-current="selectedHeading === entry.index ? 'true' : undefined" :disabled="opBusy" @click="selectHeading(entry.index)">
@@ -4895,7 +4997,7 @@ onUnmounted(() => {
             <span v-if="sectionChars !== null" class="tool-count">本节 {{ sectionChars.toLocaleString('zh-CN') }} 字</span>
           </fieldset>
           <!-- 第 6 步：纸张区。.paper-content 的 DOM 结构与 data-word-marker 不变（8.2 第 10 条） -->
-          <div ref="desk" class="desk page-scroll"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
+          <p v-if="bodyPending && mode === 'edit'" class="body-pending" :class="{ failed: previewError }" role="status"><template v-if="previewError">编辑稿没能生成：{{ previewError }} 正文可以先阅读。<button type="button" class="ghost sm" @click="retryPreview">重试</button></template><template v-else>正在准备编辑稿，正文可以先阅读…</template></p><div ref="desk" class="desk page-scroll" @scroll.passive="trackViewHeading"><div class="paper" :style="{ ...paperStyle, zoom: String(paperZoom) }"><div ref="editor" class="paper-content" :style="{ minHeight: paperStyle.minHeight }" :contenteditable="editable" :aria-readonly="!editable" :aria-busy="refreshNotice ? 'true' : undefined" :class="{ refreshing: refreshingEditor, chunked: chunkedEditor }" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="点击此处开始编写文档" spellcheck="false" @beforeinput="guardLocked" @mousedown="lockedMouseDown" @input="onEditorInput" @compositionstart="setComposing(true)" @compositionend="setComposing(false)" @paste="pasteContent" @drop="blockUnsupportedImages" @dragstart="blockInternalDrag" @mouseup="captureEditorTarget" @keyup="captureEditorTarget" @click="clearUpdatedAt($event.target)"></div>
             <div v-if="conflictMarks.length" class="conflict-marks" aria-label="冲突标记">
               <template v-for="mark in conflictMarks" :key="mark.key">
                 <div v-if="mark.gap" class="conflict-gap" data-testid="conflict-gap" :style="{ top: `${mark.top}px` }" />
@@ -5020,7 +5122,7 @@ onUnmounted(() => {
         <AssignmentPanel v-if="assignOpen && mode === 'edit'" :document-id="document.id" :project-id="document.projectId" :objects="assignPanelObjects" :initial-filter="assignInitialFilter" @close="closeAssign" @changed="refreshOwnership()" />
         <SaveRejectedPanel v-if="rejectedOpen && mode === 'edit' && rejected" :violations="rejected.violations" :total="rejected.total" :project-owner="assignInfo?.projectOwner || ''" :busy="savingMine"
           @close="rejectedOpen = false" @locate="locateViolation" @save-mine="saveMineOnly" @download="downloadRejected" @copy="copyRejected" />
-        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
+        <DocumentHistory v-if="historyOpen" :document-id="document.id" :revision="document.revision" :current="markdownContent" :restore-blocked-reason="historyRestoreBlocked" :can-manage="canAssignDoc" :dirty="isDirty || saving" @close="historyOpen = false" @restored="acceptVersion" @busy="historyBusy = $event" @refresh="refreshFromServer().catch(() => undefined)" />
         <DocumentReferences v-if="mode === 'edit' && referencesOpen" ref="referencesPanel" :document-id="document.id" :revision="document.revision"
           :disabled="readonly || isDirty" @saved="acceptReferences" @close="referencesOpen = false" @busy="referencesBusy = $event" @dirty="referencesDirty = $event" />
         <DocumentAssignments v-if="mode === 'edit' && assignmentsOpen" ref="assignmentsPanel" :document-id="document.id" :revision="document.revision"
@@ -5060,7 +5162,7 @@ onUnmounted(() => {
 
       <!-- 第 9 步：底部状态栏 -->
       <footer class="ws-status">
-        <span class="cur">当前：{{ currentSection || '未选择章节' }}</span><span class="sep" aria-hidden="true"></span><span class="num">全文 {{ totalChars.toLocaleString('zh-CN') }} 字</span>
+        <span class="cur">当前：{{ currentSection || '未选择章节' }}</span><span class="sep" aria-hidden="true"></span><span class="num">全文 {{ totalChars.toLocaleString('zh-CN') }} 字 · 约 {{ pageEstimate }} 页</span>
         <span class="spacer"></span>
         <template v-if="lastEditor"><span>最近由 {{ lastEditor.name }} 修改于 {{ shortTime(lastEditor.at) }}</span><span class="sep" aria-hidden="true"></span></template>
         <span>Ctrl+S 立即保存</span>
@@ -5218,7 +5320,9 @@ onUnmounted(() => {
 .ojump input { width:96px; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 /* 长文档分段渲染：屏幕外的块跳过布局和绘制，高度沿用上次测得的值（auto），没测过时按一行估算 */
-.paper-content.chunked > :not([data-public-embed]) { content-visibility:auto; contain-intrinsic-size:auto 3em; }
+.body-pending { position:absolute; top:var(--space-3); left:50%; z-index:3; transform:translateX(-50%); display:flex; align-items:center; gap:var(--space-2); margin:0; padding:var(--space-1) var(--space-3); border-radius:var(--radius-control); background:var(--bg-surface); box-shadow:var(--shadow-2); color:var(--text-secondary); font-size:var(--text-sm); }
+.body-pending.failed { color:var(--danger-700); }
+.paper-content > .chunk-placeholder { overflow-anchor:none; pointer-events:none; user-select:none; }
 :deep(.public-embed-host) { margin:var(--space-3) 0; user-select:none; }
 .olist { flex:1; min-height:0; overflow:auto; padding:var(--space-2); display:flex; flex-direction:column; gap:1px; }
 .oitem { display:flex; align-items:center; gap:6px; width:100%; min-height:30px; padding:5px var(--space-2); border:0; border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font-family:var(--font); font-size:var(--text-sm); line-height:var(--leading-sm); text-align:left; cursor:pointer; }

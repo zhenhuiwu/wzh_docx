@@ -135,12 +135,13 @@ def seed() -> dict:
     return {"users": users, "project": project, "document": document, "plain": plain_doc, "zhang": zhang, "source": source}
 
 
-def login(page: Page, account: str):
+def login(page: Page, account: str, landing: str | None = None):
     page.goto(f"{WEB}/login")
     page.fill("#staff-id", account)
     page.fill("#password", PASSWORD)
     page.locator("form button[type=submit]").click()
-    page.wait_for_url(re.compile(r"/(projects|my-writing)"), timeout=30000)  # 编写人员落地页为“我的编写”
+    # 30 §2 / 验收 P1-4：管理员、项目创建者与项目负责人落在「项目」，只有编写人员落在「我的编写」
+    page.wait_for_url(re.compile(rf"/({landing})(\?|$)" if landing else r"/(projects|my-writing)"), timeout=30000)
 
 
 def shot(page: Page, name: str):
@@ -223,8 +224,8 @@ def main() -> int:
         ctx_b = browser.new_context(viewport={"width": 1920, "height": 1080}, accept_downloads=True, locale="zh-CN")
         a, b = ctx_a.new_page(), ctx_b.new_page()
         open_pages.extend([a, b])
-        login(a, f"e2e-zhang-{RUN}")
-        login(b, f"e2e-li-{RUN}")
+        login(a, f"e2e-zhang-{RUN}", landing="projects")
+        login(b, f"e2e-li-{RUN}", landing="my-writing")
 
         @step("成员可见项目与文档列表（P0-4 / N-S5）")
         def members_visible():
@@ -234,7 +235,7 @@ def main() -> int:
             expect(b.get_by_text("项目不存在或你无权访问")).to_have_count(0)
             shot(b, "01-成员-文档列表")
             viewer = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN").new_page()
-            login(viewer, f"e2e-wang-{RUN}")
+            login(viewer, f"e2e-wang-{RUN}", landing="projects")
             viewer.goto(f"{WEB}/projects/{data['project']['id']}/documents")
             expect(viewer.get_by_text("软件需求规格说明").first).to_be_visible(timeout=30000)
             expect(viewer.get_by_role("button", name="新建文档")).to_have_count(0)
@@ -247,7 +248,7 @@ def main() -> int:
             shot(viewer, "14-只读成员-工作台")
             viewer.context.close()
             outsider = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN").new_page()
-            login(outsider, f"e2e-zhao-{RUN}")
+            login(outsider, f"e2e-zhao-{RUN}", landing="projects")
             outsider.goto(f"{WEB}/projects/{data['project']['id']}/documents/{doc_id}")
             expect(outsider.get_by_test_id("load-error")).to_contain_text("无权访问", timeout=30000)
             shot(outsider, "22-非成员-404")
@@ -480,7 +481,7 @@ def main() -> int:
                     return new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)); }; }"""
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
 
             def second_none(tag: str):
                 return paragraph(page, f"探针{tag}乙段落").locator("xpath=following-sibling::p[1]")
@@ -668,7 +669,7 @@ def main() -> int:
         def session_expired_recovery():
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
             open_doc(page, data)
             type_after(page, p_offline, "（会话过期前未保存）")
             page.wait_for_timeout(800)
@@ -717,7 +718,7 @@ def main() -> int:
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
             open_pages.append(page)
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
             # 1) 本标签（page）写下草稿 O：保存一直失败
             open_doc(page, data)
             page.route("**/documents/*/content", fail_saves)
@@ -790,7 +791,7 @@ def main() -> int:
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
             open_pages.append(page)
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
             did = make_doc(data, f"草稿冲突-{RUN}", 0)
             url = f"{WEB}/projects/{data['project']['id']}/documents/{did}"
             # 先写出一份真实草稿当模板（断网输入），取得账号与格式
@@ -863,7 +864,7 @@ def main() -> int:
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
             page = ctx.new_page()
             open_pages.append(page)
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
             hits = 0
             for n in range(3):
                 did = make_doc(data, f"载入锁定-{n}-{RUN}", 0)
@@ -904,7 +905,7 @@ def main() -> int:
                 const node = document.querySelector('[data-testid=editor-refreshing]');
                 if (node && !window.__notices.includes(node.textContent)) window.__notices.push(node.textContent);
             }).observe(document, { childList: true, subtree: true, characterData: true });""")
-            login(page, f"e2e-li-{RUN}")
+            login(page, f"e2e-li-{RUN}", landing="my-writing")
             for big, gap in ((0, 0), (1508, 500)):
                 fh_doc = make_doc(data, f"F-H2-{big}-{RUN}", big)
                 page.goto(f"{WEB}/projects/{data['project']['id']}/documents/{fh_doc}")

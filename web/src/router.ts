@@ -6,6 +6,7 @@ import AppShell from "./layouts/AppShell.vue";
 import { onForbidden, onPasswordChangeRequired, onSessionExpired } from "./api/client";
 import { hasPermission, readSession } from "./session";
 import { refreshMyWritingAccess } from "./myWritingAccess";
+import { listProjects } from "./api/projects";
 import { endSession, ensureSession, loginDestination, markPasswordChangeRequired, markSessionExpired, refreshSession } from "./session";
 import DocumentWorkbenchView from "./views/DocumentWorkbenchView.vue";
 import ProjectDetailView from "./views/ProjectDetailView.vue";
@@ -50,9 +51,15 @@ function withPermissions(records: RouteRecordRaw[]): RouteRecordRaw[] {
   return records;
 }
 
+/** 30 §2 / 验收 P1-4：管理员、项目创建者（管理者）和任一项目的负责人落在「项目」；只有编写人员落在「我的编写」。 */
 async function homeDestination() {
-  if (hasPermission(readSession(), "system.manage")) return { name: "projects", replace: true };
-  return (await refreshMyWritingAccess()) ? { name: "my-writing", replace: true } : { name: "projects", replace: true };
+  const projects = { name: "projects", replace: true } as const;
+  const session = readSession();
+  if (hasPermission(session, "system.manage") || hasPermission(session, "projects.manage")) return projects;
+  try {
+    if ((await listProjects({ page: 1, pageSize: 1, myRole: "owner" })).total > 0) return projects;
+  } catch { return projects; }
+  return (await refreshMyWritingAccess()) ? { name: "my-writing", replace: true } : projects;
 }
 
 export const router = createRouter({

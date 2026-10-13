@@ -1,0 +1,227 @@
+/**
+ * 30 §3.3 / 验收 P0-2：长文档正文按章节分段挂载。
+ * 顶层块按标题切成若干段（chunk）；只有视口附近的段在 DOM 里，其余换成同高、不可编辑的占位块。
+ * 卸载的段保留原来的 DOM 节点（编辑过的内容不会丢），取正文时用节点生成 Markdown（按段缓存）。
+ * 占位块带 data-ai-preview：所有不认识分段的取正文路径都会把它去掉——所以取整篇正文必须走 inflate()/markdownOf()。
+ */
+export const CHUNK_ATTR = "data-chunk-ph";
+const HEADING = /^H[1-6]$/;
+
+export interface Chunk {
+  nodes: Element[];
+  placeholder: HTMLElement | null;
+  /** 本段第一个标题在全文标题中的序号；headingCount 为本段标题数 */
+  headingStart: number;
+  headingCount: number;
+  height: number;
+  markdown: string | null;
+}
+
+export interface ChunkOptions {
+  /** 每段至少多少块才在下一个标题处切开 */
+  minBlocks?: number;
+  /** 没有标题时，每段最多多少块 */
+  maxBlocks?: number;
+  /** 段挂上后调用（补锁、公共卡片、冲突标记等只作用于在 DOM 里的块） */
+  onMount?: (chunk: Chunk) => void;
+  /** 段换成占位前调用 */
+  onUnmount?: (chunk: Chunk) => void;
+}
+
+/** 估算一块的高度（像素）：每 40 字一行、每行 28px，另加段距。只用于从未显示过的段。 */
+export function estimateHeight(node: Element): number {
+  const text = (node.textContent || "").length;
+  if (HEADING.test(node.tagName)) return 48;
+  if (node.tagName === "TABLE") return 40 + 32 * node.querySelectorAll("tr").length;
+  return 12 + 28 * Math.max(1, Math.ceil(text / 40));
+}
+
+/** 把顶层块切成段：在标题处切（本段已有 minBlocks 块时），或者块数到 maxBlocks 时硬切。 */
+export function splitChunks(blocks: Element[], minBlocks = 24, maxBlocks = 80): Element[][] {
+  const out: Element[][] = [];
+  let current: Element[] = [];
+  for (const block of blocks) {
+    if (current.length && ((HEADING.test(block.tagName) && current.length >= minBlocks) || current.length >= maxBlocks)) {
+      out.push(current);
+      current = [];
+    }
+    current.push(block);
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
+export class ChunkedBody {
+  readonly chunks: Chunk[] = [];
+  private observer: IntersectionObserver | null = null;
+  private headingOrder = new WeakMap<Element, number>();
+  private scrollHandler: (() => void) | null = null;
+  private frame = 0;
+  active = true;
+
+  constructor(private root: HTMLElement, private scroller: HTMLElement | null, private options: ChunkOptions = {}) {}
+
+  /** 切段并只保留 keep 里的段（默认前两段）。必须在 root.innerHTML 刚写好、浏览器还没布局时调用。 */
+  build(keep: Set<number> = new Set([0, 1])) {
+    const blocks = ([...this.root.children] as Element[]).filter(node => !node.hasAttribute("data-ai-preview"));
+    let headings = 0;
+    for (const group of splitChunks(blocks, this.options.minBlocks, this.options.maxBlocks)) {
+      const start = headings;
+      for (const node of group) if (HEADING.test(node.tagName)) this.headingOrder.set(node, headings++);
+      this.chunks.push({ nodes: group, placeholder: null, headingStart: start, headingCount: headings - start, height: group.reduce((sum, node) => sum + estimateHeight(node), 0), markdown: null });
+    }
+    this.chunks.forEach((chunk, index) => { if (!keep.has(index)) this.detach(chunk, false); });
+    if (typeof IntersectionObserver !== "undefined") {
+      this.observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const index = Number((entry.target as HTMLElement).getAttribute(CHUNK_ATTR));
+          if (this.chunks[index]?.placeholder) this.mount(index);
+        }
+      }, { root: this.scroller, rootMargin: "150% 0px" });
+      for (const chunk of this.chunks) if (chunk.placeholder) this.observer.observe(chunk.placeholder);
+    }
+    if (this.scroller) {
+      this.scrollHandler = () => {
+        if (this.frame) return;
+        this.frame = requestAnimationFrame(() => { this.frame = 0; this.trim(); });
+      };
+      this.scroller.addEventListener("scroll", this.scrollHandler, { passive: true });
+    }
+  }
+
+  get mountedIndexes(): Set<number> {
+    return new Set(this.chunks.flatMap((chunk, index) => chunk.placeholder ? [] : [index]));
+  }
+  get mountedBlockCount(): number {
+    return this.chunks.reduce((sum, chunk) => sum + (chunk.placeholder ? 0 : chunk.nodes.length), 0);
+  }
+
+  private detach(chunk: Chunk, measure: boolean) {
+    if (chunk.placeholder || !chunk.nodes.length) return;
+    const first = chunk.nodes[0], last = chunk.nodes[chunk.nodes.length - 1];
+    if (measure) {
+      const top = first.getBoundingClientRect().top, bottom = last.getBoundingClientRect().bottom;
+      if (bottom > top) chunk.height = bottom - top;
+    }
+    this.options.onUnmount?.(chunk);
+    const placeholder = this.root.ownerDocument.createElement("div");
+    placeholder.setAttribute(CHUNK_ATTR, String(this.chunks.indexOf(chunk)));
+    placeholder.setAttribute("data-ai-preview", "");
+    placeholder.setAttribute("contenteditable", "false");
+    placeholder.setAttribute("aria-hidden", "true");
+    placeholder.className = "chunk-placeholder";
+    placeholder.style.height = `${Math.round(chunk.height)}px`;
+    first.before(placeholder);
+    for (const node of chunk.nodes) {
+      // 卸载时的嵌入宿主（公共卡片等）不属于正文，挂上时由 onMount 重放
+      const next = node.nextElementSibling;
+      if (next?.hasAttribute("data-public-embed")) next.remove();
+      node.remove();
+    }
+    chunk.placeholder = placeholder;
+    chunk.markdown = null;
+    this.observer?.observe(placeholder);
+  }
+
+  mount(index: number) {
+    const chunk = this.chunks[index];
+    if (!chunk?.placeholder) return;
+    this.observer?.unobserve(chunk.placeholder);
+    chunk.placeholder.replaceWith(...chunk.nodes);
+    chunk.placeholder = null;
+    this.options.onMount?.(chunk);
+  }
+
+  /** 卸载离视口很远、且不含光标/焦点的段 */
+  trim() {
+    if (!this.active || !this.scroller) return;
+    const view = this.scroller.getBoundingClientRect();
+    const margin = Math.max(2400, view.height * 3);
+    const selection = this.root.ownerDocument.getSelection();
+    const anchor = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    this.chunks.forEach(chunk => {
+      if (chunk.placeholder || !chunk.nodes.length) return;
+      const top = chunk.nodes[0].getBoundingClientRect().top;
+      const bottom = chunk.nodes[chunk.nodes.length - 1].getBoundingClientRect().bottom;
+      if (bottom > view.top - margin && top < view.bottom + margin) return;
+      if (anchor && chunk.nodes.some(node => anchor.intersectsNode(node))) return;
+      if (chunk.nodes.some(node => node.contains(this.root.ownerDocument.activeElement))) return;
+      this.detach(chunk, true);
+    });
+  }
+
+  mountAll() {
+    this.chunks.forEach((_, index) => this.mount(index));
+  }
+
+  /** 第 index 个标题（全文序号）所在的元素；所在段没挂上时先挂上。 */
+  headingElement(index: number): HTMLElement | null {
+    const at = this.chunks.findIndex(chunk => index >= chunk.headingStart && index < chunk.headingStart + chunk.headingCount);
+    if (at < 0) return null;
+    this.mount(at);
+    return (this.chunks[at].nodes.find(node => this.headingOrder.get(node) === index) as HTMLElement | undefined) ?? null;
+  }
+
+  /** 元素对应的全文标题序号（分段后 DOM 里的标题不全，不能按 querySelectorAll 的位置算） */
+  headingIndexOf(node: Element): number | undefined {
+    return this.headingOrder.get(node);
+  }
+
+  /** 位置 node 所属章节的全文标题序号（在第一个标题之前为 -1；不在任何已挂载段里为 undefined） */
+  headingIndexAt(node: Node): number | undefined {
+    for (const chunk of this.chunks) {
+      if (chunk.placeholder) continue;
+      const at = chunk.nodes.findIndex(block => block === node || block.contains(node));
+      if (at < 0) continue;
+      for (let i = at; i >= 0; i--) {
+        const index = this.headingOrder.get(chunk.nodes[i]);
+        if (index !== undefined) return index;
+      }
+      return chunk.headingStart - 1;
+    }
+    return undefined;
+  }
+
+  /** 已挂载的标题元素及其全文序号 */
+  mountedHeadings(): Array<{ element: HTMLElement; index: number }> {
+    return this.chunks.flatMap(chunk => chunk.placeholder ? [] : chunk.nodes.flatMap(node => {
+      const index = this.headingOrder.get(node);
+      return index === undefined ? [] : [{ element: node as HTMLElement, index }];
+    }));
+  }
+
+  /** 卸载段的 Markdown（节点不在 DOM 里就不会被编辑，算一次缓存到再次挂上） */
+  markdownOf(index: number, convert: (nodes: Element[]) => string): string {
+    const chunk = this.chunks[index];
+    if (chunk.markdown === null) chunk.markdown = convert(chunk.nodes);
+    return chunk.markdown;
+  }
+
+  /** 在 root 的副本里把占位换回节点副本，得到整篇（用于整篇转换与块 ID 对照） */
+  inflate(copy: HTMLElement) {
+    for (const placeholder of [...copy.querySelectorAll<HTMLElement>(`:scope > [${CHUNK_ATTR}]`)]) {
+      const chunk = this.chunks[Number(placeholder.getAttribute(CHUNK_ATTR))];
+      placeholder.replaceWith(...(chunk?.nodes.map(node => node.cloneNode(true)) ?? []));
+    }
+  }
+
+  destroy(mountAll = false) {
+    if (mountAll) this.mountAll();
+    this.active = false;
+    this.observer?.disconnect();
+    this.observer = null;
+    if (this.scroller && this.scrollHandler) this.scroller.removeEventListener("scroll", this.scrollHandler);
+    if (this.frame) cancelAnimationFrame(this.frame);
+  }
+}
+
+/** P0-2：版式预览还没到时先显示的正文（只读）：按 Markdown 粗排标题与段落，不依赖服务端。 */
+export function quickBodyHtml(markdown: string): string {
+  const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return markdown.split(/\n{2,}/).map(block => block.trim()).filter(Boolean).map(block => {
+    const heading = /^(#{1,6})\s+(.+)$/.exec(block);
+    if (heading && !block.includes("\n")) return `<h${heading[1].length}>${escape(heading[2].replace(/\s+#*\s*$/, ""))}</h${heading[1].length}>`;
+    return `<p>${escape(block).replace(/\n/g, "<br>")}</p>`;
+  }).join("");
+}

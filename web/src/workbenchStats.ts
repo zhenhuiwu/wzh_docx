@@ -2,6 +2,7 @@
  * 工作台重塑（12 §8.1 第 4、5、9 步）：目录状态、字数与“合并进来的块”，都只读 Markdown，不参与保存。
  */
 import { blocksOf } from "./textDiff";
+import { isPlaceholderText } from "./myBlocks";
 
 /** 去掉 Markdown 标记后的字数：不计空白和标点之外的标记符号（#、*、`、|、>、列表符号、链接地址、图片）。 */
 export function countChars(markdown: string): number {
@@ -26,6 +27,8 @@ export interface OutlineEntry {
   chars: number;
   /** 待编写：标题下没有正文，也没有下级标题。 */
   empty: boolean;
+  /** 验收 P2-6：待编写（含只有模板占位文字的章节），用于目录筛选；empty 仍只表示“完全没有正文”。 */
+  todo: boolean;
 }
 
 /** 与 documentHeadings 同一套规则（`#` 后至少一个空格和文字）切章节，序号与目录、selectedHeading 一一对应。 */
@@ -42,7 +45,9 @@ export function outlineEntries(markdown: string): OutlineEntry[] {
     const body = lines.slice(item.line + 1, next ? next.line : lines.length).join("\n");
     const chars = countChars(body);
     const hasChild = Boolean(next && next.level > item.level);
-    return { level: item.level, text: item.text, depth: item.level - min, chars, empty: chars === 0 && !hasChild };
+    const empty = chars === 0 && !hasChild;
+    const todo = empty || (!hasChild && blocksOf(body).every(block => isPlaceholderText(block)));
+    return { level: item.level, text: item.text, depth: item.level - min, chars, empty, todo };
   });
 }
 

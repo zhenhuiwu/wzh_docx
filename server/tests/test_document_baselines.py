@@ -67,8 +67,10 @@ def test_my_writing_lists_owned_or_assigned(bteam):
     with connect() as connection:
         connection.execute("UPDATE documents SET owner_id=%s WHERE id=%s", (users["editor"], did))
         connection.commit()
+    # 验收 P1(a)：项目负责人即使不是文档负责人，也能在「我的编写」里看到项目的文档（不会是空页）
     _as(client, "owner")
-    assert client.get("/api/v1/my-writing").json()["data"]["items"] == []
+    owned = client.get("/api/v1/my-writing").json()["data"]["items"]
+    assert [(item["id"], item["myRole"]) for item in owned] == [(did, "owner")]
     _as(client, "editor")
     data = client.get("/api/v1/my-writing").json()["data"]
     assert did in [item["id"] for item in data["items"]]
@@ -99,3 +101,20 @@ def test_my_writing_hidden_for_read_only_members(bteam):
     for role, visible in (("editor", True), ("owner", True), ("viewer", False), ("reviewer", False), ("outsider", False)):
         _as(client, role)
         assert client.get("/api/v1/my-writing/access").json()["data"]["visible"] is visible, role
+
+
+def test_concurrent_project_baselines_get_distinct_seq(bteam):
+    """验收 40 P2-1：并发建立项目基线不能 500，序号各不相同。"""
+    from concurrent.futures import ThreadPoolExecutor
+    client, did, users = bteam
+    with connect() as connection:
+        project = connection.execute("SELECT project_id FROM documents WHERE id=%s", (did,)).fetchone()["project_id"]
+    owner = _as(client, "owner")
+
+    def create(n: int):
+        return client.post(f"/api/v1/projects/{project}/baselines", headers=owner, json={"name": f"并发{n}", "documentIds": [did]})
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        responses = list(pool.map(create, range(6)))
+    assert [r.status_code for r in responses] == [201] * 6, [r.text for r in responses if r.status_code != 201]
+    assert sorted(r.json()["data"]["seq"] for r in responses) == [1, 2, 3, 4, 5, 6]

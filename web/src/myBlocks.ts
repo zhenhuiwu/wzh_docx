@@ -71,3 +71,35 @@ export function aiFragmentTooLarge(fragment: Fragment, drafts: Record<string, st
   const chars = fragment.blocks.reduce((sum, block) => sum + (drafts[block.id] ?? block.markdown).length, 0);
   return fragment.blocks.length > AI_FRAGMENT_MAX_BLOCKS || chars > AI_FRAGMENT_MAX_CHARS;
 }
+
+/** 验收 P1-5：模板占位文字（如“（在此编写本章内容。）”）不算正文：显示为输入框占位提示，不计为“已写”。 */
+const PLACEHOLDER = /^[（(][^（）()\n]*(在此|请在|待编写|待补充|填写|编写本)[^（）()\n]*[）)]$/;
+export function isPlaceholderText(markdown: string): boolean {
+  return PLACEHOLDER.test(markdown.trim());
+}
+
+/** 验收 40 P1-1：AI 编写本节的块操作可能在 draft 或 done 事件里给出。只把本片段里的 replace 填进草稿，其余计为跳过。 */
+export interface AiBlockOp { op: string; blockId: string; content: string }
+export function applyAiOperations(operations: AiBlockOp[] | undefined, ids: Set<string>, drafts: Record<string, string>, seen: Set<string>): { applied: number; skipped: number } {
+  let applied = 0, skipped = 0;
+  for (const op of operations ?? []) {
+    const key = `${op.op}:${op.blockId}:${op.content}`;
+    if (seen.has(key)) continue; // draft 与 done 可能重复给出同一操作
+    seen.add(key);
+    if (op.op === "replace" && ids.has(op.blockId) && op.content.trim()) { drafts[op.blockId] = op.content; applied += 1; }
+    else skipped += 1;
+  }
+  return { applied, skipped };
+}
+
+/** 验收 40 P2-4：编辑稿 HTML 里标了 data-word-heading 的块（Word 里套正文样式的标题，如“1.1 标识”）——在片段卡片里锁定。 */
+export function wordHeadingIds(html: string): Set<string> {
+  const ids = new Set<string>();
+  for (const match of html.matchAll(/<[a-z0-9]+\b[^>]*>/gi)) {
+    const tag = match[0];
+    if (!/\sdata-word-heading(?:=|\s|>)/.test(tag)) continue;
+    const id = /\sdata-object-id="([^"]+)"/.exec(tag)?.[1];
+    if (id) ids.add(id);
+  }
+  return ids;
+}

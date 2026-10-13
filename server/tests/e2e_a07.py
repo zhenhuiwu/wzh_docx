@@ -148,13 +148,14 @@ def seed() -> dict:
     return {"users": users, "project": project, "document": document, "admin": admin}
 
 
-def login(page: Page, account: str, password: str = PASSWORD):
+def login(page: Page, account: str, password: str = PASSWORD, landing: str | None = None):
     page.context.clear_cookies()
     page.goto(f"{WEB}/login")
     page.fill("#staff-id", account)
     page.fill("#password", password)
     page.locator("form button[type=submit]").click()
-    page.wait_for_url(re.compile(r"/(projects|my-writing)"), timeout=30000)  # 编写人员落地页为“我的编写”
+    # 30 §2 / 验收 P1-4：管理员、项目创建者与项目负责人落在「项目」，只有编写人员落在「我的编写」
+    page.wait_for_url(re.compile(rf"/({landing})(\?|$)" if landing else r"/(projects|my-writing)"), timeout=30000)
 
 
 def shot(page: Page, name: str):
@@ -214,8 +215,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         ctx_b = browser.new_context(viewport={"width": WIDTH, "height": HEIGHT}, accept_downloads=True)
         page, page2 = ctx_a.new_page(), ctx_b.new_page()
         open_pages.extend([page, page2])
-        login(page, ADMIN, ADMIN_PASSWORD)
-        login(page2, f"lisi{RUN}")
+        login(page, ADMIN, ADMIN_PASSWORD, landing="projects")
+        login(page2, f"lisi{RUN}", landing="my-writing")
 
         @step("G1 负责人在工作台“编写分工”面板按章节分配，文档显示“按分工编辑”")
         def g1():
@@ -549,7 +550,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
                 admin.call("POST", f"/users/{users['wangce']}/enable", json={"reason": "A07 验收", "expectedRevision": account["revision"]})
         g12()
 
-        login(page2, f"liuyang{RUN}")
+        login(page2, f"liuyang{RUN}", landing="my-writing")
         liuyang = Api(f"liuyang{RUN}")
 
         @step("G10 3000 块的文档：编写人员改自己章节的末段，保存成功、不错位（27 M-1）")
@@ -643,7 +644,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
                        json={"objectIds": [heads["功能需求"], heads["附录"]], "assigneeIds": [str(users["liuyang"])], "expectedAssignmentsRevision": view["assignmentsRevision"]})
             ctx_c = browser.new_context(viewport={"width": WIDTH, "height": HEIGHT}, accept_downloads=True)
             page3 = ctx_c.new_page(); open_pages.append(page3)
-            login(page3, f"liuyang{RUN}")
+            login(page3, f"liuyang{RUN}", landing="my-writing")
             open_doc(page3, pid, d2)
             expect(para(page3, "功能需求第一段")).to_have_attribute("data-mine", "", timeout=30000)
             para(page3, "概述第一段").click(); page3.keyboard.type("OLDSTASH")   # 只读块里输入 → 暂存

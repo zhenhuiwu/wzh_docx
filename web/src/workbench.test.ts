@@ -16,6 +16,10 @@ describe("工作台重塑：目录与字数", () => {
       ["1 范围", 0, false, 0], ["1.1 标识", 1, false, 3], ["1.2 概述", 1, true, 0], ["2 引用文档", 0, true, 0],
     ]);
   });
+  it("P2-6：只有模板占位文字的章节算待编写", () => {
+    const entries = outlineEntries("## 1 范围\n\n（在此编写本章内容。）\n\n## 2 概述\n\n正文。\n");
+    expect(entries.map(item => [item.empty, item.todo])).toEqual([[false, true], [false, false]]);
+  });
   it("N4：合并进来的块＝服务器有、本次提交没有的非标题块", () => {
     expect(mergedInBlocks("# 标题\n\n甲\n\n乙（我改）", "# 标题\n\n甲（他改）\n\n乙（我改）")).toEqual(["甲（他改）"]);
     expect(mergedInBlocks("甲", "甲")).toEqual([]);

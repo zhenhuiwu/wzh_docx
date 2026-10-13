@@ -130,13 +130,14 @@ def seed() -> dict:
     return {"users": users, "admin": admin, "group": group, "td": td, "project": project, "old_doc": old_doc}
 
 
-def login(page: Page, account: str, password: str = PASSWORD):
+def login(page: Page, account: str, password: str = PASSWORD, landing: str | None = None):
     page.context.clear_cookies()
     page.goto(f"{WEB}/login")
     page.fill("#staff-id", account)
     page.fill("#password", password)
     page.locator("form button[type=submit]").click()
-    page.wait_for_url(re.compile(r"/(projects|my-writing)"), timeout=30000)  # 编写人员落地页为“我的编写”
+    # 30 §2 / 验收 P1-4：管理员、项目创建者与项目负责人落在「项目」，只有编写人员落在「我的编写」
+    page.wait_for_url(re.compile(rf"/({landing})(\?|$)" if landing else r"/(projects|my-writing)"), timeout=30000)
 
 
 def shot(page: Page, name: str):
@@ -199,7 +200,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         ctx = browser.new_context(viewport=VIEWPORT, accept_downloads=True)
         page = ctx.new_page()
         open_pages.append(page)
-        login(page, ADMIN, ADMIN_PASSWORD)
+        login(page, ADMIN, ADMIN_PASSWORD, landing="projects")
 
         @step("T1 模板文档表：当前版本 / 草稿 / 使用中 / 编辑模板")
         def t1():
@@ -505,7 +506,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         def t12():
             reader = browser.new_context(viewport=VIEWPORT).new_page()
             open_pages.append(reader)
-            login(reader, f"creator{RUN}")
+            login(reader, f"creator{RUN}", landing="projects")
             reader.goto(editor_url)
             expect(reader.locator(".paper .blk").first).to_be_visible(timeout=30000)
             expect(reader.get_by_test_id("template-publish")).to_have_count(0)
@@ -522,7 +523,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             assert auditor.raw("GET", f"/template-documents/{td}/versions").status_code == 403
             viewer = browser.new_context(viewport=VIEWPORT).new_page()
             open_pages.append(viewer)
-            login(viewer, f"auditor{RUN}")
+            login(viewer, f"auditor{RUN}", landing="projects")
             expect(viewer.locator('aside[aria-label="主导航"] >> text=模板管理')).to_have_count(0)
             viewer.goto(editor_url)
             expect(viewer.get_by_text("你没有编辑模板权限")).to_be_visible(timeout=30000)

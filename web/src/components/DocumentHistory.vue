@@ -5,8 +5,9 @@ import { getDocumentVersion, listDocumentVersions, restoreDocumentVersion, type 
 import { ApiError } from "../api/client";
 import { revisionConflictText } from "../saveModel";
 import { blockDiff } from "../textDiff";
+import { createVersion, listVersions, revertVersion, type DocumentVersion as SavedVersion } from "../api/baselines";
 
-const props = defineProps<{ documentId: string; revision: number; restoreBlockedReason?: string; current?: string }>();
+const props = defineProps<{ documentId: string; revision: number; restoreBlockedReason?: string; current?: string; canManage?: boolean; dirty?: boolean }>();
 const emit = defineEmits<{ close: []; restored: [result: DocumentContentResult]; busy: [value: boolean]; refresh: [] }>();
 // S6：恢复是严格接口；409 时按 details 说明谁改了，并提供“刷新版本列表”（02 §3.7 第 11 条）。
 const staleRestore = ref(false);
@@ -148,13 +149,100 @@ async function restore() {
   }
   finally { restoring.value = false; emit("busy", false); }
 }
-onMounted(() => void load());
+// 30 §3.5 / P0-1：保存为版本（commit）与回退（revert）。只有负责人和管理员可以操作（服务端同样校验）。
+const versions = ref<SavedVersion[]>([]);
+const versionsTotal = ref(0);
+const versionsLoading = ref(false);
+const versionsError = ref("");
+const versionNotice = ref("");
+const saveOpen = ref(false);
+const saveMessage = ref("");
+const savingVersion = ref(false);
+const saveError = ref("");
+const menuFor = ref<number | null>(null);
+const revertTarget = ref<SavedVersion | null>(null);
+const reverting = ref(false);
+const revertError = ref("");
+const versionBlocked = computed(() => !props.canManage ? "只有项目负责人和管理员可以保存版本或回退。" : props.dirty ? "当前还有修改未保存，保存后才能保存为版本或回退。" : "");
+const revertBlocked = computed(() => versionBlocked.value || props.restoreBlockedReason || "");
+async function loadVersions() {
+  versionsLoading.value = true; versionsError.value = "";
+  try { const page = await listVersions(props.documentId, 0, 20); versions.value = page.items; versionsTotal.value = page.total; }
+  catch (e) { versionsError.value = message(e); }
+  finally { versionsLoading.value = false; }
+}
+function openSave() { saveOpen.value = true; saveMessage.value = ""; saveError.value = ""; versionNotice.value = ""; }
+async function saveVersion() {
+  if (savingVersion.value || versionBlocked.value) return;
+  savingVersion.value = true; saveError.value = "";
+  try {
+    const created = await createVersion(props.documentId, saveMessage.value.trim());
+    saveOpen.value = false;
+    versionNotice.value = `已保存为版本 ${created.label}。`;
+    await loadVersions();
+  } catch (e) { saveError.value = message(e); }
+  finally { savingVersion.value = false; }
+}
+function askRevert(item: SavedVersion) { menuFor.value = null; revertTarget.value = item; revertError.value = ""; versionNotice.value = ""; }
+async function confirmRevert() {
+  const target = revertTarget.value;
+  if (!target || reverting.value || revertBlocked.value) return;
+  reverting.value = true; emit("busy", true); revertError.value = "";
+  try {
+    const created = await revertVersion(props.documentId, target.seq, props.revision);
+    revertTarget.value = null;
+    versionNotice.value = `已回退到 ${target.label}，生成新版本 ${created.label}；历史版本都还在。`;
+    emit("refresh");
+    await Promise.all([loadVersions(), load(0)]);
+  } catch (e) {
+    revertError.value = e instanceof ApiError && e.status === 409 && e.code === "REVISION_CONFLICT" ? "文档刚被别人修改过，请刷新后重新核对再回退。" : message(e);
+  } finally { reverting.value = false; emit("busy", false); }
+}
+function closeMenus(event: KeyboardEvent) { if (event.key === "Escape") { menuFor.value = null; if (!reverting.value) revertTarget.value = null; } }
+onMounted(() => { void load(); void loadVersions(); });
 </script>
 
 <template>
   <aside class="history-panel" aria-label="版本记录">
     <header class="phead"><h2>版本记录</h2><button type="button" class="subtle icon-btn" aria-label="收起版本记录" :disabled="restoring" @click="emit('close')"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button></header>
-    <div class="pbody">
+    <div class="pbody" @keydown="closeMenus">
+      <section class="saved-versions" aria-labelledby="saved-versions-title">
+        <div class="sv-head">
+          <h3 id="saved-versions-title">版本<span v-if="versionsTotal" class="sv-count">{{ versionsTotal }}</span></h3>
+          <button type="button" class="ghost sm" :disabled="Boolean(versionBlocked) || savingVersion || reverting" :title="versionBlocked || undefined" @click="openSave">保存为版本</button>
+        </div>
+        <p v-if="versionBlocked && canManage" class="history-hint">{{ versionBlocked }}</p>
+        <form v-if="saveOpen" class="sv-form" @submit.prevent="saveVersion">
+          <label class="sv-label" for="version-message">版本说明</label>
+          <input id="version-message" v-model="saveMessage" class="control" maxlength="200" placeholder="例如：提交评审前的版本" :disabled="savingVersion" autofocus />
+          <p v-if="saveError" class="history-error" role="alert">{{ saveError }}</p>
+          <div class="sv-actions"><button type="button" class="subtle sm" :disabled="savingVersion" @click="saveOpen = false">取消</button><button type="submit" class="primary sm" :disabled="savingVersion">{{ savingVersion ? "正在保存…" : "保存" }}</button></div>
+        </form>
+        <p v-if="versionNotice" class="sv-notice" role="status">{{ versionNotice }}</p>
+        <div v-if="versionsLoading" class="skel" role="status" aria-label="正在读取版本…"><span></span><span class="short"></span></div>
+        <div v-else-if="versionsError"><p class="history-error" role="alert">{{ versionsError }}</p><button type="button" class="ghost sm" @click="loadVersions">重试</button></div>
+        <p v-else-if="!versions.length" class="hint">还没有保存过版本。{{ canManage ? "点“保存为版本”记下当前正文。" : "" }}</p>
+        <ul v-else class="sv-list">
+          <li v-for="item in versions" :key="item.id" class="sv-item">
+            <span class="branch">{{ item.label }}</span>
+            <span class="sv-main"><span class="sv-msg">{{ item.message || (item.kind === "revert" ? `回退到 V${item.revertedFromSeq}` : "未写说明") }}</span><small>{{ time(item.createdAt) }} · {{ item.author?.name || "未记录" }}</small></span>
+            <span v-if="item.revision === revision" class="tag plain">当前</span>
+            <span v-if="canManage" class="sv-more">
+              <button type="button" class="subtle icon-btn" :aria-label="`${item.label} 更多操作`" aria-haspopup="menu" :aria-expanded="menuFor === item.seq" :disabled="reverting" @click="menuFor = menuFor === item.seq ? null : item.seq">…</button>
+              <span v-if="menuFor === item.seq" class="sv-menu" role="menu">
+                <button type="button" role="menuitem" :disabled="Boolean(revertBlocked) || item.revision === revision" :title="revertBlocked || (item.revision === revision ? '正文就是这个版本' : undefined)" @click="askRevert(item)">回退到此版本</button>
+              </span>
+            </span>
+          </li>
+        </ul>
+        <div v-if="revertTarget" class="sv-confirm" role="alertdialog" aria-labelledby="revert-title" aria-describedby="revert-desc">
+          <strong id="revert-title">回退到 {{ revertTarget.label }}？</strong>
+          <p id="revert-desc">正文会恢复成 {{ revertTarget.label }} 的内容，并生成一个新版本；之后的版本和自动保存记录都会保留，可以再回到它们。</p>
+          <p v-if="revertError" class="history-error" role="alert">{{ revertError }}</p>
+          <div class="sv-actions"><button type="button" class="subtle sm" :disabled="reverting" @click="revertTarget = null">取消</button><button type="button" class="primary danger sm" :disabled="reverting || Boolean(revertBlocked)" @click="confirmRevert">{{ reverting ? "正在回退…" : "回退" }}</button></div>
+        </div>
+      </section>
+      <h3 class="auto-title">自动保存记录</h3>
       <p v-if="loading" class="hint" role="status">正在读取版本…</p>
       <div v-else-if="error"><p class="history-error" role="alert">{{ error }}</p><button type="button" class="ghost sm" @click="load(offset)">重试</button></div>
       <p v-else-if="!items.length" class="hint">暂无版本记录</p>
@@ -243,4 +331,28 @@ onMounted(() => void load());
 .skip { margin:0; color:var(--text-tertiary); font-size:var(--text-xs); text-align:center; }
 .history-foot { display:flex; flex-direction:column; align-items:flex-start; gap:var(--space-2); flex:none; }
 .history-hint { margin:0; color:var(--warning-600); font-size:var(--text-xs); }
+.saved-versions { display:grid; gap:var(--space-2); flex:none; padding-bottom:var(--space-3); border-bottom:1px solid var(--border-subtle); }
+.sv-head { display:flex; align-items:center; gap:var(--space-2); }
+.sv-head h3, .auto-title { margin:0; font-size:var(--text-sm); font-weight:var(--weight-semibold); color:var(--text-primary); }
+.sv-head h3 { display:inline-flex; align-items:center; gap:var(--space-2); margin-right:auto; }
+.auto-title { flex:none; color:var(--text-secondary); }
+.sv-count { color:var(--text-tertiary); font-weight:var(--weight-regular); font-size:var(--text-xs); }
+.sv-form, .sv-confirm { display:grid; gap:var(--space-2); padding:var(--space-3); border:1px solid var(--border-default); border-radius:var(--radius-control); background:var(--bg-subtle); }
+.sv-confirm p { margin:0; color:var(--text-secondary); font-size:var(--text-xs); line-height:var(--leading-xs); }
+.sv-label { font-size:var(--text-xs); color:var(--text-secondary); }
+.sv-actions { display:flex; justify-content:flex-end; gap:var(--space-2); }
+.sv-notice { margin:0; color:var(--success-600); font-size:var(--text-xs); }
+.sv-list { list-style:none; margin:0; padding:0; display:grid; gap:2px; max-height:220px; overflow:auto; }
+.sv-item { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-1) var(--space-1) var(--space-1) var(--space-2); border-radius:var(--radius-control); }
+.sv-item:hover { background:var(--bg-hover); }
+.branch { flex:none; padding:0 6px; border-radius:var(--radius-control); background:var(--brand-50); color:var(--brand-700); font-family:var(--font-mono); font-size:var(--text-xs); line-height:20px; }
+.sv-main { display:grid; min-width:0; flex:1; }
+.sv-msg { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sv-main small { color:var(--text-tertiary); font-size:var(--text-xs); }
+.sv-more { position:relative; flex:none; }
+.sv-more .icon-btn { margin-left:0; }
+.sv-menu { position:absolute; right:0; top:100%; z-index:5; display:grid; min-width:120px; padding:var(--space-1); background:var(--bg-surface); border:1px solid var(--border-default); border-radius:var(--radius-control); box-shadow:var(--shadow-2); }
+.sv-menu button { height:var(--control-h-sm); padding:0 var(--space-2); border:0; background:transparent; text-align:left; font-family:var(--font); font-size:var(--text-sm); color:var(--text-primary); cursor:pointer; border-radius:var(--radius-control); white-space:nowrap; }
+.sv-menu button:hover:not(:disabled) { background:var(--bg-hover); }
+.sv-menu button:disabled { color:var(--text-disabled); cursor:not-allowed; }
 </style>
