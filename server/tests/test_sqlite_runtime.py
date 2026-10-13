@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 import json
+from tests.block_ops_helper import section_answer
 
 from app.config import clear_settings_cache
 from app.db import connect, migrate
@@ -294,7 +295,7 @@ def test_sqlite_login_project_document_export(tmp_path, monkeypatch):
             calls = []
             def fake_draft(**kwargs):
                 calls.append(kwargs)
-                return "清晰的正文。"
+                return section_answer(kwargs, "清晰的正文。")
             monkeypatch.setattr("app.documents.draft_section_text", fake_draft)
             selected_block = next(block for block in selection_blocks(section_source) if block["text"] == "旧正文")
             selected = client.post(

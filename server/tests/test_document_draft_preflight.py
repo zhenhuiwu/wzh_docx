@@ -51,11 +51,16 @@ def route_context(tmp_path, monkeypatch):
     monkeypatch.setattr("app.document_guidance.object_spans", spans)
     monkeypatch.setattr("app.document_assignments.require_scope_write", lambda *args: None)
     monkeypatch.setattr(module, "get_settings", lambda: settings)
-    monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: "清晰的新正文。")
+    def operations(kwargs):
+        # Spec 30 §4: a section with body returns block operations; add after the protected paragraph.
+        scope = kwargs["block_scope"]
+        return json.dumps({"operations": [{"op": "insertAfter", "blockId": scope["blocks"][-1]["id"], "content": "清晰的新正文。"}]}, ensure_ascii=False)
+
+    monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: operations(kwargs))
 
     async def generate(**kwargs):
-        yield "清晰的"
-        yield "清晰的新正文。"
+        yield {"type": "progress", "stage": "writing", "message": "正在生成正文"}
+        yield operations(kwargs)
 
     monkeypatch.setattr(module, "stream_section_text", generate)
     checked = []
@@ -79,7 +84,7 @@ def stream_events(response):
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_protected_word_chapter_returns_append_only_without_blocking_generation(route_context, streaming):
+def test_protected_word_chapter_keeps_field_when_ai_inserts_in_place(route_context, streaming):
     request, row, source, tmp_path, checked = route_context
     original_bytes = source.read_bytes()
     response = module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0), stream=streaming)
@@ -89,15 +94,15 @@ def test_protected_word_chapter_returns_append_only_without_blocking_generation(
         result = events[-1]
     else:
         result = response["data"]
-    assert result["content"] == "清晰的新正文。" and result["allowedModes"] == ["append"]
-    assert len(checked) == 2 and row[12] == 7 and source.read_bytes() == original_bytes
-    adopted = module._section_update(row, 0, result["content"], "append")
+    assert result["operations"][0]["op"] == "insertAfter" and result["operations"][0]["content"] == "清晰的新正文。"
+    assert result["allowedModes"] == ["replace"]
+    assert result["content"].startswith("旧正文，日期域必须保留。") and result["content"].endswith("清晰的新正文。")
+    assert len(checked) == 1 and row[12] == 7 and source.read_bytes() == original_bytes
+    adopted = module._section_update(row, 0, result["content"], "replace")
     edit_original_docx(adopted, source, tmp_path / "adopted.docx")
     final_word = Document(tmp_path / "adopted.docx")
     assert final_word.element.body.xpath(".//w:fldChar")
     assert "旧正文，日期域必须保留。" in adopted and "其他章节保持不变。" in adopted
-    with pytest.raises(AppError):
-        module._check_word(None, row, module._section_update(row, 0, result["content"], "replace"))
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -145,15 +150,18 @@ def test_stream_progress_keeps_draft_and_checks_word_before_done(route_context, 
     async def generate(**kwargs):
         assert kwargs["include_progress"] is True
         yield {"type": "progress", "stage": "planning", "message": "正在确认本次修改范围"}
-        yield "清晰的新正文。"
+        yield json.dumps({"operations": [{"op": "insertAfter", "blockId": kwargs["block_scope"]["blocks"][0]["id"],
+                                          "content": "清晰的新正文。"}]}, ensure_ascii=False)
 
     monkeypatch.setattr(module, "stream_section_text", generate)
     events = stream_events(module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0), stream=True))
-    assert [event["type"] for event in events] == ["start", "progress", "draft", "progress", "done"]
+    # Block operations are only shown once complete (spec 30 §4): no partial draft events.
+    assert [event["type"] for event in events] == ["start", "progress", "progress", "done"]
     assert [(event["stage"], event["message"]) for event in events if event["type"] == "progress"] == [
         ("planning", "正在确认本次修改范围"), ("validation", "正在检查正文规范与 Word 排版")]
     assert all(event["revision"] == 7 for event in events)
-    assert events[-1]["content"] == "清晰的新正文。" and len(checked) == 2
+    assert events[-1]["content"] == "旧正文，日期域必须保留。\n\n清晰的新正文。" and len(checked) == 1
+    assert events[-1]["operations"][0]["op"] == "insertAfter"
 
 
 def test_slow_word_validation_keeps_connection_alive(route_context, monkeypatch):
@@ -214,3 +222,30 @@ def test_draft_failure_reports_target_and_logs_stack_without_payload(route_conte
     assert secret not in caplog.text and secret not in events[-1]["message"]
     assert type(error).__name__ in caplog.text and "preflight-test" in caplog.text
     assert checked == []
+
+
+@pytest.mark.parametrize("op", ["replace", "delete"])
+def test_word_heading_paragraph_cannot_be_rewritten_by_ai(route_context, monkeypatch, op):
+    """Spec 30 §4.3: a Word heading kept as a paragraph is locked; touching it rejects the whole result."""
+    request, row, *_ = route_context
+    monkeypatch.setattr(module, "_word_heading_ids", lambda _connection, _row, objects: {objects[0]["id"]})
+    seen = {}
+
+    def draft(**kwargs):
+        block = kwargs["block_scope"]["blocks"][0]
+        seen["locked"] = block.get("locked")
+        return json.dumps({"operations": [{"op": op, "blockId": block["id"], "content": "改掉标题"}]}, ensure_ascii=False)
+
+    monkeypatch.setattr(module, "draft_section_text", draft)
+    with pytest.raises(AppError) as error:
+        module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))
+    assert seen["locked"] is True and error.value.status_code == 409 and error.value.code == "AI_SCOPE_VIOLATION"
+
+
+def test_word_heading_paragraph_is_an_insert_anchor(route_context, monkeypatch):
+    request, row, *_ = route_context
+    monkeypatch.setattr(module, "_word_heading_ids", lambda _connection, _row, objects: {objects[0]["id"]})
+    monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: json.dumps({"operations": [
+        {"op": "insertAfter", "blockId": kwargs["block_scope"]["blocks"][0]["id"], "content": "补充正文。"}]}, ensure_ascii=False))
+    data = module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))["data"]
+    assert data["operations"][0]["op"] == "insertAfter" and data["content"].endswith("补充正文。")

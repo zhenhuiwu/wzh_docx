@@ -4,6 +4,7 @@ from uuid import uuid4
 from contextlib import contextmanager
 
 import pytest
+from tests.block_ops_helper import section_answer
 
 from app.config import clear_settings_cache
 from app.db import connect, migrate
@@ -346,7 +347,7 @@ def test_section_adoption_and_draft_bind_memory_to_heading_objects(memory_docume
     captured = {}
     def draft(**kwargs):
         captured.update(kwargs)
-        return "草稿中的接口正文。"
+        return section_answer(kwargs, "草稿中的接口正文。")
     monkeypatch.setattr(documents, "draft_section_text", draft)
     documents.draft_section(request, str(memory_document), documents.SectionDraftBody(expectedRevision=3, headingIndex=3))
     assert captured["memory_targets"][3] == targets[3]

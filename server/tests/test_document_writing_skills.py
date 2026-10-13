@@ -1,5 +1,7 @@
 """A document pins a skill revision without sharing mutable global settings."""
 
+import json
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -221,10 +223,12 @@ def test_append_checks_complete_result_and_draft_only_offers_replace(version_con
     before = detail(client, doc["id"])
     settings = get_settings().model_copy(update={"ai_base_url": "http://localhost/v1", "ai_model": "offline", "ai_api_key": ""})
     monkeypatch.setattr(documents, "get_settings", lambda: settings)
-    monkeypatch.setattr(documents, "draft_section_text", lambda **_kwargs: content)
+    # Spec 30 §4: an existing section is edited by block operations; rewrite its only paragraph.
+    monkeypatch.setattr(documents, "draft_section_text", lambda **kwargs: json.dumps({"operations": [
+        {"op": "replace", "blockId": kwargs["block_scope"]["blocks"][0]["id"], "content": content}]}, ensure_ascii=False))
     drafted = client.post(f"/api/v1/documents/{doc['id']}/sections/draft", json={"expectedRevision": 2, "headingIndex": 0}, headers=headers)
     assert drafted.status_code == 200, drafted.text
-    assert drafted.json()["data"]["allowedModes"] == ["replace"]
+    assert drafted.json()["data"]["allowedModes"] == ["replace"] and drafted.json()["data"]["content"] == content
     append = client.post(f"/api/v1/documents/{doc['id']}/sections/insert", json={"expectedRevision": 2, "headingIndex": 0, "content": content, "mode": "append"}, headers=headers)
     assert append.status_code == 422, append.text
     assert ("上限" if constraint == "maxChars" else "禁用") in append.json()["error"]["message"]
