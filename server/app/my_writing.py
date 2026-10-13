@@ -58,6 +58,7 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
         where.append("d.name like %s")
         params.append(f"%{q.strip()}%")
     with connect() as connection:
+        # 验收 P2-8：按 项目名 / 文档创建顺序 固定排列，保存后任务树不跳动
         latest = "(select max(b.seq) from document_baselines b where b.document_id = d.id)"
         rows = connection.execute(
             f"""SELECT d.id, d.name, d.status, d.revision, d.updated_at, d.owner_id, d.project_id,
@@ -70,7 +71,7 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
                 FROM documents d JOIN projects p ON p.id = d.project_id
                 LEFT JOIN users ou ON ou.id = d.owner_id
                 WHERE {' and '.join(where)}
-                ORDER BY d.updated_at DESC, d.name LIMIT %s OFFSET %s""",
+                ORDER BY p.name, p.id, d.created_at, d.name, d.id LIMIT %s OFFSET %s""",
             (uid, uid, *params, limit + 1, offset)).fetchall()
         total = connection.execute(
             f"SELECT count(*) AS n FROM documents d JOIN projects p ON p.id = d.project_id WHERE {' and '.join(where)}",
