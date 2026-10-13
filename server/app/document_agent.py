@@ -497,8 +497,15 @@ def _section_agent(
                      'text 是本次有效要求，sourceText 仅用于追溯模板原文；发生差异时使用 text，不能回退到 sourceText。'
                      '同级其他模块的建议不能借用于当前模块。用户要求在这些有效建议基础上补充。'
                      '指导、示例和填写字段不是项目事实，不要把指导文字复制成正式正文；缺少事实时明确指出缺项，不编造。')
-    context = document_context(full_markdown, whole_document=whole_document,
-                               max_chars=max(6000, min(12000 if whole_document else 6000, context_tokens // 3)))
+    context_chars = max(6000, min(12000, context_tokens // 3))
+    focus = None if whole_document or selected_only or heading_index is None or not 0 <= heading_index < len(headings) else heading_index
+    try:
+        context = document_context(full_markdown, whole_document=whole_document, heading_index=focus, max_chars=context_chars)
+    except ValueError:
+        if focus is None:
+            raise
+        # The target body alone exceeds the budget; it is already in the task, so fall back to plain excerpts.
+        context = document_context(full_markdown, max_chars=context_chars)
     initial_content = (
         f"文档名称：{document_name or '未提供'}\n来源模板：{template_name or '用户上传文档'}\n"
         f"目标标题（{level}级）：{heading}\n"
