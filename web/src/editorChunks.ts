@@ -5,6 +5,8 @@
  * 占位块带 data-ai-preview：所有不认识分段的取正文路径都会把它去掉——所以取整篇正文必须走 inflate()/markdownOf()。
  */
 export const CHUNK_ATTR = "data-chunk-ph";
+export const CHUNK_HEADINGS_ATTR = "data-chunk-headings";
+export const CHUNK_BLOCKS_ATTR = "data-chunk-blocks";
 const HEADING = /^H[1-6]$/;
 
 export interface Chunk {
@@ -114,6 +116,9 @@ export class ChunkedBody {
     this.options.onUnmount?.(chunk);
     const placeholder = this.root.ownerDocument.createElement("div");
     placeholder.setAttribute(CHUNK_ATTR, String(this.chunks.indexOf(chunk)));
+    // Positional lookups (AI section, clientIndex) count what the placeholder stands for, not the placeholder (40 复验 N6).
+    placeholder.setAttribute(CHUNK_HEADINGS_ATTR, String(chunk.headingCount));
+    placeholder.setAttribute(CHUNK_BLOCKS_ATTR, String(chunk.nodes.length));
     placeholder.setAttribute("data-ai-preview", "");
     placeholder.setAttribute("contenteditable", "false");
     placeholder.setAttribute("aria-hidden", "true");
