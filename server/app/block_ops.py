@@ -24,12 +24,15 @@ class BlockOperationFormatError(DraftFormatError):
     """The response is not a well-formed operation list; one model correction is allowed."""
 
 
-def scope_blocks(objects: list[dict], heading_index: int, writable: set[str] | None = None) -> tuple[dict | None, list[dict]]:
+def scope_blocks(objects: list[dict], heading_index: int, writable: set[str] | None = None,
+                 locked: set[str] | None = None) -> tuple[dict | None, list[dict]]:
     """Return the locked heading and the editable body blocks of one section.
 
     The section is the heading's own body up to the next heading, matching
     the server's headingIndex semantics. ``writable`` (A07 assignments)
-    narrows the whitelist to blocks the user may change.
+    narrows the whitelist to blocks the user may change. ``locked`` are
+    Word heading paragraphs kept as body (e.g. "1.1 标识"): they stay in the
+    section for composition but are marked ``locked`` and are only anchors.
     """
     heading = None
     blocks = []
@@ -40,8 +43,8 @@ def scope_blocks(objects: list[dict], heading_index: int, writable: set[str] | N
             if count == heading_index:
                 heading = item
             continue
-        if item["headingIndex"] == heading_index and (writable is None or item["id"] in writable):
-            blocks.append(item)
+        if item["headingIndex"] == heading_index and (writable is None or item["id"] in writable or item["id"] in (locked or set())):
+            blocks.append({**item, "locked": True} if item["id"] in (locked or set()) else item)
     return heading, blocks
 
 
@@ -49,7 +52,8 @@ def prompt_blocks(heading: dict | None, blocks: list[dict]) -> list[dict]:
     result = []
     if heading is not None:
         result.append({"blockId": heading["id"], "kind": "heading", "locked": True, "text": heading["body"]})
-    result += [{"blockId": item["id"], "kind": item["kind"], "text": item["body"]} for item in blocks]
+    result += [{"blockId": item["id"], "kind": "heading" if item.get("locked") else item["kind"], "text": item["body"],
+                **({"locked": True} if item.get("locked") else {})} for item in blocks]
     return result
 
 
@@ -61,8 +65,8 @@ def parse_operations(text: str, heading: dict | None, blocks: list[dict]) -> lis
         raise BlockOperationFormatError("修改结果未按块操作协议返回 JSON。") from None
     if not isinstance(value, dict) or set(value) != {"operations"} or not isinstance(value["operations"], list):
         raise BlockOperationFormatError("修改结果需要 operations 数组。")
-    allowed = {item["id"] for item in blocks}
-    locked = {heading["id"]} if heading is not None else set()
+    allowed = {item["id"] for item in blocks if not item.get("locked")}
+    locked = ({heading["id"]} if heading is not None else set()) | {item["id"] for item in blocks if item.get("locked")}
     operations, touched, chars = [], set(), 0
     for item in value["operations"]:
         if not isinstance(item, dict) or item.get("op") not in OPS or not isinstance(item.get("blockId"), str):

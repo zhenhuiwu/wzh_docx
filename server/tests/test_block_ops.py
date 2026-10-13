@@ -47,3 +47,26 @@ def test_scope_is_section_body_narrowed_to_writable_blocks():
                {"id": "c", "kind": "paragraph", "headingIndex": 1, "body": "三"}]
     heading, blocks = scope_blocks(objects, 0, writable={"b"})
     assert heading["id"] == "h0" and [item["id"] for item in blocks] == ["b"]
+
+
+LOCKED = [{"id": "w", "body": "标识", "locked": True}, {"id": "p1", "body": "一。"}]
+
+
+@pytest.mark.parametrize("item", [{"op": "replace", "blockId": "w", "content": "新标识"}, {"op": "delete", "blockId": "w"}])
+def test_word_heading_paragraph_is_locked(item):
+    with pytest.raises(AppError) as error:
+        parse_operations(ops(item), HEADING, LOCKED)
+    assert error.value.status_code == 409
+
+
+def test_word_heading_paragraph_is_an_insert_anchor_and_kept():
+    result = parse_operations(ops({"op": "insertAfter", "blockId": "w", "content": "补充。"}), HEADING, LOCKED)
+    assert apply_operations(HEADING, LOCKED, result) == "标识\n\n补充。\n\n一。"
+
+
+def test_scope_keeps_locked_word_headings_outside_writable_set():
+    objects = [{"id": "h0", "kind": "heading", "headingIndex": 0, "body": "# 甲"},
+               {"id": "w", "kind": "paragraph", "headingIndex": 0, "body": "标识"},
+               {"id": "a", "kind": "paragraph", "headingIndex": 0, "body": "一"}]
+    _, blocks = scope_blocks(objects, 0, writable={"a"}, locked={"w"})
+    assert [(item["id"], item.get("locked", False)) for item in blocks] == [("w", True), ("a", False)]

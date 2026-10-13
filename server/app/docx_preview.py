@@ -649,6 +649,29 @@ def _images(root, supplied: list[dict]) -> None:
             node.attrib.pop("src", None)
 
 
+_HEADING_STYLE = re.compile(r"(?i)(?:^|\s)(?:heading|标题)\s*([1-9])(?!\d)")
+
+
+def word_heading_like(paragraph) -> int | None:
+    """Heading level of a paragraph that Word treats as a heading although Markdown keeps it as body.
+
+    Covers an outline level on the paragraph or any base style, a style chain
+    named "Heading N" / "标题 N" (including custom names like "样式 标题 2第一层条…").
+    """
+    from app.docx_parser import heading_level
+    level = heading_level(paragraph, outline_headings=True)
+    if level is not None:
+        return level
+    style, seen = paragraph.style, set()
+    while style is not None and style.style_id not in seen:
+        seen.add(style.style_id)
+        match = _HEADING_STYLE.search(style.name or "")
+        if match and not re.match(r"(?i)^toc", style.name or ""):
+            return int(match.group(1))
+        style = style.base_style
+    return None
+
+
 def memoize_styles(doc) -> None:
     """终验 S-7：python-docx 每次取段落/字符样式都要线性扫描全部样式找默认样式（styles.default_for），
     SRS 这样的文档一次预览约 7 s，其中约 6 s 花在这里。一次渲染内样式不变，按 (style_id, type) 缓存。"""
@@ -719,6 +742,9 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
                 paragraph = Paragraph(block.elements[0], doc)
                 _decorate_paragraph(node, [paragraph], theme)
                 style_name = (paragraph.style.name if paragraph.style is not None else "") or ""
+                if node.tag == "p" and (level := word_heading_like(paragraph)) is not None:
+                    # Spec 30 §4.3: a Word heading kept as a paragraph (custom style, outline level) is a locked heading.
+                    node.set("data-word-heading", str(level))
                 # 测试复测 N4：[02][03] 的目录行是静态文字（不含域），但仍是目录（样式 toc N），同样只读
                 if block.elements[0].xpath(_FIELD_LIKE) or re.match(r"(?i)^toc\s*\d", style_name):
                     # 测试 L3：目录行、域、超链接等写回 Word 会被拒绝，编辑区里直接设为只读并说明。

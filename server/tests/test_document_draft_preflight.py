@@ -222,3 +222,30 @@ def test_draft_failure_reports_target_and_logs_stack_without_payload(route_conte
     assert secret not in caplog.text and secret not in events[-1]["message"]
     assert type(error).__name__ in caplog.text and "preflight-test" in caplog.text
     assert checked == []
+
+
+@pytest.mark.parametrize("op", ["replace", "delete"])
+def test_word_heading_paragraph_cannot_be_rewritten_by_ai(route_context, monkeypatch, op):
+    """Spec 30 §4.3: a Word heading kept as a paragraph is locked; touching it rejects the whole result."""
+    request, row, *_ = route_context
+    monkeypatch.setattr(module, "_word_heading_ids", lambda _connection, _row, objects: {objects[0]["id"]})
+    seen = {}
+
+    def draft(**kwargs):
+        block = kwargs["block_scope"]["blocks"][0]
+        seen["locked"] = block.get("locked")
+        return json.dumps({"operations": [{"op": op, "blockId": block["id"], "content": "改掉标题"}]}, ensure_ascii=False)
+
+    monkeypatch.setattr(module, "draft_section_text", draft)
+    with pytest.raises(AppError) as error:
+        module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))
+    assert seen["locked"] is True and error.value.status_code == 409 and error.value.code == "AI_SCOPE_VIOLATION"
+
+
+def test_word_heading_paragraph_is_an_insert_anchor(route_context, monkeypatch):
+    request, row, *_ = route_context
+    monkeypatch.setattr(module, "_word_heading_ids", lambda _connection, _row, objects: {objects[0]["id"]})
+    monkeypatch.setattr(module, "draft_section_text", lambda **kwargs: json.dumps({"operations": [
+        {"op": "insertAfter", "blockId": kwargs["block_scope"]["blocks"][0]["id"], "content": "补充正文。"}]}, ensure_ascii=False))
+    data = module.draft_section(request, str(row[0]), module.SectionDraftBody(expectedRevision=7, headingIndex=0))["data"]
+    assert data["operations"][0]["op"] == "insertAfter" and data["content"].endswith("补充正文。")

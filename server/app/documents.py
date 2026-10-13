@@ -1370,6 +1370,9 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         target_ids = selection_ids(row[7], body.selection.model_dump(), objects) if selected_only else [
             item["id"] for item in objects if item["kind"] != "heading" and
             (whole_document or item["headingIndex"] == (body.headingIndex if body.headingIndex is not None else -1))]
+        word_headings = _word_heading_ids(connection, row, objects) if not selected_only and not whole_document and existing.strip() else set()
+        # Word heading paragraphs are locked anchors, never edit targets: no write permission is needed for them.
+        target_ids = [item for item in target_ids if item not in word_headings]
         if body.blockIds is not None and not selected_only and not whole_document:
             # Spec 30 §4.2: the writing scope is the blocks of this section the user may change.
             target_ids = [item for item in target_ids if item in set(body.blockIds)]
@@ -1407,12 +1410,12 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
     block_scope = None
     if not selected_only and not whole_document and existing.strip():
         from app.block_ops import scope_blocks
-        scope_heading, scope_list = scope_blocks(objects, body.headingIndex)
+        scope_heading, scope_list = scope_blocks(objects, body.headingIndex, locked=word_headings)
         if body.blockIds is not None:
             allowed = set(body.blockIds)
             if any(item not in {block["id"] for block in scope_list} | ({scope_heading["id"]} if scope_heading else set()) for item in allowed):
                 raise AppError(409, "AI_SCOPE_VIOLATION", "写作范围已变化，请刷新后重试。")
-            scope_list = [block for block in scope_list if block["id"] in allowed]
+            scope_list = [block for block in scope_list if block["id"] in allowed or block.get("locked")]
         if scope_list:
             block_scope = {"heading": scope_heading, "blocks": scope_list}
             inputs.update(block_scope=block_scope, edit_in_place=False)
@@ -1739,6 +1742,24 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
             "data": {"html": html, "objectModel": object_model, "revision": row[12]},
             "requestId": request.state.request_id,
         }
+
+
+def _word_heading_ids(connection, row, objects: list[dict]) -> set[str]:
+    """Object IDs of Word heading paragraphs kept as body text (spec 30 §4.3: locked like headings)."""
+    from lxml import html as html_dom
+    from app.document_objects import decorate_object_ids
+    if not row[5]:
+        return set()
+    try:
+        html, mapped = decorate_object_ids(connection, row[0], _editing_html(connection, row))
+    except AppError:
+        logger.warning("word heading detection unavailable document=%s", row[0])
+        return set()
+    if not mapped:
+        return set()
+    root = html_dom.fragment_fromstring(html, create_parent="div")
+    known = {item["id"] for item in objects}
+    return {node.get("data-object-id") for node in root.xpath(".//*[@data-word-heading][@data-object-id]")} & known
 
 
 def _editing_html(connection, row) -> str:
