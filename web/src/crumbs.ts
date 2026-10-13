@@ -22,8 +22,8 @@ export const PROJECT_ROUTES = ["project", "project-documents", "document", "proj
 
 /** 项目内页面在面包屑中的名称；documentList 表示归在“文档编写”下。 */
 export function projectPageCrumb(name: string): { label: string; documentList: boolean } {
-  if (name === "project") return { label: "项目概述", documentList: false };
+  if (name === "project") return { label: "首页", documentList: false };
   if (name === "project-plan") return { label: "分工", documentList: false };
   if (name === "project-baselines") return { label: "基线", documentList: false };
-  return { label: "文档编写", documentList: true };
+  return { label: "文档", documentList: true };
 }
