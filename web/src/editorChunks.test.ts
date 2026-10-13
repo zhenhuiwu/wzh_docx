@@ -33,9 +33,9 @@ class FakeEl {
   constructor(public tagName: string, public text = "", public doc: FakeDoc | null = null) {}
   get ownerDocument() { return this.doc; }
   get children() { return this.kids; }
-  get textContent() { return this.text + this.kids.map(k => k.textContent).join(""); }
+  get textContent(): string { return this.text + this.kids.map(k => k.textContent).join(""); }
   get isConnected(): boolean { return this.parent ? this.parent.isConnected : this.tagName === "ROOT"; }
-  get nextElementSibling() { const p = this.parent; return p ? p.kids[p.kids.indexOf(this) + 1] ?? null : null; }
+  get nextElementSibling(): FakeEl | null { const p = this.parent; return p ? p.kids[p.kids.indexOf(this) + 1] ?? null : null; }
   getAttribute(name: string) { return this.attrs.get(name) ?? null; }
   hasAttribute(name: string) { return this.attrs.has(name); }
   setAttribute(name: string, value: string) { this.attrs.set(name, value); }
