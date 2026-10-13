@@ -22,7 +22,7 @@ import DocumentConflictPanel from "../components/DocumentConflictPanel.vue";
 import { draftStaleWarning, changedByText, conflictCount, conflictOpensPanel, conflictToggle, isWholeConflict, othersUpdatedText, SELF_THEIRS_NAME, theirsName, WHOLE_THEIRS_NAME, wholeConflictNote } from "../conflictModel";
 import { otherTabOpen, sameTabOtherPage } from "../documentObjects";
 import { readonlyBlockedText, readonlyText } from "../memberModel";
-import { type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
+import { waitForCloseSaves, type WhitespaceNotes, whitespaceNoteText, accessText, backoffMs, capsuleLabel, capsuleState, changedBlockCount, classifySaveError, draftSizeText, isOffline, leaveDecision, locationText, myChangesFileName, revisionConflictText, shortTime, type LeaveDecision, type LocationInfo } from "../saveModel";
 import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedInBlocks, outlineEntries, rebaseBlocks, typedInsertion } from "../workbenchStats";
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
@@ -1185,6 +1185,9 @@ const canApplyDraft = computed(() => !readonly.value && aiComplete.value && !aiB
 // 8.2 第 7 条：aiLocked 仍是“编辑区锁”（版本记录打开、AI 预览、本机草稿未处理、重绘中都不能编辑正文），只锁编辑区与格式工具栏。
 // 终验回归 H1：打开文档后、查完本机草稿之前编辑区不可输入（否则新输入会覆盖本标签的旧草稿）
 const checkingDrafts = ref(false);
+/** 40 R5.1：重开时等关页保存落库的上限与轮询间隔 */
+const CLOSE_SAVE_WAIT_MS = 12000;
+const CLOSE_SAVE_POLL_MS = 400;
 const aiLocked = computed(() => referencesOpen.value || referencesBusy.value || assignmentsOpen.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value) || Boolean(restorePending.value));
 // 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
 const opBusy = computed(() => referencesBusy.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
@@ -1389,17 +1392,19 @@ function findLocalDrafts(record: DocumentRecord) {
   }
   // 方案 C（14 §3.5 第 6 条）：草稿里记着冲突段的续写——冲突仍未处理就追加为快照（不重新提交正文），之后草稿不再带这部分
   void settleDraftConflicts(record, drafts.filter(draft => draft.conflictsEdits?.length));
-  // 复验 P2-1：关页时已发出保存（带 pendingSave 键）的草稿不锁编辑区：后台核对是否落库，落了就删草稿并换成服务器正文，
-  // 最终没落库才放回恢复条（或自动恢复）。原先核对要 1.5–3 秒，期间整篇不能编辑。
+  // 复验 P2-1：关页时已发出保存（带 pendingSave 键）的草稿：核对是否落库，落了就删草稿并换成服务器正文，最终没落库才放回恢复条（或自动恢复）。
+  // 40 R5.1 P1：大文档的关页保存常比重新打开还晚 1–4 秒落库。核对期间放开编辑会让编辑区停在落库前的旧正文上，
+  // 在刚保存的段落里继续输入就与自己的关页保存“冲突”、字存不上。所以核对期间仍按“正在检查本机草稿”处理：
+  // 输入先记下，落库并换成最新正文后再写回点的位置（见 flushLoadTyping）；核对按 0.4 s 间隔轮询，最多约 12 s。
   const verifying = drafts.filter(draft => draft.pendingSave?.clientSaveKey && !draft.conflictsEdits?.length);
   const shown = drafts.filter(draft => !verifying.includes(draft));
   localDrafts.value = shown;
   localDraft.value = shown[0] ?? null;
-  checkingDrafts.value = false;
   // 28 N-4'：分工先到、草稿后到（打开时总是这样）——草稿读完后按当前分工拆一次
   if (assignInfo.value?.restricted) settleDraftOwnership();
+  if (verifying.length) { void settlePendingSaves(record, verifying); return; }
+  checkingDrafts.value = false;
   void flushLoadTyping();
-  void settlePendingSaves(record, verifying);
   // 复验 5：关掉标签再马上打开同一文档——大文档超过 keepalive 上限（64KB），关页时的修改只留在本机草稿里，
   // 新标签因此被“先处理本机草稿”锁住，看起来像永远不能编辑。草稿基于的修订就是当前修订（期间没人改过）、
   // 没有冲突续写、是最近 30 分钟写的唯一一份时，直接恢复并保存（不需要合并，不会覆盖别人的修改）。
@@ -1457,38 +1462,58 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
   if (drafts.length) void refreshConflicts();
 }
 /** 01 §6.5：页面关闭时发出的保存若已落库（按 clientSaveKey 查），对应草稿不再提示恢复。查询失败时保留草稿。 */
-async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[], retried = false) {
-  const waiting: DraftV2[] = [];
-  let landedAny = false;
-  for (const draft of drafts) {
-    const key = draft.pendingSave?.clientSaveKey;
-    if (!key) continue;
-    let landed = false;
-    try { landed = await findChangeBySaveKey(record.id, key); } catch { landed = false; }
-    if (!landed) {
-      // 审查 S5 / 测试 L7：关页时的 keepalive 保存可能比重新打开还晚落库，或合并后与服务器正文相同（不记键）。
-      try {
-        const latest = await getDocument(record.id);
-        landed = draft.wholeDocument && latest.markdownContent === draft.markdown;
-      } catch { /* 查不到就按未落库处理 */ }
-    }
-    if (document.value !== record) return;
-    if (!landed) { waiting.push(draft); continue; }
-    removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
-    localDrafts.value = localDrafts.value.filter(item => !sameDraft(item, draft));
+/** 40 R5.1：loadPoint 换成“第几块 + 块内第几个字”，重绘后按前后块序列对齐找回。 */
+function pointMark(): { texts: string[]; index: number; offset: number } | null {
+  const root = editor.value;
+  if (!root || !loadPoint || !root.contains(loadPoint.node)) return null;
+  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const block = [...blocks].reverse().find(item => item === loadPoint!.node || item.contains(loadPoint!.node));
+  if (!block) return null;
+  const range = window.document.createRange();
+  range.selectNodeContents(block);
+  try { range.setEnd(loadPoint.node, loadPoint.offset); } catch { return null; }
+  return { texts: blocks.map(item => item.textContent || ""), index: blocks.indexOf(block), offset: (range.cloneContents().textContent || "").length };
+}
+function remapLoadPoint(mark: { texts: string[]; index: number; offset: number }) {
+  const root = editor.value;
+  if (!root || !loadPoint || root.contains(loadPoint.node)) return;
+  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const index = mapBlockIndex(mark.texts, blocks.map(item => item.textContent || ""), mark.index);
+  const block = index >= 0 ? blocks[index] : null;
+  if (!block) return;
+  const walker = window.document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let remaining = Math.min(mark.offset, block.textContent?.length || 0);
+  let node = walker.nextNode();
+  while (node && remaining > (node.textContent?.length || 0)) { remaining -= node.textContent?.length || 0; node = walker.nextNode(); }
+  loadPoint = node ? { node, offset: remaining } : { node: block, offset: 0 };
+}
+async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[]) {
+  const result = await waitForCloseSaves(drafts, async draft => {
+    if (await findChangeBySaveKey(record.id, draft.pendingSave!.clientSaveKey).catch(() => false)) return true;
+    // 审查 S5 / 测试 L7：合并后与服务器正文相同时不记键
+    if (!draft.wholeDocument) return false;
+    return (await getDocument(record.id)).markdownContent === draft.markdown;
+  }, { waitMs: CLOSE_SAVE_WAIT_MS, pollMs: CLOSE_SAVE_POLL_MS, stillCurrent: () => document.value === record });
+  if (result.stopped) return;
+  for (const draft of result.landed) removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
+  const landedAny = result.landed.length > 0;
+  const waiting = result.waiting;
+  if (document.value !== record) return;
+  // 打开时读到的是落库前的正文：编辑区还锁着、没有未保存修改，直接换成服务器最新的（快速预览，见 editingHtml）
+  // 等待期间点过的位置（记下的输入要写回那里）跟着重绘换算到新节点上，否则字只能放进“没能写入”的提示
+  const mark = landedAny ? pointMark() : null;
+  const fresh = landedAny ? await refreshFromServer({ reason: "正在载入刚保存的内容…" }).catch(() => false) : true;
+  if (mark) remapLoadPoint(mark);
+  if (document.value !== record) return;
+  if (waiting.length) {
+    // 关页保存最终没落库：放回恢复条；服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）
+    localDrafts.value = [...localDrafts.value, ...waiting.filter(draft => !localDrafts.value.some(item => sameDraft(item, draft)))];
     localDraft.value = localDrafts.value[0] ?? null;
-    landedAny = true;
   }
-  if (landedAny) {
-    // 打开时读到的可能是落库前的正文：换成服务器最新的（正在输入就按“他人更新”的流程稍后提示）
-    const fresh = await refreshFromServer({ yieldToTyping: true }).catch(() => false);
-    if (document.value === record) noteAction(fresh ? "上次关闭页面前的修改已保存到服务器。" : "上次关闭页面前的修改已保存到服务器；编辑区稍后更新为最新正文。");
-  }
-  if (!waiting.length || document.value !== record) return;
-  if (!retried) { window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, waiting, true); }, 1500); return; }
-  // 关页保存最终没落库：放回恢复条；服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）
-  localDrafts.value = [...localDrafts.value, ...waiting.filter(draft => !localDrafts.value.some(item => sameDraft(item, draft)))];
-  localDraft.value = localDrafts.value[0] ?? null;
+  checkingDrafts.value = false;
+  void flushLoadTyping();
+  if (landedAny) noteAction(fresh ? "上次关闭页面前的修改已保存到服务器。" : "上次关闭页面前的修改已保存到服务器；编辑区稍后更新为最新正文。");
+  if (!waiting.length) return;
   try { const latest = await getDocument(record.id); if (latest.revision === record.revision) maybeAutoRestore(record); } catch { /* 留给恢复条 */ }
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */

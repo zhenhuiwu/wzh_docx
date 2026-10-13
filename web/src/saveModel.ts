@@ -168,3 +168,31 @@ export function whitespaceNoteText(notes: WhitespaceNotes): string {
   if (notes.theirsWhitespaceOverridden) parts.push(`对方有 ${notes.theirsWhitespaceOverridden} 处只调整了空格，你同时改了这些段落的文字，已采用你的写法（对方的空格调整没有保留）`);
   return parts.length ? `${parts.join("；")}，请核对。` : "";
 }
+
+/**
+ * 40 R5.1：重开时等关页保存落库。check 返回该项是否已落库；轮询到全部落库或超过 waitMs 为止。
+ * 返回已落库与仍未落库的两组（保持原顺序）。stillCurrent 返回 false 时（已离开该文档）立即停止。
+ */
+export async function waitForCloseSaves<T>(items: T[], check: (item: T) => Promise<boolean>, options: {
+  waitMs: number; pollMs: number; now?: () => number; sleep?: (ms: number) => Promise<void>; stillCurrent?: () => boolean;
+}): Promise<{ landed: T[]; waiting: T[]; stopped: boolean }> {
+  const now = options.now ?? (() => Date.now());
+  const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const current = options.stillCurrent ?? (() => true);
+  const deadline = now() + options.waitMs;
+  const landed: T[] = [];
+  let waiting = items;
+  while (waiting.length) {
+    const still: T[] = [];
+    for (const item of waiting) {
+      const ok = await check(item).catch(() => false);
+      if (!current()) return { landed, waiting: [...still, ...waiting.slice(waiting.indexOf(item))], stopped: true };
+      (ok ? landed : still).push(item);
+    }
+    waiting = still;
+    if (!waiting.length || now() >= deadline) break;
+    await sleep(options.pollMs);
+    if (!current()) return { landed, waiting, stopped: true };
+  }
+  return { landed, waiting, stopped: false };
+}

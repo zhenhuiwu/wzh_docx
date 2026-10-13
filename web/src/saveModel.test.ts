@@ -89,3 +89,24 @@ describe("changedBlockCount", () => {
     expect(changedBlockCount("-   甲\n\n段", "- 甲\n\n段改")).toBe(1);
   });
 });
+
+import { waitForCloseSaves } from "./saveModel";
+describe("waitForCloseSaves（40 R5.1 关页保存晚落库）", () => {
+  const clock = () => { let t = 0; return { now: () => t, sleep: async (ms: number) => { t += ms; } }; };
+  it("keeps polling until a late close-save lands", async () => {
+    const c = clock(); let calls = 0;
+    const r = await waitForCloseSaves(["a"], async () => ++calls >= 4, { waitMs: 12000, pollMs: 400, ...c });
+    expect(r).toEqual({ landed: ["a"], waiting: [], stopped: false });
+    expect(calls).toBe(4);
+  });
+  it("gives up after waitMs and reports what never landed", async () => {
+    const c = clock();
+    const r = await waitForCloseSaves(["a", "b"], async item => item === "a", { waitMs: 1000, pollMs: 400, ...c });
+    expect(r.landed).toEqual(["a"]); expect(r.waiting).toEqual(["b"]); expect(c.now()).toBeGreaterThanOrEqual(1000);
+  });
+  it("treats check errors as not landed and stops when the document changes", async () => {
+    const c = clock(); let current = true;
+    const r = await waitForCloseSaves(["a"], async () => { current = false; throw new Error("x"); }, { waitMs: 5000, pollMs: 400, ...c, stillCurrent: () => current });
+    expect(r).toEqual({ landed: [], waiting: ["a"], stopped: true });
+  });
+});
