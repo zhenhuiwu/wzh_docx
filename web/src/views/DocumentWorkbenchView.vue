@@ -320,7 +320,11 @@ function settleDraftOwnership() {
     if (kept.markdown === server) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
       localDrafts.value = localDrafts.value.filter(item => item !== draft);
-    } else draft.markdown = kept.markdown;
+    } else {
+      // 29 N-4：按当前分工拆开后写回本机（只留我负责部分的修改），下次打开不再出现必然被拒的“恢复并保存”
+      draft.markdown = kept.markdown;
+      writeDraft(window.localStorage, account(), { ...draft, markdown: kept.markdown });
+    }
     noteAction("本机草稿里有不归你负责的修改，已放入暂存，可以复制。", 10000);
   }
   localDraft.value = localDrafts.value[0] ?? null;
