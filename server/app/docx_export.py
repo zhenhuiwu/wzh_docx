@@ -789,10 +789,27 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
     anchor.addprevious(element)
 
 
+def _memoize_styles(doc) -> None:
+    """关页保存提速：python-docx 每次取段落样式都线性扫描样式表找默认样式（styles.default_for），
+    大文档逐段插入时约占保存检查的三成。本次编辑不新增样式，按 (style_id, type) 缓存（与 docx_preview.memoize_styles 相同）。"""
+    part = doc.part
+    original = part.get_style
+    cache: dict[tuple, object] = {}
+
+    def get_style(style_id, style_type):
+        key = (style_id, style_type)
+        if key not in cache:
+            cache[key] = original(style_id, style_type)
+        return cache[key]
+
+    part.get_style = get_style
+
+
 def edit_original_docx(markdown_content: str, original_path: str | Path, output_path: str | Path, *, image_sources: dict[str, bytes | dict] | None = None, outline_headings: bool = False) -> None:
     """Retain untouched OOXML and patch only edited blocks."""
     original_path = Path(original_path)
     doc = Document(original_path)
+    _memoize_styles(doc)
     source = _html_blocks(parse_docx(str(original_path), outline_headings=outline_headings).markdown)
     target = _html_blocks(markdown_content)
     blocks = _word_blocks(doc, outline_headings=outline_headings)
