@@ -85,7 +85,7 @@ def test_static_consistency_of_nav_and_routes() -> None:
     result = _run_check(_role_sets())
     # 系统管理员看得到所有导航。
     assert set(result["system_admin"]["nav"]) == {
-        "projects", "test-cases", "knowledge", "users", "templates", "writing-skills"
+        "my-writing", "projects", "test-cases", "knowledge", "users", "templates", "writing-skills"
     }
     # 只有 system_admin 有 tests.read：别的角色不显示“测试用例管理”（M1）。
     for role in GLOBAL_ROLES:

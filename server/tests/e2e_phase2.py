@@ -140,7 +140,7 @@ def login(page: Page, account: str):
     page.fill("#staff-id", account)
     page.fill("#password", PASSWORD)
     page.locator("form button[type=submit]").click()
-    page.wait_for_url(re.compile(r"/projects"), timeout=30000)
+    page.wait_for_url(re.compile(r"/(projects|my-writing)"), timeout=30000)  # 编写人员落地页为“我的编写”
 
 
 def shot(page: Page, name: str):

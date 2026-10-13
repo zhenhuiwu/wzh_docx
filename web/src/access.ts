@@ -8,6 +8,7 @@
 
 /** null：路由本身不拦截（数据可见性由服务端决定）。 */
 export const ROUTE_PERMISSIONS: Record<string, string | null> = {
+  home: null, // 落地页：按“我的编写”可见性跳转（router.homeDestination）
   "my-writing": null,
   "project-baselines": null,
   projects: null, // 项目可见性按成员关系由服务端决定（phase2 S1）
