@@ -191,13 +191,13 @@ async function submit() {
                   <thead><tr><th>文档</th><th>版本</th><th>与当前相比</th><th class="actions">操作</th></tr></thead>
                   <tbody>
                     <tr v-for="row in detail.documents" :key="row.document.id">
-                      <td><router-link :to="{ name: 'document', params: { id: projectId, documentId: row.document.id } }">{{ row.document.name }}</router-link></td>
+                      <td><router-link class="text" :to="{ name: 'document', params: { id: projectId, documentId: row.document.id } }">{{ row.document.name }}</router-link></td>
                       <td><span class="tag plain">{{ row.version.label }}</span></td>
                       <td>
                         <span v-if="row.changed">基线后有修改：+{{ row.sinceBaseline.paragraphsAdded }} 段 / −{{ row.sinceBaseline.paragraphsRemoved }} 段</span>
                         <span v-else class="muted">无变化</span>
                       </td>
-                      <td class="actions"><button type="button" class="ghost" :disabled="!row.changed" @click="comparing = { documentId: row.document.id, name: row.document.name, seq: row.version.seq }">对比</button></td>
+                      <td class="actions"><button type="button" class="subtle sm" :disabled="!row.changed" @click="comparing = { documentId: row.document.id, name: row.document.name, seq: row.version.seq }">对比</button></td>
                     </tr>
                   </tbody>
                 </table>
@@ -219,12 +219,14 @@ async function submit() {
               <input v-model="name" class="control" type="text" maxlength="120" :disabled="submitting" :aria-invalid="Boolean(nameError)" aria-describedby="baseline-name-error" @input="nameError = ''" />
               <span v-if="nameError" id="baseline-name-error" class="field-error" role="alert">{{ nameError }}</span>
             </label>
-            <fieldset class="doc-pick">
-              <legend>包含的文档</legend>
+            <div class="stacked-label" role="group" aria-labelledby="baseline-docs-label">
+              <span id="baseline-docs-label">包含的文档</span>
+              <div class="doc-pick">
               <p v-if="docsPhase === 'loading'" class="hint" role="status"><span class="spinner" aria-hidden="true"></span> 正在读取文档…</p>
               <p v-else-if="docsPhase === 'ready' && !docs.length" class="hint">项目里还没有文档。</p>
               <label v-for="doc in docs" :key="doc.id" class="check-row"><input v-model="chosen" type="checkbox" :value="doc.id" :disabled="submitting" />{{ doc.name }}</label>
-            </fieldset>
+              </div>
+            </div>
             <p v-if="submitError" class="field-error" role="alert">{{ submitError }}</p>
           </div>
           <div class="dialog-actions">
@@ -238,8 +240,10 @@ async function submit() {
 </template>
 
 <style scoped>
-.baseline-page { display: flex; flex-direction: column; gap: var(--space-4); }
-.document-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+/* 验收 P2-2：与「分工」页同样的内边距和页头对齐 */
+.baseline-page { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-6); }
+.document-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.document-head .page-desc { margin: var(--space-1) 0 0; }
 .baseline-grid { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 .timeline { list-style: none; margin: 0; padding: 0 0 0 var(--space-3); border-left: 2px solid var(--rule); display: flex; flex-direction: column; gap: var(--space-2); }
 .timeline-item { display: grid; gap: var(--space-1); width: 100%; padding: var(--space-2) var(--space-3); text-align: left; background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--radius-sheet); font: inherit; color: var(--ink); cursor: pointer; justify-items: start; }

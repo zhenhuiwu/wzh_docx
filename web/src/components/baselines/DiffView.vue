@@ -41,9 +41,9 @@ watch(() => [props.documentId, props.base, props.compare], () => void load(), { 
   <section class="diff-view" aria-label="版本对比">
     <div class="diff-bar">
       <p v-if="stats" class="diff-sum">{{ total }} 处章节变化 · +{{ stats.paragraphsAdded }} 段 / −{{ stats.paragraphsRemoved }} 段</p>
-      <div class="segmented" role="group" aria-label="对比方式">
-        <button type="button" :class="mode === 'inline' ? 'primary' : 'ghost'" :aria-pressed="mode === 'inline'" @click="mode = 'inline'">行内差异</button>
-        <button type="button" :class="mode === 'split' ? 'primary' : 'ghost'" :aria-pressed="mode === 'split'" @click="mode = 'split'">左右对照</button>
+      <div class="seg" role="group" aria-label="对比方式">
+        <button type="button" :class="{ on: mode === 'inline' }" :aria-pressed="mode === 'inline'" @click="mode = 'inline'">行内差异</button>
+        <button type="button" :class="{ on: mode === 'split' }" :aria-pressed="mode === 'split'" @click="mode = 'split'">左右对照</button>
       </div>
     </div>
     <StatePanel v-if="phase === 'loading'" kind="loading" text="正在对比…" />
@@ -77,7 +77,10 @@ watch(() => [props.documentId, props.base, props.compare], () => void load(), { 
 .diff-view { display: flex; flex-direction: column; gap: var(--space-3); }
 .diff-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .diff-sum { margin: 0; color: var(--ink-secondary); font-size: var(--text-sm); }
-.segmented { display: flex; gap: var(--space-1); }
+.seg { display: inline-flex; padding: 2px; background: var(--gray-100); border-radius: var(--radius-control); }
+.seg button { height: var(--control-h-sm); padding: 0 var(--space-3); border: 0; border-radius: calc(var(--radius-control) - 2px); background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.seg button.on { background: var(--bg-surface); color: var(--text-primary); font-weight: var(--weight-medium); box-shadow: var(--shadow-1); }
+.seg button:focus-visible { outline: var(--focus-outline); outline-offset: 1px; }
 .diff-sections { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .diff-section { border: 1px solid var(--rule); border-radius: var(--radius-sheet); background: var(--sheet); }
 .diff-head { display: flex; align-items: center; justify-content: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-3); text-align: left; }
