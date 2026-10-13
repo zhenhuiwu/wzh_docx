@@ -15,7 +15,9 @@ from pathlib import Path
 _lock = threading.Lock()
 _headings: OrderedDict[str, dict[str, int]] = OrderedDict()
 _blocks: OrderedDict[tuple, list[dict]] = OrderedDict()
+_warming: dict[tuple, threading.Event] = {}
 MAX_FILES, MAX_DOCS = 64, 32
+WARM_WAIT_S = 3.0
 SHORT = 200  # 标题样式段落都很短；更长的正文不比较，省时间
 _MARKUP = re.compile(r"\\(.)|[*_`]|<[^>]+>")
 
@@ -89,6 +91,17 @@ def blocks(connection, document_id, revision: int, rows) -> list[dict]:
         if key in _blocks:
             _blocks.move_to_end(key)
             return _blocks[key]
+        pending = _warming.get(key)
+    if pending is not None and pending.wait(WARM_WAIT_S):
+        # 保存后的后台预热正在算同一修订：等它算完直接用，不重复渲染
+        with _lock:
+            if key in _blocks:
+                _blocks.move_to_end(key)
+                return _blocks[key]
+    return _compute(connection, key, document_id, rows)
+
+
+def _compute(connection, key, document_id, rows) -> list[dict]:
     levels = word_heading_levels(connection, document_id, rows)
     result = []
     for row in rows:
@@ -100,6 +113,39 @@ def blocks(connection, document_id, revision: int, rows) -> list[dict]:
             item["wordHeadingLevel"] = level
         result.append(item)
     return _remember(_blocks, key, result, MAX_DOCS)
+
+
+def warm_after_commit(document_id, revision: int) -> threading.Thread | None:
+    """块级保存提交后在后台线程（独立连接）预热快速预览：关页保存后马上重开，/preview/blocks 直接命中。
+
+    只预热提交得到的那一修订；期间又有新提交时按读到的修订算（仍是有效缓存）。失败只是没预热。"""
+    key = (str(document_id), int(revision))
+    with _lock:
+        if key in _blocks or key in _warming:
+            return None
+        done = _warming[key] = threading.Event()
+
+    def run():
+        try:
+            from app.db import connect
+            from app.document_objects import live_objects
+            with connect() as connection:
+                connection.execute("BEGIN")  # 修订号与对象行取自同一读快照
+                current = connection.execute("SELECT revision FROM documents WHERE id=%s", (str(document_id),)).fetchone()
+                if current is not None:
+                    rows = live_objects(connection, document_id)
+                    _compute(connection, (str(document_id), int(current["revision"])), document_id, rows)
+                connection.rollback()
+        except Exception:  # noqa: BLE001 - 预热失败不影响保存；真正请求时再算
+            pass
+        finally:
+            with _lock:
+                _warming.pop(key, None)
+            done.set()
+
+    thread = threading.Thread(target=run, name=f"fast-preview-warm-{key[0][:8]}", daemon=True)
+    thread.start()
+    return thread
 
 
 def clear() -> None:

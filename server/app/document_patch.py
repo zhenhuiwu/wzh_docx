@@ -346,6 +346,8 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                         return {"data": _public(again), "requestId": request.state.request_id}
                     raise
                 data["markdownContent"] = merged_md
+                from app.fast_preview import warm_after_commit
+                warm_after_commit(did, revision + 1)
                 return {"data": data, "requestId": request.state.request_id}
     raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
 

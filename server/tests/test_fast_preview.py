@@ -82,3 +82,33 @@ def test_large_document_fast_preview_is_cheap_cold(document_context, capsys):  #
     with capsys.disabled():
         print(f"\n[43] objects(cold)={objects_time:.2f}s preview/blocks(cold)={blocks_time:.2f}s")
     assert objects_time < 5 and blocks_time < 5  # 共享机器上留余量；本机实测见 43 号说明
+
+
+def test_patch_warms_fast_preview_for_new_revision(document_context, monkeypatch):  # noqa: F811
+    """关页保存提速：块级保存提交后后台预热新修订的快速预览，重开时 /preview/blocks 直接命中缓存。"""
+    client, headers, project, *_ = document_context
+    fast_preview.clear()
+    did = _srs_document(client, headers, project)
+    objects = client.get(f"/api/v1/documents/{did}/objects").json()["data"]["objects"]
+    revision = client.get(f"/api/v1/documents/{did}").json()["data"]["revision"]
+    target = [item for item in objects if item["kind"] == "paragraph" and not item.get("isWordHeading")
+              and len(item["markdown"]) > 40 and not any(mark in item["markdown"] for mark in "[]!<|")][-1]
+    threads = []
+    original = fast_preview.warm_after_commit
+    monkeypatch.setattr(fast_preview, "warm_after_commit", lambda *a: threads.append(original(*a)) or threads[-1])
+    saved = client.post(f"/api/v1/documents/{did}/objects/patch", headers=headers, json={
+        "clientSaveKey": "warm-after-patch-1", "baseDocumentRevision": revision, "atomic": True,
+        "ops": [{"op": "update", "objectId": target["id"], "baseRevision": target["revision"],
+                 "markdown": target["markdown"] + " 已改"}]})
+    assert saved.status_code == 200, saved.text
+    new_revision = saved.json()["data"]["documentRevision"]
+    assert threads and threads[0] is not None
+    threads[0].join(10)
+    computed = []
+    real = fast_preview._compute
+    monkeypatch.setattr(fast_preview, "_compute", lambda *a: computed.append(a) or real(*a))
+    page = client.get(f"/api/v1/documents/{did}/preview/blocks?limit=5000").json()["data"]
+    assert page["documentRevision"] == new_revision
+    assert computed == []  # 命中预热结果
+    block = next(item for item in page["blocks"] if item["objectId"] == target["id"])
+    assert "已改" in block["html"] and block["revision"] == target["revision"] + 1
