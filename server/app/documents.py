@@ -959,10 +959,14 @@ def _section_update(row, index: int, content: str, mode: str, instruction: str =
     return row[7][:int(heading["bodyStart"])].rstrip() + "\n\n" + content + "\n\n" + row[7][position:]
 
 
-def _section_adoption_modes(connection, row, index: int, content: str, instruction: str = "") -> list[str]:
-    """Check both adoption modes; a protected original paragraph can still allow append."""
+def _section_adoption_modes(connection, row, index: int, content: str, instruction: str = "", *, in_place: bool = False) -> list[str]:
+    """Check both adoption modes; a protected original paragraph can still allow append.
+
+    An in-place draft is the existing body with fragments patched, so appending it
+    would duplicate the section: only replacement is offered.
+    """
     modes, failures = [], []
-    for mode in ("replace", "append"):
+    for mode in (("replace",) if in_place else ("replace", "append")):
         try:
             updated = _section_update(row, index, content, mode, instruction)
             _check_word(connection, row, updated)
@@ -1378,7 +1382,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
                                                  planned_sections=planned_sections, instruction=body.instruction)
                             _check_word(connection, row, _apply_edits(row[7], edits))
                         elif not inputs["selected_only"]:
-                            return _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction)
+                            return _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction, in_place=inputs["edit_in_place"])
                         else:
                             _check_word(connection, row, _replace_selection(row[7], body.selection, content))
                     return None
@@ -1424,7 +1428,7 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         allowed_modes = None
         if not inputs["selected_only"]:
             with connect() as connection:
-                allowed_modes = _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction)
+                allowed_modes = _section_adoption_modes(connection, row, body.headingIndex, content, body.instruction, in_place=inputs["edit_in_place"])
         else:
             with connect() as connection:
                 _check_word(connection, row, _replace_selection(row[7], body.selection, content))
