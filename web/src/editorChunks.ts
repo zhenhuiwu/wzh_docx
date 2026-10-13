@@ -57,6 +57,10 @@ export class ChunkedBody {
   private headingOrder = new WeakMap<Element, number>();
   private scrollHandler: (() => void) | null = null;
   private frame = 0;
+  /** 原始节点 → 段序号（resync 用来认出 DOM 里的块属于哪一段） */
+  private owner = new WeakMap<Element, number>();
+  /** 本次挂载后输入过的段：不再卸载，保证浏览器撤销栈引用的节点一直在 DOM 里 */
+  private edited = new Set<number>();
   active = true;
 
   constructor(private root: HTMLElement, private scroller: HTMLElement | null, private options: ChunkOptions = {}) {}
@@ -67,7 +71,10 @@ export class ChunkedBody {
     let headings = 0;
     for (const group of splitChunks(blocks, this.options.minBlocks, this.options.maxBlocks)) {
       const start = headings;
-      for (const node of group) if (HEADING.test(node.tagName)) this.headingOrder.set(node, headings++);
+      for (const node of group) {
+        this.owner.set(node, this.chunks.length);
+        if (HEADING.test(node.tagName)) this.headingOrder.set(node, headings++);
+      }
       this.chunks.push({ nodes: group, placeholder: null, headingStart: start, headingCount: headings - start, height: group.reduce((sum, node) => sum + estimateHeight(node), 0), markdown: null });
     }
     this.chunks.forEach((chunk, index) => { if (!keep.has(index)) this.detach(chunk, false); });
@@ -136,12 +143,13 @@ export class ChunkedBody {
   /** 卸载离视口很远、且不含光标/焦点的段 */
   trim() {
     if (!this.active || !this.scroller) return;
+    this.resync();
     const view = this.scroller.getBoundingClientRect();
     const margin = Math.max(2400, view.height * 3);
     const selection = this.root.ownerDocument.getSelection();
     const anchor = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    this.chunks.forEach(chunk => {
-      if (chunk.placeholder || !chunk.nodes.length) return;
+    this.chunks.forEach((chunk, index) => {
+      if (chunk.placeholder || !chunk.nodes.length || this.edited.has(index)) return;
       const top = chunk.nodes[0].getBoundingClientRect().top;
       const bottom = chunk.nodes[chunk.nodes.length - 1].getBoundingClientRect().bottom;
       if (bottom > view.top - margin && top < view.bottom + margin) return;
@@ -151,12 +159,66 @@ export class ChunkedBody {
     });
   }
 
+  /**
+   * 编辑会增删顶层块（回车拆段、删段、粘贴、撤销）：按 DOM 现状重算已挂载段的成员与全文标题序号。
+   * 新块归到它前面最近的段；已被删掉的块从段里去掉——否则卸载时新块会留在原处、再挂上时删掉的块又回来。
+   */
+  resync() {
+    if (!this.chunks.length) return;
+    const members = new Map<number, Element[]>();
+    let current = 0;
+    for (const node of [...this.root.children]) {
+      const ph = node.getAttribute(CHUNK_ATTR);
+      // 占位后面的新块属于下一段（占位本身不可编辑，新块不会长在它里面）
+      if (ph !== null) { current = Number(ph) + 1; continue; }
+      if (node.hasAttribute("data-ai-preview")) continue;
+      const own = this.owner.get(node);
+      if (own !== undefined && !this.chunks[own].placeholder) current = Math.max(current, own);
+      if (!this.chunks[current] || this.chunks[current].placeholder) continue;
+      this.owner.set(node, current);
+      const list = members.get(current) ?? [];
+      list.push(node);
+      members.set(current, list);
+    }
+    let headings = 0;
+    this.chunks.forEach((chunk, index) => {
+      if (!chunk.placeholder) chunk.nodes = members.get(index) ?? [];
+      chunk.headingStart = headings;
+      for (const node of chunk.nodes) if (HEADING.test(node.tagName)) this.headingOrder.set(node, headings++);
+      chunk.headingCount = headings - chunk.headingStart;
+    });
+  }
+
+  /** 输入发生在 node 所在的段：该段从此不卸载（撤销/重做始终作用在 DOM 里的节点上） */
+  markEdited(node: Node | null) {
+    if (!node) return;
+    this.resync();
+    const at = this.chunks.findIndex(chunk => !chunk.placeholder && chunk.nodes.some(block => block === node || block.contains(node)));
+    if (at >= 0) this.edited.add(at);
+  }
+  isEdited(index: number) { return this.edited.has(index); }
+
+  /** 全文所有顶层块（含未挂载段里的），按文档顺序；chunk 为所在段 */
+  allBlocks(): Array<{ node: Element; chunk: number }> {
+    this.resync();
+    return this.chunks.flatMap((chunk, index) => chunk.nodes.map(node => ({ node, chunk: index })));
+  }
+
+  /** 挂上 node 所在的段并返回它（node 已不在任何段里时为 false） */
+  reveal(node: Element): boolean {
+    const at = this.chunks.findIndex(chunk => chunk.nodes.includes(node));
+    if (at < 0) return false;
+    this.mount(at);
+    return true;
+  }
+
   mountAll() {
     this.chunks.forEach((_, index) => this.mount(index));
   }
 
   /** 第 index 个标题（全文序号）所在的元素；所在段没挂上时先挂上。 */
   headingElement(index: number): HTMLElement | null {
+    this.resync();
     const at = this.chunks.findIndex(chunk => index >= chunk.headingStart && index < chunk.headingStart + chunk.headingCount);
     if (at < 0) return null;
     this.mount(at);
@@ -170,6 +232,7 @@ export class ChunkedBody {
 
   /** 位置 node 所属章节的全文标题序号（在第一个标题之前为 -1；不在任何已挂载段里为 undefined） */
   headingIndexAt(node: Node): number | undefined {
+    this.resync();
     for (const chunk of this.chunks) {
       if (chunk.placeholder) continue;
       const at = chunk.nodes.findIndex(block => block === node || block.contains(node));
@@ -188,6 +251,7 @@ export class ChunkedBody {
    * 参考线落在占位块里时，取该段最后一个标题（没挂上的段也能算对）；整篇在第一个标题之前为 null。
    */
   headingAtLine(line: number): number | null {
+    this.resync();
     let found: number | null = null;
     for (const chunk of this.chunks) {
       if (chunk.placeholder) {
@@ -207,6 +271,7 @@ export class ChunkedBody {
 
   /** 已挂载的标题元素及其全文序号 */
   mountedHeadings(): Array<{ element: HTMLElement; index: number }> {
+    this.resync();
     return this.chunks.flatMap(chunk => chunk.placeholder ? [] : chunk.nodes.flatMap(node => {
       const index = this.headingOrder.get(node);
       return index === undefined ? [] : [{ element: node as HTMLElement, index }];
@@ -222,6 +287,7 @@ export class ChunkedBody {
 
   /** 在 root 的副本里把占位换回节点副本，得到整篇（用于整篇转换与块 ID 对照） */
   inflate(copy: HTMLElement) {
+    this.resync();
     for (const placeholder of [...copy.querySelectorAll<HTMLElement>(`:scope > [${CHUNK_ATTR}]`)]) {
       const chunk = this.chunks[Number(placeholder.getAttribute(CHUNK_ATTR))];
       placeholder.replaceWith(...(chunk?.nodes.map(node => node.cloneNode(true)) ?? []));
@@ -246,4 +312,55 @@ export function quickBodyHtml(markdown: string): string {
     if (heading && !block.includes("\n")) return `<h${heading[1].length}>${escape(heading[2].replace(/\s+#*\s*$/, ""))}</h${heading[1].length}>`;
     return `<p>${escape(block).replace(/\n/g, "<br>")}</p>`;
   }).join("");
+}
+
+export interface SearchHit {
+  /** 块在 allBlocks() 里的位置 */
+  block: number;
+  /** 匹配在块文字里的起点与长度 */
+  offset: number;
+  length: number;
+  /** 所属章节的全文标题序号（第一个标题之前为 -1） */
+  heading: number;
+  snippet: { before: string; match: string; after: string };
+}
+
+/**
+ * 全文搜索（Ctrl+F 替代）：在每个顶层块的文字里找 query（不区分大小写），按文档顺序返回最多 limit 处。
+ * texts[i] 为第 i 块的文字，headings[i] 为第 i 块所属章节序号。
+ */
+export function searchBlocks(texts: string[], headings: number[], query: string, limit = 500): { hits: SearchHit[]; total: number } {
+  const needle = query.trim().toLocaleLowerCase();
+  const hits: SearchHit[] = [];
+  let total = 0;
+  if (!needle) return { hits, total };
+  texts.forEach((text, block) => {
+    const hay = text.toLocaleLowerCase();
+    for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
+      total += 1;
+      if (hits.length >= limit) continue;
+      hits.push({ block, offset: at, length: needle.length, heading: headings[block] ?? -1, snippet: {
+        before: (at > 24 ? "…" : "") + text.slice(Math.max(0, at - 24), at),
+        match: text.slice(at, at + needle.length),
+        after: text.slice(at + needle.length, at + needle.length + 40) + (at + needle.length + 40 < text.length ? "…" : ""),
+      } });
+    }
+  });
+  return { hits, total };
+}
+
+/** 块 root 里第 offset 个字符起、长 length 的文字范围（跨多个文本节点也行） */
+export function textRange(root: Node, offset: number, length: number): Range | null {
+  const doc = root.ownerDocument;
+  if (!doc) return null;
+  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  const range = doc.createRange();
+  let seen = 0, started = false;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const size = node.textContent?.length ?? 0;
+    if (!started && offset < seen + size) { range.setStart(node, offset - seen); started = true; }
+    if (started && offset + length <= seen + size) { range.setEnd(node, offset + length - seen); return range; }
+    seen += size;
+  }
+  return null;
 }
