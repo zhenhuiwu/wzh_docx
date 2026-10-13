@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiFragmentTooLarge, buildFragments, changedOps, isPlaceholderText } from "./myBlocks";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText } from "./myBlocks";
 
 const o = (id: string, kind: string, markdown: string, revision = 1) => ({ id, kind, markdown, revision });
 const r = (objectId: string, owners: string[], editable = true) => ({ objectId, kind: "paragraph", owners: owners.map((id) => ({ id, name: id })), via: "explicit", viaObjectId: null, editable, readonlyReason: null });
@@ -41,5 +41,17 @@ describe("isPlaceholderText", () => {
     expect(isPlaceholderText("接口 2 的输入说明。")).toBe(false);
     expect(isPlaceholderText("（公共框架：引用文档，各文档引用同一内容。）")).toBe(false);
     expect(isPlaceholderText("（在此编写本章内容。）补充了正文")).toBe(false);
+  });
+});
+
+describe("applyAiOperations", () => {
+  it("applies replace ops from the done event, skips others and duplicates", () => {
+    const drafts: Record<string, string> = { a: "旧", b: "乙" };
+    const seen = new Set<string>();
+    const ops = [{ op: "replace", blockId: "a", content: "新" }, { op: "insertAfter", blockId: "a", content: "插" }, { op: "replace", blockId: "x", content: "越界" }];
+    expect(applyAiOperations(undefined, new Set(["a", "b"]), drafts, seen)).toEqual({ applied: 0, skipped: 0 });
+    expect(applyAiOperations(ops, new Set(["a", "b"]), drafts, seen)).toEqual({ applied: 1, skipped: 2 });
+    expect(applyAiOperations(ops, new Set(["a", "b"]), drafts, seen)).toEqual({ applied: 0, skipped: 0 });
+    expect(drafts).toEqual({ a: "新", b: "乙" });
   });
 });

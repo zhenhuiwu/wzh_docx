@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
 import { streamDocumentSection } from "../../api/documents";
-import { aiFragmentTooLarge, buildFragments, changedOps, isPlaceholderText, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 const props = defineProps<{ doc: MyWritingItem; userId: string }>();
@@ -70,14 +70,14 @@ async function runAi(fragment: Fragment) {
   aiAbort = new AbortController();
   const ids = new Set(fragment.blocks.map((block) => block.id));
   let applied = 0; let skipped = 0;
+  const seen = new Set<string>();
   const notice = (tone: "success" | "warning" | "danger", text: string) => { aiNotice.value = { ...aiNotice.value, [fragment.key]: { tone, text } }; };
   try {
     await streamDocumentSection(props.doc.id, revision.value, fragment.headingIndex, aiInstruction.value.trim(), undefined, (event) => {
-      if (event.type !== "draft" || !event.operations) return;
-      for (const op of event.operations) {
-        if (op.op === "replace" && ids.has(op.blockId) && op.content.trim()) { drafts.value[op.blockId] = op.content; applied += 1; }
-        else skipped += 1;
-      }
+      // 块操作在 done 事件里（有的服务端版本也会在 draft 里先给）
+      if (event.type !== "draft" && event.type !== "done") return;
+      const result = applyAiOperations(event.operations, ids, drafts.value, seen);
+      applied += result.applied; skipped += result.skipped;
     }, aiAbort.signal, "section", undefined, undefined, [...ids]);
     if (!applied) notice("warning", "AI 没有给出可填入的修改。");
     else notice(skipped ? "warning" : "success", `AI 已改写 ${applied} 段，确认后点“保存本文档”。${skipped ? `另有 ${skipped} 处增删段落的建议需在文档中操作。` : ""}`);

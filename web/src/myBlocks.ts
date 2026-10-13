@@ -77,3 +77,17 @@ const PLACEHOLDER = /^[（(][^（）()\n]*(在此|请在|待编写|待补充|填
 export function isPlaceholderText(markdown: string): boolean {
   return PLACEHOLDER.test(markdown.trim());
 }
+
+/** 验收 40 P1-1：AI 编写本节的块操作可能在 draft 或 done 事件里给出。只把本片段里的 replace 填进草稿，其余计为跳过。 */
+export interface AiBlockOp { op: string; blockId: string; content: string }
+export function applyAiOperations(operations: AiBlockOp[] | undefined, ids: Set<string>, drafts: Record<string, string>, seen: Set<string>): { applied: number; skipped: number } {
+  let applied = 0, skipped = 0;
+  for (const op of operations ?? []) {
+    const key = `${op.op}:${op.blockId}:${op.content}`;
+    if (seen.has(key)) continue; // draft 与 done 可能重复给出同一操作
+    seen.add(key);
+    if (op.op === "replace" && ids.has(op.blockId) && op.content.trim()) { drafts[op.blockId] = op.content; applied += 1; }
+    else skipped += 1;
+  }
+  return { applied, skipped };
+}
