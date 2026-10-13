@@ -136,6 +136,15 @@ watch([project, () => route.query.restore], ([value, flag]) => {
 
 const moreMenu = ref<HTMLDetailsElement | null>(null);
 function closeMenu() { if (moreMenu.value) moreMenu.value.open = false; }
+/** 41 复验：菜单打开时点页面其他地方（如「从模板创建」）要先收起，不能浮在弹窗遮罩后面。 */
+function onDocumentPointer(event: Event) {
+  const menu = moreMenu.value;
+  if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+}
+document.addEventListener("pointerdown", onDocumentPointer, true);
+function onDocumentKey(event: KeyboardEvent) { if (event.key === "Escape") closeMenu(); }
+document.addEventListener("keydown", onDocumentKey);
+onBeforeUnmount(() => { document.removeEventListener("pointerdown", onDocumentPointer, true); document.removeEventListener("keydown", onDocumentKey); });
 defineExpose({ openRestore: () => openArchive("restore") });
 </script>
 
