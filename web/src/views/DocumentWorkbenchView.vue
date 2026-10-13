@@ -987,9 +987,18 @@ function stepFind(delta: number) {
 }
 function onFindKey(event: KeyboardEvent) {
   if (event.key === "Enter") { event.preventDefault(); stepFind(event.shiftKey ? -1 : 1); }
-  else if (event.key === "Escape") { event.preventDefault(); closeFind(); }
 }
 function interceptFind(event: KeyboardEvent) {
+  // 复验 3：查找栏开着时，焦点在正文或别处按 Esc 也关闭（对话框、菜单里的 Esc 留给它们自己；输入法组字时不处理）
+  if (event.key === "Escape" && findOpen.value && !event.isComposing) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".doc-find") || !target?.closest("[role=dialog],[role=alertdialog],[role=menu],[role=listbox]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFind();
+    }
+    return;
+  }
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "f" || mode.value !== "edit" || !editor.value) return;
   event.preventDefault();
   openFind();
