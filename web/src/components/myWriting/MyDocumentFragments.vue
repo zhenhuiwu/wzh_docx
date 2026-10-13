@@ -5,7 +5,7 @@ import { ApiError } from "../../api/client";
 import { getAllObjects, getAssignments, type DocObject } from "../../api/assignments";
 import { patchBlocks, type MyWritingItem } from "../../api/baselines";
 import { streamDocumentSection } from "../../api/documents";
-import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, isPlaceholderText, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
+import { aiFragmentTooLarge, applyAiOperations, buildFragments, changedOps, contextView, isTemplateFiller, type ContextView, wordHeadingIds, type Fragment, type FragmentSummary } from "../../myBlocks";
 import StatePanel from "../StatePanel.vue";
 
 /** inSplit：并排视图里每列只用次级按钮，整页唯一的主按钮是工具栏上的“保存全部” */
@@ -36,7 +36,7 @@ async function load() {
     lockedHeadings.value = wordHeadingIds(objects.objects);
     fragments.value = buildFragments(objects.objects, view.resolved, props.userId);
     // 模板占位文字不放进输入框（显示为占位提示）；不改就不提交
-    placeholders.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.filter((b) => isPlaceholderText(b.markdown)).map((b) => [b.id, b.markdown.trim()])));
+    placeholders.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.filter((b) => isTemplateFiller(b.markdown)).map((b) => [b.id, b.markdown.trim()])));
     drafts.value = Object.fromEntries(fragments.value.flatMap((f) => f.blocks.map((b) => [b.id, placeholders.value[b.id] ? "" : b.markdown])));
     phase.value = "ready";
   } catch (error) {
@@ -113,10 +113,18 @@ const summaries = computed<FragmentSummary[]>(() => fragments.value.map((fragmen
   const ids = new Set(fragment.blocks.map((block) => block.id));
   const touched = ops.value.some((op) => ids.has(op.objectId));
   const status = touched && state.value === "conflict" ? "conflict" : touched && state.value === "forbidden" ? "rejected"
-    : fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).every((block) => { const text = (drafts.value[block.id] ?? block.markdown).trim(); return !text || isPlaceholderText(text); }) ? "todo" : "written";
+    : fragment.blocks.filter((block) => !lockedHeadings.value.has(block.id)).every((block) => { const text = (drafts.value[block.id] ?? block.markdown).trim(); return !text || isTemplateFiller(text); }) ? "todo" : "written";
   return { key: fragment.key, label: fragment.headingPath.at(-1) || "（文档开头）", status };
 }));
 watch(summaries, (value) => emit("fragments", value), { immediate: true });
+type TableView = Extract<ContextView, { kind: "table" }>;
+type TextView = Extract<ContextView, { kind: "text" }>;
+const ctxCache = new Map<string, ContextView>();
+function ctx(markdown: string): ContextView {
+  let view = ctxCache.get(markdown);
+  if (!view) { view = contextView(markdown); ctxCache.set(markdown, view); }
+  return view;
+}
 defineExpose({ dirty, save });
 </script>
 
@@ -149,14 +157,24 @@ defineExpose({ dirty, save });
       </form>
       <p v-if="aiBusy === fragment.key" class="notice info" role="status">AI 正在编写本节…</p>
       <p v-else-if="aiNotice[fragment.key]" class="notice" :class="aiNotice[fragment.key].tone" role="status">{{ aiNotice[fragment.key].text }}</p>
-      <p v-if="fragment.before" class="context" :title="'前文（他人负责，只读）'"><span class="ctx-label">前文 · 只读</span>{{ fragment.before }}</p>
+      <div v-if="fragment.before" class="context" :title="'前文（他人负责，只读）'">
+        <span class="ctx-label">前文 · 只读<template v-if="fragment.beforeSection"> · {{ fragment.beforeSection }}</template></span>
+        <table v-if="ctx(fragment.before).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.before) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
+        <p v-else class="ctx-text">{{ (ctx(fragment.before) as TextView).text }}</p>
+        <small v-if="ctx(fragment.before).kind === 'table' && (ctx(fragment.before) as TableView).more" class="ctx-more">另有 {{ (ctx(fragment.before) as TableView).more }} 行</small>
+      </div>
       <label v-for="(block, index) in fragment.blocks" :key="block.id" class="block">
         <span class="sr-only">{{ fragment.headingPath.at(-1) ?? "片段" }} 第 {{ index + 1 }} 段</span>
         <p v-if="lockedHeadings.has(block.id)" class="locked-heading"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 7V5a3 3 0 0 1 6 0v2M3.5 7h9v6.5h-9z" /></svg>{{ block.markdown }}<small>标题已固定</small></p>
         <textarea v-else v-model="drafts[block.id]" class="control" rows="3" :placeholder="placeholders[block.id] || '在此编写这一段'" :disabled="state === 'saving'" :aria-invalid="!placeholders[block.id] && !drafts[block.id]?.trim()"></textarea>
         <span v-if="!lockedHeadings.has(block.id) && !placeholders[block.id] && !drafts[block.id]?.trim()" class="field-error">内容不能为空；删除段落请在文档中操作。</span>
       </label>
-      <p v-if="fragment.after" class="context" :title="'后文（他人负责，只读）'"><span class="ctx-label">后文 · 只读</span>{{ fragment.after }}</p>
+      <div v-if="fragment.after" class="context" :title="'后文（他人负责，只读）'">
+        <span class="ctx-label">后文 · 只读<template v-if="fragment.afterSection"> · {{ fragment.afterSection }}</template></span>
+        <table v-if="ctx(fragment.after).kind === 'table'" class="ctx-table"><tbody><tr v-for="(row, r) in (ctx(fragment.after) as TableView).rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
+        <p v-else class="ctx-text">{{ (ctx(fragment.after) as TextView).text }}</p>
+        <small v-if="ctx(fragment.after).kind === 'table' && (ctx(fragment.after) as TableView).more" class="ctx-more">另有 {{ (ctx(fragment.after) as TableView).more }} 行</small>
+      </div>
     </article>
   </section>
 </template>
@@ -169,8 +187,12 @@ defineExpose({ dirty, save });
 .frag-head { display: flex; align-items: center; gap: var(--space-2); }
 .path { overflow-wrap: anywhere; margin-right: auto; }
 .lock { width: var(--icon-sm); height: var(--icon-sm); fill: none; stroke: var(--ink-secondary); stroke-width: 1.4; flex: none; }
-.context { margin: 0; padding: var(--space-2); color: var(--ink-tertiary); background: var(--bg-subtle); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.ctx-label { display: block; margin-bottom: 2px; font-size: var(--text-xs); color: var(--ink-tertiary); }
+.context { margin: 0; padding: var(--space-2); color: var(--ink-tertiary); background: var(--bg-subtle); border-radius: var(--radius-control); font-size: var(--text-sm); line-height: var(--leading-sm); min-width: 0; }
+.ctx-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ctx-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--text-xs); }
+.ctx-table td { padding: 2px var(--space-1); border: 1px solid var(--border-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-more { display: block; margin-top: 2px; font-size: var(--text-xs); }
+.ctx-label { display: block; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); color: var(--ink-tertiary); }
 .ai-form { display: flex; gap: var(--space-2); }
 .ai-form input { flex: 1; }
 .locked-heading { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-1) 0; font-weight: var(--weight-semibold); color: var(--ink); }

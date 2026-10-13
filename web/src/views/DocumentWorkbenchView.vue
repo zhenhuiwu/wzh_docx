@@ -987,9 +987,18 @@ function stepFind(delta: number) {
 }
 function onFindKey(event: KeyboardEvent) {
   if (event.key === "Enter") { event.preventDefault(); stepFind(event.shiftKey ? -1 : 1); }
-  else if (event.key === "Escape") { event.preventDefault(); closeFind(); }
 }
 function interceptFind(event: KeyboardEvent) {
+  // 复验 3：查找栏开着时，焦点在正文或别处按 Esc 也关闭（对话框、菜单里的 Esc 留给它们自己；输入法组字时不处理）
+  if (event.key === "Escape" && findOpen.value && !event.isComposing) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".doc-find") || !target?.closest("[role=dialog],[role=alertdialog],[role=menu],[role=listbox]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFind();
+    }
+    return;
+  }
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "f" || mode.value !== "edit" || !editor.value) return;
   event.preventDefault();
   openFind();
@@ -1372,6 +1381,20 @@ function findLocalDrafts(record: DocumentRecord) {
   if (assignInfo.value?.restricted) settleDraftOwnership();
   void flushLoadTyping();
   void settlePendingSaves(record);
+  // 复验 5：关掉标签再马上打开同一文档——大文档超过 keepalive 上限（64KB），关页时的修改只留在本机草稿里，
+  // 新标签因此被“先处理本机草稿”锁住，看起来像永远不能编辑。草稿基于的修订就是当前修订（期间没人改过）、
+  // 没有冲突续写、是最近 30 分钟写的唯一一份时，直接恢复并保存（不需要合并，不会覆盖别人的修改）。
+  const only = drafts.length === 1 ? drafts[0] : null;
+  if (only && only.markdown && only.docRevision === record.revision && !only.conflictsEdits?.length && Date.now() - only.savedAt < 30 * 60_000 && !readonly.value) {
+    void settledThenRestore(record, only);
+  }
+}
+async function settledThenRestore(record: DocumentRecord, draft: DraftV2) {
+  await nextTick();
+  const same = (other: DraftV2 | null | undefined) => other?.tabId === draft.tabId && other?.savedAt === draft.savedAt;
+  if (document.value !== record || !same(localDraft.value) || restoreRefusal.value) return;
+  await restoreLocalDraft();
+  if (document.value === record && !localDrafts.value.some(same)) noteAction("已自动恢复上次关闭页面前没保存的修改，并已保存。", 8000);
 }
 async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
   for (const draft of drafts) {
