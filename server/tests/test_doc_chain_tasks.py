@@ -147,6 +147,7 @@ def test_tasks_write_back_and_public_blocks(document_context):  # noqa: F811
     assert r.status_code == 201, r.text
     task = r.json()["data"]
     assert task["documentCount"] == 2 and all(t["owners"] for t in task["targets"])
+    assert task["writtenCount"] == sum(1 for t in task["targets"] if t["written"])
     a07 = client.get(f"/api/v1/documents/{srs['id']}/assignments").json()["data"]
     assert any(e["objectId"] == func["objectId"] for e in a07["explicit"])
     r = client.patch(f"/api/v1/tasks/{task['id']}", headers=headers, json={"expectedRevision": 0, "targets": [

@@ -133,19 +133,27 @@ def _targets_of(conn, task_id: str) -> list[tuple[str, str]]:
 
 
 def _task_payload(conn, row, me: str) -> dict:
+    from app.doc_chain import chapter_progress
     targets = []
+    written_of: dict[str, dict[str, bool]] = {}
     for did, oid in _targets_of(conn, str(row["id"])):
-        doc = conn.execute("SELECT name FROM documents WHERE id=%s", [did]).fetchone()
+        doc = conn.execute("SELECT name, markdown_content FROM documents WHERE id=%s", [did]).fetchone()
+        if did not in written_of:  # 进度：章节下有非提示正文即算已写（与依赖链卡片同一口径）
+            chapters = chapter_progress(doc["markdown_content"] if doc else "")[2]
+            written_of[did] = {}
+            for c in chapters:
+                written_of[did].setdefault(c["title"], c["written"])
         obj = conn.execute("SELECT body, deleted_at FROM document_objects WHERE id=%s", [oid]).fetchone()
         owners = [r["name"] for r in conn.execute("""SELECT u.name FROM document_object_assignments a JOIN users u ON u.id=a.assignee_id
                                                     WHERE a.document_id=%s AND a.object_id=%s ORDER BY u.name""", [did, oid]).fetchall()]
         targets.append({"documentId": did, "documentName": doc["name"] if doc else None, "objectId": oid,
                         "chapter": heading_text(obj["body"]) if obj else None, "stale": obj is None or obj["deleted_at"] is not None,
-                        "owners": owners})
+                        "owners": owners, "written": bool(obj and written_of[did].get(heading_text(obj["body"])))})
     assignee = None if row["assignee_id"] is None else str(row["assignee_id"])
     return {"id": str(row["id"]), "title": row["title"], "description": row["description"], "revision": row["revision"],
             "assignee": {"id": assignee, "name": row["assignee_name"], "isMe": assignee == me},
-            "targets": targets, "documentCount": len({t["documentId"] for t in targets})}
+            "targets": targets, "documentCount": len({t["documentId"] for t in targets}),
+            "writtenCount": sum(1 for t in targets if t["written"] and not t["stale"])}
 
 
 def _task_row(conn, task_id: str):

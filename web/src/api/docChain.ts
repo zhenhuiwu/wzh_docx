@@ -130,6 +130,8 @@ export interface ProjectTask {
   assignee: { id: string | null; name: string | null; isMe: boolean };
   targets: TaskTarget[];
   documentCount: number;
+  /** 涉及块中已写的数量（进度列） */
+  writtenCount?: number;
 }
 export interface PublicBlock {
   id: string;
