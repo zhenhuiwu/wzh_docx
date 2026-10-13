@@ -38,7 +38,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { assignBlockIds, splitBlocks, type BaselineObject } from "../markdownBlocks";
+import { assignBlockIds, keepalivePatch, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
 import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
@@ -49,7 +49,7 @@ import { listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, bodyBlockAt, chunkBlockById, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
-import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
+import { addDocumentHeading, documentHeadings, streamDocumentSection, exportDocument, getDocument, insertDocumentSection, previewDocument, previewBlocks, patchObjectsKeepalive, updateDocumentContent, getWritingMemory, clearWritingMemory, applyDocumentEdits, replaceDocumentSelection, queryWritingGuidance, updateWritingGuidance, type WritingGuidanceGroup, type WritingGuidanceItem, type DocumentSelection, type DocumentContentResult, type DocumentRecord, type DocumentEdit, type WritingMemory } from "../api/documents";
 
 const route = useRoute();
 const router = useRouter();
@@ -281,6 +281,8 @@ function readStash() {
   try { stashEntries.value = parseStash(localStorage.getItem(stashKey())); } catch { stashEntries.value = []; }
 }
 let baselineObjects: BaselineObject[] = [];
+/** 复验 P2-1：关页按块保存的基准（与 documentRevision 对应的对象及修订号） */
+let keepaliveBase: { revision: number; objects: RevisionedObject[] } | null = null;
 let baseSnapshot: { revision: number; objects: BaselineObject[] } | null = null;
 let ownershipSeq = 0;
 const assignMode = computed(() => document.value?.permissions?.assignmentMode ?? null);
@@ -318,6 +320,7 @@ async function loadOwnership(record = document.value) {
     const [data, view, chapters] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null), getLockedChapters(record.id).catch(() => [] as LockedChapter[])]);
     if (document.value !== record || seq !== ownershipSeq) return;
     baselineObjects = data.objectModel ? data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown })) : [];
+    keepaliveBase = data.objectModel ? { revision: data.documentRevision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null;
     // 27 复验 M-4：编辑区渲染所依据的那一版对象（ID 与编辑区 data-object-id 一致），“只保存我负责的部分”以它为底
     if (data.objectModel && data.documentRevision === record.revision) baseSnapshot = { revision: record.revision, objects: [...baselineObjects] };
     const locked = new Map<string, string>();
@@ -1384,6 +1387,11 @@ function findLocalDrafts(record: DocumentRecord) {
   // 复验 5：关掉标签再马上打开同一文档——大文档超过 keepalive 上限（64KB），关页时的修改只留在本机草稿里，
   // 新标签因此被“先处理本机草稿”锁住，看起来像永远不能编辑。草稿基于的修订就是当前修订（期间没人改过）、
   // 没有冲突续写、是最近 30 分钟写的唯一一份时，直接恢复并保存（不需要合并，不会覆盖别人的修改）。
+  // 复验 P2-1：关页时已按块发出保存（带 pendingSave 键）的草稿先等 settlePendingSaves 核对落库，不抢着恢复
+  if (!drafts.some(draft => draft.pendingSave)) maybeAutoRestore(record);
+}
+function maybeAutoRestore(record: DocumentRecord) {
+  const drafts = localDrafts.value;
   const only = drafts.length === 1 ? drafts[0] : null;
   if (only && only.markdown && only.docRevision === record.revision && !only.conflictsEdits?.length && Date.now() - only.savedAt < 30 * 60_000 && !readonly.value) {
     void settledThenRestore(record, only);
@@ -1455,6 +1463,10 @@ async function settlePendingSaves(record: DocumentRecord, retried = false) {
     noteAction("上次关闭页面前的修改已保存到服务器。");
   }
   if (waiting && !retried) window.setTimeout(() => { if (document.value === record) void settlePendingSaves(record, true); }, 1500);
+  else if (document.value === record) {
+    // 关页保存最终没落库：服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）。核对期间服务器可能已变，重读修订号
+    try { const latest = await getDocument(record.id); if (latest.revision === record.revision) maybeAutoRestore(record); } catch { /* 留给恢复条 */ }
+  }
 }
 /** 没有未保存修改时，把编辑区换成服务器最新正文（严格接口 409 后的“刷新”）。返回是否已刷新。 */
 async function refreshFromServer(options: AcceptOptions = {}, force = false): Promise<boolean> {
@@ -4443,7 +4455,16 @@ function onPageHide() {
   if (!record || !isDirty.value || readonly.value || aiPreviewHost.value || blockedFor(markdownContent.value)) return;
   const content = markdownContent.value;
   const explicit = explicitBase;
-  if (new Blob([content + (explicit ?? "")]).size > 60000) return; // keepalive 正文上限 64KB；超出时只留本机草稿。
+  if (new Blob([content + (explicit ?? "")]).size > 60000) {
+    // keepalive 正文上限 64KB：大文档改为只提交改过的块（/objects/patch）；配不上或仍超限时只留本机草稿
+    const ops = explicit === null && mergeBase === null && keepaliveBase?.revision === record.revision ? keepalivePatch(content, keepaliveBase.objects) : null;
+    const key = crypto.randomUUID();
+    if (!ops || new Blob([JSON.stringify({ clientSaveKey: key, baseDocumentRevision: record.revision, atomic: true, ops })]).size > 60000) return;
+    pendingKey = { content, key, base: record.revision, dsend: domPair?.dom ?? content, gen: fallbackGen };
+    persistLocalDraft();
+    void patchObjectsKeepalive(record.id, record.revision, ops, key).catch(() => undefined);
+    return;
+  }
   const base = explicit !== null ? record.revision : mergeBase ?? record.revision;
   if (!pendingKey || pendingKey.content !== content) {
     pendingKey = { content, key: crypto.randomUUID(), base, dsend: explicit !== null ? content : domPair?.dom ?? content, gen: fallbackGen,

@@ -194,3 +194,47 @@ export function assignBlockIds(markdown: string, baseline: BaselineObject[]): Ar
   const seen = new Set<string>();
   return ids.map(id => (id && !seen.has(id) ? (seen.add(id), id) : null));
 }
+
+/** 关页保存（复验 P2-1）：对象带修订号的基准。 */
+export interface RevisionedObject { id: string; kind: string; revision: number; markdown: string }
+export type KeepaliveOp =
+  | { op: "update"; objectId: string; baseRevision: number; markdown: string }
+  | { op: "delete"; objectId: string; baseRevision: number }
+  | { op: "insert"; tempId: string; afterObjectId?: string; beforeObjectId?: string; markdown: string };
+
+/**
+ * 关页时把正文相对 base 的改动换成 /objects/patch 的块操作（只带改过的块，请求很小，能放进 keepalive 的 64KB）。
+ * 只处理块的顺序没变的情况（改段、回车拆段/新增段、删段）；配不上、顺序变了或改动太多返回 null，由本机草稿兜底。
+ */
+export function keepalivePatch(content: string, base: RevisionedObject[], maxOps = 500): KeepaliveOp[] | null {
+  if (!base.length) return null;
+  const blocks = splitBlocks(content);
+  const ids = assignBlockIds(content, base);
+  const at = new Map(base.map((item, index) => [item.id, index]));
+  const ops: KeepaliveOp[] = [];
+  const kept = new Set<string>();
+  let last = -1, anchor: string | undefined, temps = 0;
+  for (const [index, block] of blocks.entries()) {
+    const id = ids[index];
+    if (id && at.has(id) && !kept.has(id)) {
+      const position = at.get(id)!;
+      if (position < last) return null; // 顺序变了（移动）：交给草稿
+      last = position;
+      kept.add(id);
+      const object = base[position];
+      if (norm(object.markdown) !== norm(block.body)) {
+        if (!block.body.trim()) return null;
+        ops.push({ op: "update", objectId: id, baseRevision: object.revision, markdown: block.body });
+      }
+      anchor = id;
+    } else {
+      if (!block.body.trim()) continue;
+      const tempId = `ka${++temps}`;
+      // 文档开头插入：放在第一个对象之前
+      ops.push(anchor ? { op: "insert", tempId, afterObjectId: anchor, markdown: block.body } : { op: "insert", tempId, beforeObjectId: base[0].id, markdown: block.body });
+      anchor = tempId;
+    }
+  }
+  for (const object of base) if (!kept.has(object.id)) ops.push({ op: "delete", objectId: object.id, baseRevision: object.revision });
+  return ops.length && ops.length <= maxOps ? ops : null;
+}

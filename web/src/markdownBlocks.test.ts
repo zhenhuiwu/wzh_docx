@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignBlockIds, splitBlocks } from "./markdownBlocks";
+import { assignBlockIds, keepalivePatch, splitBlocks } from "./markdownBlocks";
 
 // 期望值由服务端 app.markdown_blocks.split 生成（块数、种类、正文必须一致）
 const SAMPLES: string[] = ["# 标题\n正文一\n\n## 二\n\n- a\n- b\n  续\n\n1. x\n\n   缩进续\n2. y\n", "| a | b |\n|---|---|\n| 1 | 2 |\n\n```py\nx\n\n```\n\n> 引用\n> 二\n\n![图](docx-image:abc)\n\n段落\n===\n\n<div>x</div>\n\n    code\n", "\n\n文本\r\n继续\r\n\r\n# H\r\n", "段\n# 紧跟标题\n段2\n```\nc\n```\n尾"];
@@ -38,5 +38,29 @@ describe("assignBlockIds 大文档不错位（27 M-1）", () => {
   it("间隙不等长时按相似度配对", () => {
     const base = [{ id: "h", kind: "heading", markdown: "# 一" }, { id: "p", kind: "paragraph", markdown: "原来的一段很长的正文" }, { id: "z", kind: "heading", markdown: "# 二" }];
     expect(assignBlockIds("# 一\n\n新段\n\n原来的一段很长的正文（改）\n\n# 二\n", base)).toEqual(["h", null, "p", "z"]);
+  });
+});
+
+describe("keepalivePatch（关页按块保存）", () => {
+  const base = [
+    { id: "h", kind: "heading", revision: 3, markdown: "# 1 范围" },
+    { id: "a", kind: "paragraph", revision: 1, markdown: "第一段内容比较长一些。" },
+    { id: "b", kind: "paragraph", revision: 2, markdown: "第二段内容也比较长。" },
+    { id: "c", kind: "paragraph", revision: 5, markdown: "第三段的内容在这里。" },
+  ];
+  it("只带改过的块：改段、回车新增段、删段", () => {
+    const content = "# 1 范围\n\n第一段内容比较长一些。改了\n\n新加的一段\n\n第二段内容也比较长。";
+    expect(keepalivePatch(content, base)).toEqual([
+      { op: "update", objectId: "a", baseRevision: 1, markdown: "第一段内容比较长一些。改了" },
+      { op: "insert", tempId: "ka1", afterObjectId: "a", markdown: "新加的一段" },
+      { op: "delete", objectId: "c", baseRevision: 5 },
+    ]);
+  });
+  it("没改返回 null；段落移动表示为插入新段 + 删除原段", () => {
+    expect(keepalivePatch(base.map(o => o.markdown).join("\n\n"), base)).toBeNull();
+    expect(keepalivePatch(["# 1 范围", base[3].markdown, base[1].markdown, base[2].markdown].join("\n\n"), base)).toEqual([
+      { op: "insert", tempId: "ka1", afterObjectId: "h", markdown: base[3].markdown },
+      { op: "delete", objectId: "c", baseRevision: 5 },
+    ]);
   });
 });

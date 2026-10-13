@@ -240,10 +240,14 @@ def _reject_word_headings(connection, did: UUID, principal, ops) -> None:
     targets = {op.objectId for op in ops if op.op in ("update", "delete", "move") and op.objectId}
     if not targets:
         return
-    from app.document_guidance import object_spans
-    from app.documents import _word_heading_ids
-    row = load_document(connection, did, principal.user_id, is_admin(principal), "edit")
-    locked = _word_heading_ids(connection, row, object_spans(connection, row)) & {str(item) for item in targets}
+    # 复验 P2-1：原先按整篇编辑稿（要等 Word 往返预览、并给全部对象算纯文本）判断，大文档一次按块保存要 5s 以上，
+    # 关页时的 keepalive 保存因此常常晚于重新打开。改用 43 的原稿标题表（按存储键缓存，与预览的 data-word-heading 同一判断），只看本次涉及的对象。
+    from app.document_objects import live_objects
+    from app.fast_preview import word_heading_levels
+    load_document(connection, did, principal.user_id, is_admin(principal), "edit")
+    wanted = {str(item) for item in targets}
+    rows = [item for item in live_objects(connection, did) if str(item["id"]) in wanted]
+    locked = set(word_heading_levels(connection, did, rows))
     if connection.in_transaction:
         connection.commit()
     if locked:

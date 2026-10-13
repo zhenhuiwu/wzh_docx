@@ -213,8 +213,13 @@ def test_patch_rejects_word_body_style_headings(team, monkeypatch):
     client, did, users = team
     items = objects(client, did)
     p1, p3 = by_text(items, "第一段。"), by_text(items, "第三段。")
-    import app.documents as documents
-    monkeypatch.setattr(documents, "_word_heading_ids", lambda connection, row, spans: {p1["objectId"]})
+    import app.fast_preview as fast_preview
+    # 复验 P2-1：按块保存改用原稿标题表（43，与预览 data-word-heading 同一判断），只传本次涉及的对象
+    seen = []
+    def levels(connection, document_id, rows):
+        seen.append({str(item["id"]) for item in rows})
+        return {str(item["id"]): 2 for item in rows if str(item["id"]) == p1["objectId"]}
+    monkeypatch.setattr(fast_preview, "word_heading_levels", levels)
     headers = _as(client, "editor")
     rejected = patch(client, did, 1, [update(p1, "改了标题段。")], headers, "word-heading-1")
     assert rejected.status_code == 403, rejected.text
@@ -225,3 +230,4 @@ def test_patch_rejects_word_body_style_headings(team, monkeypatch):
         "clientSaveKey": "word-heading-2", "baseDocumentRevision": 1, "ops": [{"op": "delete", "objectId": p1["objectId"], "baseRevision": p1["revision"]}]})
     assert deleting.status_code == 403, deleting.text
     assert patch(client, did, 1, [update(p3, "改第三段。")], headers, "word-heading-3").status_code == 200
+    assert seen and all(len(ids) == 1 for ids in seen)  # 只查涉及的对象，不扫整篇
