@@ -35,7 +35,7 @@ def test_baseline_lifecycle(bteam):
     owner = _as(client, "owner")
     first = client.post(f"/api/v1/documents/{did}/baselines", headers=owner, json={"message": "初稿"})
     assert first.status_code == 201, first.text
-    assert first.json()["data"]["label"] == "B1"
+    assert first.json()["data"]["label"] == "v1"
     editor = _as(client, "editor")
     assert client.post(f"/api/v1/documents/{did}/baselines", headers=editor, json={}).status_code == 403
     revision = current(client, did)["revision"]

@@ -86,7 +86,7 @@ def my_writing(request: Request, projectId: str | None = None, q: str | None = N
             "owner": {"id": str(row["owner_id"]), "name": row["owner_name"]},
             "myRole": role, "assignmentsEnabled": row["assignment_mode"] == "enforced",
             "assignedBlockCount": row["assigned_count"],
-            "latestBaseline": None if row["latest_baseline"] is None else f"B{row['latest_baseline']}",
+            "latestBaseline": None if row["latest_baseline"] is None else f"v{row['latest_baseline']}",
         })
     return {"data": {"items": items, "offset": offset, "limit": limit, "total": total,
                      "hasMore": len(rows) > limit}, "requestId": request.state.request_id}
