@@ -114,7 +114,10 @@ describe("ChunkedBody resync (编辑后卸载/挂载不串段)", () => {
     far(body);
     body.trim();
     root.kids.forEach((ph, i) => { ph.top = i * 500; });
+    // 假 DOM 的占位高 10px：700 在第 1 段占位之下（已过完）→ 该段最后一个标题
     expect(body.headingAtLine(700)).toBe(1);
+    // 落在第 0 段占位内部：按比例取段内标题（该段只有 1 个标题）
+    expect(body.headingAtLine(5)).toBe(0);
     expect(body.headingAtLine(-1)).toBe(null);
   });
 });

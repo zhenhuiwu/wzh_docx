@@ -871,7 +871,8 @@ function trackViewHeading() {
     viewFrame = 0;
     const root = editor.value, scroller = desk.value;
     if (!root || !scroller) return;
-    const top = scroller.getBoundingClientRect().top + 96;
+    // 复验 P2-3：以视口顶边为准（留 8px 容差），取顶边处正文所属的章节；目录高亮、第 x/N 节、状态栏“当前”都用它
+    const top = scroller.getBoundingClientRect().top + 8;
     let found: number | null;
     if (chunks) found = chunks.headingAtLine(top);
     else {
@@ -896,6 +897,8 @@ const chunkedEditor = computed(() => outline.value.length >= CHUNKED_MIN_SECTION
 let chunks: ChunkedBody | null = null;
 const mountedBlocks = ref(0);
 function chunkMounted() {
+  // 占位换成真内容后标题位置变了：重算视口顶部章节（快速滚动时先按占位估算过）
+  trackViewHeading();
   applyLocks();
   placePublicEmbeds();
   mountedBlocks.value = chunks?.mountedBlockCount ?? 0;

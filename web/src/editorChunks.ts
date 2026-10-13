@@ -260,8 +260,16 @@ export class ChunkedBody {
     let found: number | null = null;
     for (const chunk of this.chunks) {
       if (chunk.placeholder) {
-        if (chunk.placeholder.getBoundingClientRect().top > line) break;
-        if (chunk.headingCount) found = chunk.headingStart + chunk.headingCount - 1;
+        const box = chunk.placeholder.getBoundingClientRect();
+        if (box.top > line) break;
+        if (!chunk.headingCount) continue;
+        // 参考线落在占位里：按位置比例估算是段里第几个标题（原先直接取最后一个，滚动中会跳到后面几节）
+        if (box.bottom <= line) found = chunk.headingStart + chunk.headingCount - 1;
+        else {
+          const ratio = (line - box.top) / Math.max(1, box.bottom - box.top);
+          found = chunk.headingStart + Math.min(chunk.headingCount - 1, Math.floor(ratio * chunk.headingCount));
+          return found;
+        }
         continue;
       }
       for (const node of chunk.nodes) {
