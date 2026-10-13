@@ -27,6 +27,7 @@ import { flash } from "../flash";
 import DOMPurify from "dompurify";
 import OutlineVirtualList from "../components/OutlineVirtualList.vue";
 import PublicBlockEmbed from "../components/PublicBlockEmbed.vue";
+import UpstreamNotice from "../components/UpstreamNotice.vue";
 import { documentPublicRefs, type PublicRef } from "../api/docChain";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -4698,6 +4699,7 @@ onUnmounted(() => {
 
       <!-- 第 2 步：提示条统一放在文档栏下方、三栏上方 -->
       <div class="notices">
+        <UpstreamNotice :document-id="documentId" :project-id="projectId" />
         <p v-if="errorText" class="wb-notice danger" role="alert">{{ errorText }}</p>
         <p v-if="refreshNoticeShown" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNoticeShown }}</span></p>
         <div v-if="lockedBubble" class="locked-bubble" role="status" data-testid="locked-hint" :style="{ top: `${lockedBubble.top}px`, left: `${lockedBubble.left}px` }">
