@@ -5,6 +5,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from tests.block_ops_helper import section_answer
 from langchain_core.messages import AIMessage
 
 import app.document_agent as agent
@@ -129,7 +130,7 @@ def test_all_api_writing_modes_receive_saved_reference_originals(refs, monkeypat
         if scope == 'document':
             values['read_sections'].add(0)
             values['planned_sections'].add(0)
-        return json.dumps({'edits': [{'headingIndex': 0, 'content': '参考后正文。'}]}) if scope == 'document' else '参考后正文。'
+        return json.dumps({'edits': [{'headingIndex': 0, 'content': '参考后正文。'}]}) if scope == 'document' else section_answer(values, '参考后正文。')
     monkeypatch.setattr(documents, 'draft_section_text', draft)
     monkeypatch.setattr(documents, 'require_ai', lambda *_args: None)
     monkeypatch.setattr(documents, '_check_word', lambda *_args, **_kwargs: None)
