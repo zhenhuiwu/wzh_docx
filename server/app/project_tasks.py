@@ -651,3 +651,22 @@ def get_locked_chapters(request: Request, document_id: str) -> dict:
         ensure_document_objects(conn, did)
         conn.commit()
         return {"data": {"chapters": locked_chapters(conn, did)}, "requestId": request.state.request_id}
+
+
+# ---------------------------------------------------------------- 项目首页「我的待办」（41 复验 P1）
+
+@router.get("/projects/{project_id}/my-todos")
+def my_todos(request: Request, project_id: str) -> dict:
+    """项目成员（含编写人员、只读成员）都能读，只返回与本人相关的待办：
+    分配给我的待处理事项（负责人另含未指派的）、分配给我的任务。不放宽全局 /issues 的权限。"""
+    from app.workbench import _collect, _strip
+    with connect() as conn:
+        principal, pid, role = _project(conn, request, project_id)
+        me = str(principal.user_id)
+        issues = [i for i in _collect(conn, principal.user_id, is_admin(principal))
+                  if i["projectId"] == pid and (i["assigneeId"] == me or (role == "owner" and i["assigneeId"] is None))]
+        issues.sort(key=lambda i: i["_updated"], reverse=True)
+        tasks = [{"id": str(r["id"]), "title": r["title"]} for r in conn.execute(
+            "SELECT id, title FROM project_tasks WHERE project_id=%s AND assignee_id=%s ORDER BY display_order, created_at",
+            [pid, me]).fetchall()]
+    return {"data": {"issues": [_strip(i) for i in issues[:20]], "tasks": tasks}, "requestId": request.state.request_id}

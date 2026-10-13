@@ -3,7 +3,8 @@
 import { computed, ref, watch } from "vue";
 import { listMyWriting, listProjectBaselines, type MyWritingItem, type ProjectBaseline } from "../api/baselines";
 import { listMembers, type ProjectMember } from "../api/projects";
-import { listIssues, type WorkIssue } from "../api/workbench";
+import { getMyTodos } from "../api/docChain";
+import type { WorkIssue } from "../api/workbench";
 import { formatDateTime, initialOf } from "../format";
 import { ROLE_LABEL } from "../memberModel";
 import StatePanel from "./StatePanel.vue";
@@ -17,6 +18,7 @@ const baseline = ref<ProjectBaseline | null>(null);
 const baselinePhase = ref<Phase>("loading");
 const writing = ref<MyWritingItem[]>([]);
 const issues = ref<WorkIssue[]>([]);
+const tasks = ref<{ id: string; title: string }[]>([]);
 const todoPhase = ref<Phase>("loading");
 const members = ref<ProjectMember[]>([]);
 const memberPhase = ref<Phase>("loading");
@@ -29,9 +31,11 @@ async function loadBaseline() {
 async function loadTodos() {
   todoPhase.value = "loading";
   try {
-    const [mine, open] = await Promise.all([listMyWriting(0, 100), listIssues({ projectId: props.projectId })]);
+    // 不用全局 /issues（编写人员、只读成员无权限，41 复验 P1）：项目内接口只返回与本人相关的事项和任务
+    const [mine, todos] = await Promise.all([listMyWriting(0, 100), getMyTodos(props.projectId)]);
     writing.value = mine.items.filter((item) => item.project.id === props.projectId && item.status !== "completed");
-    issues.value = open.items.filter((item) => item.status === "open");
+    issues.value = todos.issues.filter((item) => item.status === "open");
+    tasks.value = todos.tasks;
     todoPhase.value = "ready";
   } catch { todoPhase.value = "error"; }
 }
@@ -45,7 +49,7 @@ watch(() => props.projectId, reload, { immediate: true });
 defineExpose({ reload, reloadMembers: loadMembers });
 
 const shownMembers = computed(() => members.value.slice(0, MEMBER_LIMIT));
-const todoCount = computed(() => writing.value.length + issues.value.length);
+const todoCount = computed(() => writing.value.length + issues.value.length + tasks.value.length);
 </script>
 
 <template>
@@ -71,6 +75,9 @@ const todoCount = computed(() => writing.value.length + issues.value.length);
       <ul v-else class="side-list" data-testid="side-todos">
         <li v-for="item in writing" :key="item.id">
           <router-link class="text ellipsis" :to="{ name: 'document', params: { id: projectId, documentId: item.id } }">{{ item.myRole === "owner" ? "编写" : "完成分配给我的部分" }}：{{ item.name }}</router-link>
+        </li>
+        <li v-for="item in tasks" :key="item.id">
+          <router-link class="text ellipsis" :to="{ name: 'project-plan', params: { id: projectId } }">任务：{{ item.title }}</router-link>
         </li>
         <li v-for="item in issues" :key="item.id"><span class="ellipsis">{{ item.title }}</span></li>
       </ul>

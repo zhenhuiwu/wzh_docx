@@ -388,3 +388,34 @@ def test_locked_chapters_endpoint_matches_save_guard(document_context):  # noqa:
     assert next(c for c in chapters if c["title"].endswith("运行环境"))["objectId"] == runtime["headingObjectId"]
     if free.status_code in (200, 201):  # 自建文档的同名章节不受限
         assert locked(free.json()["data"]["id"]) == []
+
+
+def test_my_todos_for_writers_and_viewers(document_context):  # noqa: F811
+    """41 复验 P1：编写人员、只读成员读项目首页「我的待办」不再 403；只返回与本人相关的事项，非成员 404。"""
+    from app.db import connect
+    from app.identity import create_user
+    client, headers, project, other, *_ = document_context
+    pw = "todo-test-password-1"
+    ids = {k: str(create_user(account=f"todo-{k}", name=k, password=pw, roles=[], allow_no_roles=True)) for k in ("writer", "viewer", "outsider")}
+    with connect() as conn:
+        conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,'editor')", [str(project), ids["writer"]])
+        conn.execute("INSERT INTO project_members(project_id,user_id,role) VALUES (%s,%s,'viewer')", [str(project), ids["viewer"]])
+        conn.commit()
+    r = client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "写需求", "assigneeId": ids["writer"], "targets": []})
+    assert r.status_code == 201, r.text
+    client.post(f"/api/v1/projects/{project}/tasks", headers=headers, json={"title": "别人的", "targets": []})
+
+    def login(account):
+        client.cookies.clear()
+        token = client.get("/api/v1/auth/csrf").json()["data"]["csrfToken"]
+        assert client.post("/api/v1/auth/login", json={"account": account, "password": pw}, headers={"X-CSRF-Token": token}).status_code == 200
+
+    login("todo-writer")
+    assert client.get(f"/api/v1/issues?projectId={project}").status_code == 403  # 全局事项接口保持原权限
+    data = client.get(f"/api/v1/projects/{project}/my-todos").json()["data"]
+    assert [t["title"] for t in data["tasks"]] == ["写需求"] and data["issues"] == []
+    login("todo-viewer")
+    r = client.get(f"/api/v1/projects/{project}/my-todos")
+    assert r.status_code == 200 and r.json()["data"]["tasks"] == []
+    login("todo-outsider")
+    assert client.get(f"/api/v1/projects/{project}/my-todos").status_code == 404

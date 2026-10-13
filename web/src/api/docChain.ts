@@ -207,3 +207,11 @@ export async function documentPublicRefs(documentId: string): Promise<PublicRef[
 export async function markPublicSeen(documentId: string, blockId: string): Promise<void> {
   await apiRequest(`/documents/${documentId}/public-refs/${blockId}:seen`, { method: "POST" });
 }
+
+// ---------------------------------------------------------------- 项目首页「我的待办」（成员可读，只含本人相关）
+export interface MyTodos { issues: import("./workbench").WorkIssue[]; tasks: { id: string; title: string }[] }
+export async function getMyTodos(projectId: string): Promise<MyTodos> {
+  const body = await apiRequest<{ data: MyTodos }>(`/projects/${projectId}/my-todos`);
+  if (!body?.data) throw new Error("待办响应不完整。");
+  return body.data;
+}
