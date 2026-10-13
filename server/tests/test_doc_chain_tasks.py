@@ -110,11 +110,13 @@ def test_create_copies_upstream_chapters_and_links(document_context):  # noqa: F
     client, headers, project, *_ = document_context
     tds = _seed_project(document_context)
     book = _create(client, headers, project, "软件任务计划书", tds["task-book"])
-    _write(client, headers, book["id"], "# 1 范围\n\n## 1.1 标识\n\n本系统标识为 ZB-2。\n\n# 3 任务目标\n\n目标正文。\n")
+    _write(client, headers, book["id"], "# 1 范围\n\n（在此编写本章内容。）\n\n## 1.1 标识\n\n本系统标识为 ZB-2。\n\n（提示：写明版本。）\n\n# 3 任务目标\n\n目标正文。\n")
     srs = _create(client, headers, project, "软件需求规格说明", tds["srs"])
     text = client.get(f"/api/v1/documents/{srs['id']}").json()["data"]["markdownContent"]
     assert "本系统标识为 ZB-2。" in text and "来源：《软件任务计划书》" in text
     assert "目标正文" not in text  # 没有对应章节的不复制
+    # 40 P2-3：上游“1 范围”只有提示语，不当作初稿复制；复制时也不带上游的提示语
+    assert text.count("来源：《软件任务计划书》") == 1 and "范围，创建时复制" not in text and "写明版本" not in text
     ups = client.get(f"/api/v1/documents/{srs['id']}/upstreams").json()["data"]["upstreams"]
     assert ups[0]["documentId"] == book["id"] and ups[0]["copiedChapters"][0]["chapter"].endswith("标识")
     _write(client, headers, book["id"], "# 1 范围\n\n## 1.1 标识\n\n改了。\n")

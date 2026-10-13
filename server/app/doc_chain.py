@@ -108,6 +108,12 @@ def build_docx(item: dict) -> bytes:
     return buffer.getvalue()
 
 
+def is_prompt_or_empty(block) -> bool:
+    """占位提示语（“（在此编写本章内容。）”、来源注记等以“（”开头的段落）或空段：不算正文。全文统一用这一口径。"""
+    text = (block.body or "").strip()
+    return not text or text.startswith("（")
+
+
 def chapter_progress(markdown: str) -> tuple[int, int, list[dict]]:
     """按标题划分章节，章节下有非提示正文即视为已写。返回 (已写, 总数, 章节列表)。"""
     _, blocks = split(markdown or "")
@@ -115,7 +121,7 @@ def chapter_progress(markdown: str) -> tuple[int, int, list[dict]]:
     for block in blocks:
         if block.kind == "heading":
             chapters.append({"title": heading_text(block.body), "level": block.heading_level, "written": False})
-        elif chapters and block.body.strip() and not block.body.strip().startswith("（"):
+        elif chapters and not is_prompt_or_empty(block):
             chapters[-1]["written"] = True
     return sum(1 for c in chapters if c["written"]), len(chapters), chapters
 
@@ -382,7 +388,9 @@ def seed_from_upstreams(conn, project_id, upstream_ids: list[str], markdown: str
                            [uid, str(project_id)]).fetchone()
         if row is None:
             raise AppError(422, "UPSTREAM_INVALID", "上游文档不存在或不在本项目中。", field_errors=[{"field": "upstreamDocumentIds", "message": "请重新选择上游文档。"}])
-        uppers.append((row, {chapter_key(t): body for t, _lvl, body in _sections(row["markdown_content"]) if body}))
+        # 上游章节只取真正的正文：只有提示语的章节不当作初稿复制（40 P2-3）
+        uppers.append((row, {chapter_key(t): content for t, _lvl, body in _sections(row["markdown_content"])
+                             if (content := [b for b in body if not is_prompt_or_empty(b)])}))
     if not uppers:
         return markdown, []
     prefix, blocks = split(markdown or "")
@@ -399,7 +407,7 @@ def seed_from_upstreams(conn, project_id, upstream_ids: list[str], markdown: str
         body_end = index
         while body_end < len(blocks) and blocks[body_end].kind != "heading":
             body_end += 1
-        own = [b for b in blocks[index:body_end] if b.body.strip() and not b.body.strip().startswith("（")]
+        own = [b for b in blocks[index:body_end] if not is_prompt_or_empty(b)]
         key = chapter_key(title)
         if own or key in _FRAMEWORK_TITLES:
             continue
