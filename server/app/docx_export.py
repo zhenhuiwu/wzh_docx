@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -621,6 +623,42 @@ def diagram_images(images: list[dict]) -> dict[str, bytes | dict]:
     return sources
 
 
+def _traits(doc) -> dict:
+    cache = getattr(doc, "_docwb_traits", None)
+    if cache is None:
+        cache = doc._docwb_traits = {}
+    return cache
+
+
+def _style_name(doc, paragraph) -> str:
+    """段落样式名（按 pStyle 缓存；python-docx 每次按 styleId 线性查找样式表，大文档里很慢）。"""
+    key = ("style", paragraph._p.style)
+    cache = _traits(doc)
+    if key not in cache:
+        cache[key] = paragraph.style.name if paragraph.style is not None else ""
+    return cache[key]
+
+
+def _style_id(doc, name: str):
+    """样式名 → styleId（缓存；默认样式返回 None，与 add_paragraph(style=name) 一致）。"""
+    key = ("sid", name)
+    cache = _traits(doc)
+    if key not in cache:
+        from docx.enum.style import WD_STYLE_TYPE
+        cache[key] = doc.part.get_style_id(name, WD_STYLE_TYPE.PARAGRAPH)
+    return cache[key]
+
+
+def _level(doc, paragraph, outline_headings: bool) -> int | None:
+    """heading_level 只取决于段落自身的 outlineLvl 与样式链：按 (outlineLvl, pStyle) 缓存。"""
+    own = paragraph._p.xpath("./w:pPr/w:outlineLvl/@w:val")
+    key = ("level", outline_headings, own[0] if own else None, paragraph._p.style)
+    cache = _traits(doc)
+    if key not in cache:
+        cache[key] = heading_level(paragraph, outline_headings=outline_headings)
+    return cache[key]
+
+
 def _insert_block(doc, target, anchor, style_override: str | None = None, image_sources: dict[str, bytes | dict] | None = None,
                   *, list_depth: int | None = None, list_kind: str | None = None, list_number_id: int | None = None,
                   outline_headings: bool = False) -> None:
@@ -703,18 +741,20 @@ def _insert_block(doc, target, anchor, style_override: str | None = None, image_
             return
         style = style_override or (f"Heading {tag[1:]}" if tag.startswith("h") else "Normal")
         # Inherit from this part of the document, rather than its cover's first Normal paragraph.
-        nearby = list(anchor.itersiblings(preceding=True)) + list(anchor.itersiblings())
-        paragraphs = [Paragraph(element, doc) for element in nearby if isinstance(element, CT_P)]
+        # 惰性遍历（找到最近的样本即停）+ 样式名/标题级别按段落缓存：大文档逐段插入时避免 O(n²) 的样式解析（P0-2）。
+        nearby = itertools.chain(anchor.itersiblings(preceding=True), anchor.itersiblings())
+        paragraphs = (Paragraph(element, doc) for element in nearby if isinstance(element, CT_P))
         sample = next((p for p in paragraphs if (p.text or p.runs) and
-                       (p.style.name == style if style_override else
-                        heading_level(p, outline_headings=outline_headings) == int(tag[1:]) if tag.startswith("h")
-                        else heading_level(p, outline_headings=outline_headings) is None and not p.style.name.startswith(("List", "toc", "TOC", "Caption", "Title", "Subtitle"))
+                       (_style_name(doc, p) == style if style_override else
+                        _level(doc, p, outline_headings) == int(tag[1:]) if tag.startswith("h")
+                        else _level(doc, p, outline_headings) is None and not _style_name(doc, p).startswith(("List", "toc", "TOC", "Caption", "Title", "Subtitle"))
                         and p.alignment != WD_ALIGN_PARAGRAPH.CENTER
                         and not re.match(r"^[图表]\s*\d+(?:[.－—-]\d+)*\s*", p.text.strip())
                         and not p._p.xpath(_PROTECTED_INLINE))), None)
         if sample is not None and not style_override:
-            style = sample.style.name
-        paragraph = doc.add_paragraph(style=style)
+            style = _style_name(doc, sample)
+        paragraph = doc.add_paragraph()
+        paragraph._p.style = _style_id(doc, style)
         if sample is not None and sample._p.pPr is not None:
             if paragraph._p.pPr is not None:
                 paragraph._p.remove(paragraph._p.pPr)
