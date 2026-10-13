@@ -1306,7 +1306,8 @@ def draft_section(request: Request, document_id: str, body: SectionDraftBody, st
         template_structure=(row[6] or {}).get("importStructure"),
         guidance_overrides=(row[6] or {}).get("writingGuidance", {}),
         sequential_document=whole_document,
-        edit_in_place=whole_document,
+        # Existing body is edited in place via exact-fragment replacements; only empty bodies are drafted fresh.
+        edit_in_place=whole_document or (not selected_only and bool(existing.strip())),
         memory_targets=memory_targets,
         guidance_context=context,
         references=references,
