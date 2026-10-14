@@ -209,16 +209,41 @@ def pick_paragraphs(markdown: str, count: int, skip_headings: frozenset[str] = f
     return picked
 
 
-def restore_or_auto(page: Page, shot_name: str | None = None, shot_fn=None) -> None:
-    """重开后的草稿：服务器还是草稿基于的那一版时自动恢复并保存（9f140e8 起，maybeAutoRestore），否则出恢复条手动恢复。"""
+def restore_or_auto(page: Page, expected: str, server_text, shot_name: str | None = None, shot_fn=None) -> None:
+    """重开后的草稿：服务器还是草稿基于的那一版时自动恢复并保存（9f140e8 起，maybeAutoRestore），否则出恢复条手动恢复。
+    恢复条可能在点击前自动恢复并关闭：点不到时必须是已经自动恢复（服务器上有 expected），否则失败。"""
     bar = page.get_by_test_id("draft-recovery")
     auto = page.get_by_role("status").filter(has_text="已自动恢复上次关闭页面前没保存的修改")
-    expect(bar.or_(auto).first).to_be_visible(timeout=20000)
-    if shot_fn and shot_name:
-        shot_fn(page, shot_name)
+    restored = lambda: expected in server_text()  # noqa: E731
+    for _ in range(60):
+        if bar.count() or auto.count() or restored():
+            break
+        page.wait_for_timeout(500)
+    else:
+        raise AssertionError("重开后既没有恢复条，也没有自动恢复")
     if bar.count():
-        bar.get_by_role("button", name="恢复并保存").click()
+        # 恢复条在、还没自动恢复时编辑区必须锁着
+        if not restored():
+            expect(page.locator(".paper-content")).not_to_have_attribute("contenteditable", "true")
+        if shot_fn and shot_name:
+            shot_fn(page, shot_name)
+        try:
+            bar.get_by_role("button", name="恢复并保存").click(timeout=5000)
+        except Exception as error:  # noqa: BLE001 - 点不到只允许是已自动恢复
+            for _ in range(20):
+                if restored():
+                    break
+                page.wait_for_timeout(500)
+            else:
+                raise AssertionError(f"点不到［恢复并保存］且没有自动恢复：{error}") from error
+    elif shot_fn and shot_name:
+        shot_fn(page, shot_name)
     expect(bar).to_have_count(0, timeout=30000)
+    for _ in range(60):
+        if restored():
+            return
+        page.wait_for_timeout(500)
+    raise AssertionError(f"恢复后服务器没有 {expected}")
 
 
 def require_targets() -> None:
@@ -687,7 +712,7 @@ def main() -> int:
             ctx_b.set_offline(False)
             page = ctx_b.new_page()
             open_doc(page, data)
-            restore_or_auto(page, "08-重开-草稿恢复条", shot)
+            restore_or_auto(page, "（断网关页）", lambda: data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"], "08-重开-草稿恢复条", shot)
             wait_saved(page)
             server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
             assert "（断网关页）" in server
@@ -715,21 +740,13 @@ def main() -> int:
             page.locator(".paper-content").click()
             page.keyboard.type("（回来立刻打字）")
             bar = page.get_by_test_id("draft-recovery")
-            # 服务器仍是草稿基于的那一版时自动恢复并保存（9f140e8 起）；载入期间立刻打的字另有“没能写入”提示，会盖掉“已自动恢复”的短提示，
-            # 所以自动恢复以服务器上有过期前的内容为准
-            for _ in range(60):
-                if bar.count() or "（会话过期前未保存）" in data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]:
-                    break
-                page.wait_for_timeout(500)
-            shot(page, "09b-会话过期重新登录-草稿恢复条")
-            if bar.count():
-                try:  # 恢复条可能正自动恢复（按钮变“恢复中…”后消失）
-                    bar.get_by_role("button", name="恢复并保存").click(timeout=5000)
-                except Exception:
-                    pass
-            expect(bar).to_have_count(0, timeout=30000)
+            server_text = lambda: data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]  # noqa: E731
+            restore_or_auto(page, "（会话过期前未保存）", server_text, "09b-会话过期重新登录-草稿恢复条", shot)
             wait_saved(page)
-            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+            server = server_text()
+            # 重新登录后立刻打的字：要么写进了正文，要么明确提示“没能写入”并引用原文（不能无声丢失）
+            notices = " ".join(page.locator(".wb-notice, [role=status]").all_inner_texts())
+            assert "（回来立刻打字）" in server or "（回来立刻打字）" in page.locator(".paper-content").inner_text() or "（回来立刻打字）" in notices, notices[:300]
             assert "（会话过期前未保存）" in server, "恢复后服务器没有过期前的内容"
             # 之后继续编辑：两段内容都在，刷新后不再有恢复条
             type_after(page, p_offline, "（回来后新输入）")
