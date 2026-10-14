@@ -141,15 +141,36 @@ def _table_style_sources(table, paragraph, kind) -> list:
     return result
 
 
+def _render_cache(part) -> dict:
+    """整篇预览提速：一次渲染内样式表不变（见 memoize_styles），文档默认值和样式链上的属性元素按样式缓存。
+    挂在文档部件上（part.document 每次都新建 Document 对象，挂在它上面不会命中）。"""
+    cache = getattr(part, "_docwb_props", None)
+    if cache is None:
+        cache = part._docwb_props = {}
+    return cache
+
+
+def _style_sources(cache: dict, style, kind: str) -> list:
+    key = ("chain", id(style), kind)
+    found = cache.get(key)
+    if found is None:
+        found = cache[key] = ([child for element in _style_chain(style) for child in element.findall(_W + kind)], style)
+    return found[0]
+
+
 def _properties(paragraph: Paragraph, kind: str, run: Run | None = None, table: Table | None = None) -> dict[str, dict]:
     """Resolve doc defaults, base styles, character style, then direct OOXML."""
-    doc = paragraph.part.document
-    sources = doc.styles.element.xpath(f"./w:docDefaults/w:{kind}Default/w:{kind}")
+    part = paragraph.part
+    cache = _render_cache(part)
+    defaults = cache.get(("defaults", kind))
+    if defaults is None:
+        defaults = cache[("defaults", kind)] = part.document.styles.element.xpath(f"./w:docDefaults/w:{kind}Default/w:{kind}")
+    sources = list(defaults)
     if table is not None and table.style:
         sources += _table_style_sources(table, paragraph, kind)
-    sources += [child for style in _style_chain(paragraph.style) for child in style.findall(_W + kind)]
+    sources += _style_sources(cache, paragraph.style, kind)
     if run is not None and run.style:
-        sources += [child for style in _style_chain(run.style) for child in style.findall(_W + kind)]
+        sources += _style_sources(cache, run.style, kind)
     direct = paragraph._p.pPr if kind == "pPr" else run._r.rPr if run is not None else None
     if direct is not None:
         sources.append(direct)
@@ -234,8 +255,10 @@ def _on(attrs: dict) -> bool:
     return attrs.get("val", "1").lower() not in {"0", "false", "off", "none"}
 
 
-def _run_css(paragraph: Paragraph, run: Run | None, theme, table=None, *, east_asian: bool | None = None) -> dict[str, str]:
-    properties = _properties(paragraph, "rPr", run, table)
+def _run_css(paragraph: Paragraph, run: Run | None, theme, table=None, *, east_asian: bool | None = None,
+             properties: dict | None = None) -> dict[str, str]:
+    if properties is None:
+        properties = _properties(paragraph, "rPr", run, table)
     colors, fonts = theme
     css = {"white-space": "pre-wrap"}
     names = properties.get("rFonts", {})
@@ -344,10 +367,12 @@ def _project_runs(node, paragraphs: list[Paragraph], theme, table=None) -> None:
         # the existing exporter.  Never execute a relationship or field.
         for element in paragraph._p.xpath(".//w:r"):
             run = Run(element, paragraph)
-            latin = _run_css(paragraph, run, theme, table, east_asian=False)
-            cjk = _run_css(paragraph, run, theme, table, east_asian=True)
-            source += run.text
-            owners += [cjk if '\u2e80' <= char <= '\uffff' else latin for char in run.text]
+            properties = _properties(paragraph, "rPr", run, table)  # 两种字体只差字体类别，属性解析一次
+            latin = _run_css(paragraph, run, theme, table, east_asian=False, properties=properties)
+            cjk = _run_css(paragraph, run, theme, table, east_asian=True, properties=properties)
+            text = run.text
+            source += text
+            owners += [cjk if '\u2e80' <= char <= '\uffff' else latin for char in text]
     text_nodes = list(_text_nodes(node))
     target = "".join(value for _, _, value in text_nodes)
     fallback = (_run_css(paragraphs[0], None, theme, table) if paragraphs else {}) | {"white-space": "normal"}
