@@ -1763,14 +1763,24 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
     did = _uuid(document_id, "documentId")
 
     from app.patch_inflight import wait_idle
-    wait_idle(did)  # 关页保存进行中：整篇预览按落库后的正文渲染，不白算旧修订
+    from app.timing_log import span
+    with span("full_preview", doc=str(did)[:8]) as info:
+        wait_idle(did)  # 关页保存进行中：整篇预览按落库后的正文渲染，不白算旧修订
+        return _preview_document(request, session, admin, did, info)
+
+
+def _preview_document(request, session, admin, did, info) -> dict[str, object]:
+    import time
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
 
         from app import preview_cache
         from app.document_objects import object_rows
         key, _job = _render_job(conn, row, selection=True)
+        info["rev"], info["cached"] = row[12], preview_cache.has(key)
+        start = time.perf_counter()
         html = _cached_html(conn, row, selection=True)
+        info["render_ms"] = round((time.perf_counter() - start) * 1000, 1)
         # S7：能证明一一对应时为顶层块加对象 ID；ensure 可能补建对象行，需提交。
         ensure_document_objects(conn, did)
         if conn.in_transaction:
@@ -1778,7 +1788,9 @@ def preview_document(request: Request, document_id: str) -> dict[str, object]:
         rows = object_rows(conn, did)
         if conn.in_transaction:
             conn.commit()
+        start = time.perf_counter()
         html, object_model = preview_cache.decorated(key, html, rows) if html else (html, False)
+        info["decorate_ms"] = round((time.perf_counter() - start) * 1000, 1)
 
         return {
             "data": {"html": html, "objectModel": object_model, "revision": row[12]},
