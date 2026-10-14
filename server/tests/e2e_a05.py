@@ -490,6 +490,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             add.get_by_test_id("member-add-submit").click()
             expect(add).to_be_hidden(timeout=10000)
             expect(row(popup, users["helper"]).get_by_test_id("member-role-select")).to_have_value("owner")
+            popup.get_by_label("更多操作").click()  # 归档项目收在页头［…］菜单里
             popup.get_by_test_id("project-archive").click()
             archive = popup.get_by_test_id("project-archive-dialog")
             archive.get_by_test_id("project-archive-reason").fill("补完再归档")
