@@ -18,10 +18,10 @@ SRS = next((Path(__file__).resolve().parents[2] / "438C-2021全套模板").glob(
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def _srs_document(client, headers, project, markdown=None):
+def _srs_document(client, headers, project, markdown=None, name="SRS"):
     stored = store_bytes(name=SRS.name, media_type=DOCX, purpose="attachment", project_id=project, content=SRS.read_bytes())
     created = client.post(f"/api/v1/projects/{project}/documents", headers=headers,
-                          json={"name": "SRS", "sourceType": "upload", "wordFileId": str(stored.id)})
+                          json={"name": name, "sourceType": "upload", "wordFileId": str(stored.id)})
     assert created.status_code == 200, created.text
     did = created.json()["data"]["id"]
     if markdown is not None:
@@ -145,11 +145,13 @@ def test_reopen_reads_wait_for_inflight_patch(document_context, monkeypatch):  #
     saver.start()
     assert checking.wait(5)
     threading.Timer(0.3, release.set).start()
+    detail = client.get(f"/api/v1/documents/{did}").json()["data"]
     reopened = client.get(f"/api/v1/documents/{did}/objects").json()["data"]
     page = client.get(f"/api/v1/documents/{did}/preview/blocks?limit=5000").json()["data"]
     saver.join(10)
     assert result["patch"].status_code == 200, result["patch"].text
-    assert reopened["documentRevision"] == page["documentRevision"] == revision + 1
+    assert detail["revision"] == reopened["documentRevision"] == page["documentRevision"] == revision + 1
+    assert "关页" in detail["markdownContent"]
     assert any(item["markdown"].endswith("关页") for item in reopened["objects"])
 
 
@@ -179,3 +181,24 @@ def test_word_headings_parsed_once_off_process(monkeypatch):
 def test_fast_pool_runs_heading_parse():
     """快速进程池真的在子进程里算出与本进程相同的结果。"""
     assert preview_cache.fast_call(fast_preview.parse_headings, str(SRS)) == fast_preview.parse_headings(str(SRS))
+
+
+def test_large_content_save_returns_object_revisions(document_context):  # noqa: F811
+    """QA 复验 12：大文档整篇保存的响应带存活对象 [id, revision]（按位置），与 /objects 一致；小文档不带。"""
+    client, headers, project, *_ = document_context
+    did = _srs_document(client, headers, project, big_markdown(parse_docx(str(SRS)).markdown))
+    current = client.get(f"/api/v1/documents/{did}").json()["data"]
+    edited = current["markdownContent"].replace("。", "。改", 1)
+    saved = client.patch(f"/api/v1/documents/{did}/content", headers=headers, json={
+        "expectedRevision": current["revision"], "markdownContent": edited, "allowMerge": True, "clientSaveKey": "objrev-save-1"})
+    assert saved.status_code == 200, saved.text
+    data = saved.json()["data"]
+    objects = client.get(f"/api/v1/documents/{did}/objects").json()["data"]["objects"]
+    assert data["objectRevisions"] == [[item["id"], item["revision"]] for item in objects]
+    small = _srs_document(client, headers, project, name="SRS-small")
+    detail = client.get(f"/api/v1/documents/{small}").json()["data"]
+    target = detail["markdownContent"].rstrip("\n") + "\n\n补一段。\n"
+    plain = client.patch(f"/api/v1/documents/{small}/content", headers=headers, json={
+        "expectedRevision": detail["revision"], "markdownContent": target, "allowMerge": True, "clientSaveKey": "objrev-save-2"})
+    assert plain.status_code == 200, plain.text
+    assert "objectRevisions" not in plain.json()["data"]

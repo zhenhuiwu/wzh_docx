@@ -421,10 +421,18 @@ def word_format_error(content: str, exc: ValueError) -> AppError:
     return AppError(422, WORD_BLOCK_PROTECTED, f"{location_text(location)}：{exc}", details=details)
 
 
-def _content_result(request: Request, row: dict) -> dict[str, object]:
-    return {"data": {"id": str(row[0]), "markdownContent": row[7], "outline": row[8],
-                     "status": row[9], "revision": row[12], "updatedAt": format_timestamp(row[13])},
-            "requestId": request.state.request_id}
+KEEPALIVE_LIMIT = 60000  # 与前端关页 keepalive 正文上限一致：超过时关页走按块保存
+
+
+def _content_result(request: Request, row: dict, conn=None) -> dict[str, object]:
+    data = {"id": str(row[0]), "markdownContent": row[7], "outline": row[8],
+            "status": row[9], "revision": row[12], "updatedAt": format_timestamp(row[13])}
+    if conn is not None and len((row[7] or "").encode("utf-8")) > KEEPALIVE_LIMIT:
+        # QA 复验 12：大文档保存后附上存活对象的 [id, revision]（按位置），前端据此立即更新关页按块保存的基准，
+        # Ctrl+S 后马上关页也能发出 keepalive（不必等再取一次对象）
+        from app.document_objects import live_objects
+        data["objectRevisions"] = [[str(item["id"]), int(item["revision"])] for item in live_objects(conn, row[0])]
+    return {"data": data, "requestId": request.state.request_id}
 
 
 def _writing_skill(row) -> dict | None:
@@ -802,6 +810,10 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
     session = document_principal(request)
     admin = _admin(session.roles)
     did = _uuid(document_id, "documentId")
+    # 关页后立即重开：关页保存进行中时文档详情也等它落库（与 /objects、/preview/blocks 同，见 patch_inflight），
+    # 打开时读到的正文与快速预览是同一修订，前端不必再读一遍
+    from app.patch_inflight import wait_idle
+    wait_idle(did)
 
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)
@@ -930,7 +942,7 @@ def _update_content(request: Request, conn, session, did: UUID, row, body: Docum
     # 返回更新后的文档
     row = _document_row(conn, did, session.user_id, admin)
 
-    return _content_result(request, row)
+    return _content_result(request, row, conn)
 
 
 def _merge_content(request: Request, conn, session, did: UUID, row, body: DocumentContentPatchBody,
@@ -951,7 +963,7 @@ def _merge_content(request: Request, conn, session, did: UUID, row, body: Docume
         kind="ai_selection" if memory else "edit", client_save_key=body.clientSaveKey,
         check_word=lambda markdown: _check_word(conn, _document_row(conn, did, session.user_id, admin, "edit"), markdown),
         extra={"memory": memory.model_dump() if memory else None}, after_write=after_write)
-    result = _content_result(request, _document_row(conn, did, session.user_id, admin))
+    result = _content_result(request, _document_row(conn, did, session.user_id, admin), conn)
     result["data"].update(merged=data["merged"], changeId=data["changeId"], changedBy=data["changedBy"])
     if data.get("replayed"):
         result["data"]["replayed"] = True
