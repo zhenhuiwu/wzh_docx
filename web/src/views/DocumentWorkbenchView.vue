@@ -1214,6 +1214,7 @@ const checkingDrafts = ref(false);
 /** 40 R5.1：重开时等关页保存落库的上限与轮询间隔 */
 const CLOSE_SAVE_WAIT_MS = 12000;
 const CLOSE_SAVE_POLL_MS = 400;
+const OTHERS_POLL_MS = 8000;
 const aiLocked = computed(() => referencesOpen.value || referencesBusy.value || assignmentsOpen.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || checkingDrafts.value || skillOpen.value || skillBusy.value || historyOpen.value || historyBusy.value || aiBusy.value || aiInserting.value || refreshingEditor.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || Boolean(localDraft.value) || Boolean(restorePending.value));
 // 重塑（S11/S13/N9）：顶栏、目录、视图切换、面板切换只在真正有操作进行时锁定；草稿恢复条和合并后重绘不再让整页变灰。
 const opBusy = computed(() => referencesBusy.value || assignmentsBusy.value || blockGuidanceBusy.value || guidanceSaving.value || skillBusy.value || historyBusy.value || aiBusy.value || aiInserting.value || undoingAi.value || diagramBusy.value || Boolean(aiPreviewHost.value) || addingHeading.value);
@@ -5129,7 +5130,9 @@ onMounted(() => {
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
-  updateTimer = window.setInterval(() => void checkOthersUpdated(), 45000);
+  // QA 复验 18 P2：他人修改原来最长 45 秒才出现（空闲时实测 ~41s），目标 10 秒内。
+  // 轮询的 objects?sinceRevision 没有变化时只回修订号和权限（实测 6–10ms），页面隐藏时不发，8 秒一次负载可接受
+  updateTimer = window.setInterval(() => void checkOthersUpdated(), OTHERS_POLL_MS);
   window.addEventListener("resize", scheduleMarks);
   window.addEventListener("keydown", interceptFind, true);
   window.addEventListener("keydown", bufferLockedTyping, true);
