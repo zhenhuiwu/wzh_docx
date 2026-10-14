@@ -26,7 +26,7 @@ from app.docx_export import (
     _html_blocks, _list_items, _word_blocks,
     diagram_images, edit_original_docx,
 )
-from app.docx_parser import _list_info, parse_docx
+from app.docx_parser import _list_info, parse_docx_cached
 
 _ALLOWED_TAGS = {
     "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table",
@@ -787,7 +787,7 @@ def render_document_html(source_path: str | Path, current_markdown: str, images:
                     node.set("data-word-marker", marker)
         # Source image refs are stable; generated diagram refs come from the
         # caller.  Do not resolve external Markdown image URLs.
-        _images(root, parse_docx(str(source_path), outline_headings=outline_headings).images + supplied)
+        _images(root, parse_docx_cached(str(source_path), outline_headings=outline_headings).images + supplied)
         if len(root):
             # shortcut: continuous editing uses the final body section; inspect mixed sections in Word layout preview.
             section = doc.sections[-1]

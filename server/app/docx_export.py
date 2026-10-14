@@ -34,7 +34,7 @@ from docx.shared import Inches
 from docx.text.run import Run
 from lxml import html
 
-from app.docx_parser import parse_docx, _list_info, heading_level
+from app.docx_parser import parse_docx_cached, _list_info, heading_level
 
 
 _PROTECTED_INLINE = (
@@ -820,7 +820,7 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
     original_path = Path(original_path)
     doc = Document(original_path)
     _memoize_styles(doc)
-    source = _html_blocks(parse_docx(str(original_path), outline_headings=outline_headings).markdown)
+    source = _html_blocks(parse_docx_cached(str(original_path), outline_headings=outline_headings).markdown)
     target = _html_blocks(markdown_content)
     blocks = _word_blocks(doc, outline_headings=outline_headings)
     source_levels = [depth for element in source if element.tag in {"ul", "ol"}
@@ -832,7 +832,7 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         # Treat missing nesting as that legacy view, not permission to remove
         # the original numbering. Explicit nested target markup uses the current
         # parser. This changes only the matching baseline, never stored content.
-        source = _html_blocks(parse_docx(str(original_path), flat_lists=True, outline_headings=outline_headings).markdown)
+        source = _html_blocks(parse_docx_cached(str(original_path), flat_lists=True, outline_headings=outline_headings).markdown)
         blocks = _word_blocks(doc, flat_lists=True, outline_headings=outline_headings)
     if [block.tag for block in blocks] != [element.tag for element in source]:
         raise ValueError("原稿结构无法与编辑稿对应，未导出以避免破坏格式。")

@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 import base64
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -504,3 +507,24 @@ def _apply_paragraph_style(paragraph: Paragraph, style_info: dict[str, Any]) -> 
     except Exception:
         # 样式应用失败不影响内容生成
         logger.warning("applying run style failed; content kept without style", exc_info=True)
+
+_PARSED: "OrderedDict[tuple, ParsedDocument]" = OrderedDict()
+_PARSED_LOCK = threading.Lock()
+
+
+def parse_docx_cached(file_path: str, *, flat_lists: bool = False, outline_headings: bool = False) -> ParsedDocument:
+    """整篇预览提速：同一原稿（路径 + 大小 + 修改时间）的解析结果按进程缓存最近 4 份。
+    存储的原稿不会原地改写；调用方只读结果（markdown / images），不得修改。"""
+    path = Path(file_path)
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, flat_lists, outline_headings)
+    with _PARSED_LOCK:
+        if key in _PARSED:
+            _PARSED.move_to_end(key)
+            return _PARSED[key]
+    parsed = parse_docx(str(path), flat_lists=flat_lists, outline_headings=outline_headings)
+    with _PARSED_LOCK:
+        _PARSED[key] = parsed
+        while len(_PARSED) > 4:
+            _PARSED.popitem(last=False)
+    return parsed
