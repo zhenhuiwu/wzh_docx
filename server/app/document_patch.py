@@ -48,6 +48,9 @@ class PatchBody(BaseModel):
     clientSaveKey: str = Field(min_length=8, max_length=80)
     baseDocumentRevision: int = Field(ge=0)
     atomic: bool = False
+    # 复验 14：本页先前发出的保存（Ctrl+S 的整篇保存等）的 clientSaveKey。关页保存以它们之前的修订为基准时，
+    # 这些保存本人改过的段落不算冲突，按它们之后的修订重新定基（见 _rebase_own）。
+    afterSaveKeys: list[str] = Field(default_factory=list, max_length=20)
     ops: list[PatchOp] = Field(min_length=1, max_length=500)
 
 
@@ -137,6 +140,34 @@ def _base_body(connection, object_id: str, revision: int | None, fallback: str) 
         "SELECT after_body FROM document_object_changes WHERE object_id=%s AND after_revision=%s ORDER BY rowid DESC LIMIT 1",
         (object_id, revision)).fetchone()
     return row["after_body"] if row is not None and row["after_body"] is not None else fallback
+
+
+def _rebase_own(connection, did: UUID, user_id, keys: list[str], base_rev: int, ops: list[PatchOp]):
+    """同一页面先后发出的保存不能自冲突：对象在 op.baseRevision 之后的每次修改若都出自本人、且属于 afterSaveKeys
+    里的保存，就把 op 的基准挪到最新修订（相当于先应用了自己的那次保存再改）；只要夹着别人的修改就保持原样，照常判冲突。"""
+    if not keys:
+        return base_rev, ops
+    own = connection.execute(
+        "SELECT doc_revision, actor_id, client_save_key FROM document_changes WHERE document_id=%s AND doc_revision>%s ORDER BY doc_revision",
+        (did, base_rev)).fetchall()
+    doc_base = base_rev
+    for row in own:  # 文档级基准：连续的本人保存才能跨过（只影响“别人改过”的提示）
+        if str(row["actor_id"]) != str(user_id) or row["client_save_key"] not in keys:
+            break
+        doc_base = int(row["doc_revision"])
+    out = []
+    for op in ops:
+        if op.op in {"update", "delete", "move"} and op.objectId and op.baseRevision is not None:
+            rows = connection.execute(
+                """SELECT oc.after_revision, oc.op, c.actor_id, c.client_save_key FROM document_object_changes oc
+                   JOIN document_changes c ON c.id = oc.change_id
+                   WHERE oc.object_id=%s AND c.document_id=%s AND (oc.after_revision IS NULL OR oc.after_revision>%s)
+                   ORDER BY c.doc_revision""", (op.objectId, did, op.baseRevision)).fetchall()
+            if rows and all(str(r["actor_id"]) == str(user_id) and r["client_save_key"] in keys
+                            and r["op"] != "delete" and r["after_revision"] is not None for r in rows):
+                op = op.model_copy(update={"baseRevision": int(rows[-1]["after_revision"])})
+        out.append(op)
+    return doc_base, out
 
 
 def _apply(connection, document_id: UUID, live, ops: list[PatchOp], skip: set[int] | None = None):
@@ -286,33 +317,35 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                 revision, prefix, theirs = int(snap["revision"]), snap["objects_prefix"] or "", snap["markdown_content"] or ""
                 if body.baseDocumentRevision > revision:
                     raise AppError(422, "VALIDATION_FAILED", "保存所依据的版本不存在。")
+                base_rev, ops = _rebase_own(connection, did, principal.user_id, body.afterSaveKeys,
+                                            body.baseDocumentRevision, body.ops)
                 live = list(live_objects(connection, did))
-                doc, conflicts, applied = _apply(connection, did, live, body.ops)
+                doc, conflicts, applied = _apply(connection, did, live, ops)
                 if conflicts:
                     conflicted = {op_index for op_index, _, _ in conflicts}
-                    partial = None if body.atomic else _apply(connection, did, live, body.ops, skip=conflicted)[0]
+                    partial = None if body.atomic else _apply(connection, did, live, ops, skip=conflicted)[0]
                     # 冲突副本里的“我的全文”：在当前正文上按我的意图应用全部 op（冲突处用我的版本）。
                     mine_doc = _Doc(live)
-                    for op_index, op in enumerate(body.ops):
+                    for op_index, op in enumerate(ops):
                         if op.op == "update" and mine_doc.index(op.objectId) is not None:
                             mine_doc.replace(mine_doc.index(op.objectId), op.markdown or "", op_index)
-                    items = _items(connection, did, live, body.ops, conflicts)
+                    items = _items(connection, did, live, ops, conflicts)
                     error = store_conflict(connection, document_id=did, actor=principal.user_id,
-                                           base_revision=body.baseDocumentRevision, doc_revision=revision, source="patch",
+                                           base_revision=base_rev, doc_revision=revision, source="patch",
                                            rhash=rhash, mine_md=mine_doc.markdown(prefix), items=items,
                                            appliable_md=None if partial is None else partial.markdown(prefix))
                     if body.atomic:
                         for key in ("appliableOps", "appliableMarkdown", "appliableBaseRevision"):
                             error.details.pop(key, None)
                     else:
-                        error.details["appliableOps"] = [index for index in range(len(body.ops)) if index not in conflicted]
+                        error.details["appliableOps"] = [index for index in range(len(ops)) if index not in conflicted]
                     raise error
                 merged_md = doc.markdown(prefix)
-                merged_flag = revision != body.baseDocumentRevision
+                merged_flag = revision != base_rev
                 if merged_md == theirs:
                     return {"data": {"documentRevision": revision, "merged": merged_flag, "changeId": None, "applied": applied,
-                                     "othersChangedSince": body.baseDocumentRevision if merged_flag else None,
-                                     "changedBy": _changed_by(connection, did, body.baseDocumentRevision, principal.user_id),
+                                     "othersChangedSince": base_rev if merged_flag else None,
+                                     "changedBy": _changed_by(connection, did, base_rev, principal.user_id),
                                      "markdownContent": theirs},
                             "requestId": request.state.request_id}
                 current_row = load_document(connection, did, principal.user_id, is_admin(principal), "edit")
@@ -324,7 +357,7 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                         now = connection.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()
                         if int(now["revision"]) != revision:
                             raise _Retry()
-                        moved = {op.objectId for op in body.ops if op.op == "move" and op.objectId}
+                        moved = {op.objectId for op in ops if op.op == "move" and op.objectId}
                         change_id = _save_markdown(connection, did, merged_md, revision, kind="edit", merged=merged_flag,
                                                    client_save_key=body.clientSaveKey, request_hash=rhash,
                                                    identities=[item[0] for item in doc.items], moved=moved)
@@ -332,8 +365,8 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                         _resolve_ids(doc, after, applied)
                         data = {"documentRevision": revision + 1, "revision": revision + 1, "merged": merged_flag,
                                 "changeId": str(change_id), "applied": applied,
-                                "othersChangedSince": body.baseDocumentRevision if merged_flag else None,
-                                "changedBy": _changed_by(connection, did, body.baseDocumentRevision, principal.user_id)}
+                                "othersChangedSince": base_rev if merged_flag else None,
+                                "changedBy": _changed_by(connection, did, base_rev, principal.user_id)}
                         connection.execute("UPDATE document_changes SET result_json=%s WHERE id=%s",
                                            (json.dumps(data, ensure_ascii=False), change_id))
                 except _Retry:
@@ -341,7 +374,7 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                 except AppError as error:
                     if error.code == "SECTION_NOT_ASSIGNED":  # A07：被拒的提交在独立短事务里保留（字不丢）
                         from app.document_assignments import store_rejected
-                        store_rejected(connection, did, principal.user_id, body.baseDocumentRevision, merged_md, None, error)
+                        store_rejected(connection, did, principal.user_id, base_rev, merged_md, None, error)
                     raise
                 except sqlite3.IntegrityError:
                     again = replay(connection, did, principal.user_id, body.clientSaveKey, rhash)
