@@ -224,3 +224,53 @@ def test_content_save_warms_fast_preview(document_context, monkeypatch):  # noqa
     monkeypatch.setattr(fast_preview, "_compute", lambda *a: computed.append(a) or real(*a))
     page = client.get(f"/api/v1/documents/{did}/preview/blocks?limit=5000").json()["data"]
     assert page["documentRevision"] == saved.json()["data"]["revision"] and computed == []
+
+
+def test_close_patch_waits_for_inflight_whole_save(document_context, monkeypatch):  # noqa: F811
+    """QA 复验 13：Ctrl+S 的整篇保存还在检查时关页的块级保存到达——先等整篇保存落库，内容相同就直接返回，
+    不再做第二遍 Word 写回检查；重开读到的就是落库后的正文。"""
+    import threading
+
+    from app import documents
+    client, headers, project, *_ = document_context
+    did = _srs_document(client, headers, project, name="SRS-ctrl-s-close")
+    detail = client.get(f"/api/v1/documents/{did}").json()["data"]
+    objects = client.get(f"/api/v1/documents/{did}/objects").json()["data"]["objects"]
+    target = [item for item in objects if item["kind"] == "paragraph" and not item.get("isWordHeading")
+              and len(item["markdown"]) > 40 and not any(mark in item["markdown"] for mark in "[]!<|")][-1]
+    edited_block = target["markdown"] + " 速改"
+    edited = detail["markdownContent"].replace(target["markdown"], edited_block, 1)
+    checks, entered, release = [], threading.Event(), threading.Event()
+    real_check = documents._check_word
+
+    def slow_check(*args, **kwargs):
+        checks.append(1)
+        if len(checks) == 1:
+            entered.set()
+            release.wait(5)
+        return real_check(*args, **kwargs)
+    monkeypatch.setattr(documents, "_check_word", slow_check)
+    out = {}
+
+    def whole():
+        out["content"] = client.patch(f"/api/v1/documents/{did}/content", headers=headers, json={
+            "expectedRevision": detail["revision"], "markdownContent": edited, "allowMerge": True, "clientSaveKey": "ctrl-s-1"})
+
+    def close():
+        out["patch"] = client.post(f"/api/v1/documents/{did}/objects/patch", headers=headers, json={
+            "clientSaveKey": "close-after-ctrl-s", "baseDocumentRevision": detail["revision"], "atomic": True,
+            "ops": [{"op": "update", "objectId": target["id"], "baseRevision": target["revision"], "markdown": edited_block}]})
+    saver = threading.Thread(target=whole)
+    saver.start()
+    assert entered.wait(5)
+    closer = threading.Thread(target=close)
+    closer.start()
+    threading.Timer(0.3, release.set).start()
+    saver.join(15)
+    closer.join(15)
+    assert out["content"].status_code == 200, out["content"].text
+    assert out["patch"].status_code == 200, out["patch"].text
+    assert len(checks) == 1  # 只检查了一次（块级保存没有重复检查）
+    assert out["patch"].json()["data"]["documentRevision"] == detail["revision"] + 1
+    final = client.get(f"/api/v1/documents/{did}").json()["data"]
+    assert final["revision"] == detail["revision"] + 1 and "速改" in final["markdownContent"]

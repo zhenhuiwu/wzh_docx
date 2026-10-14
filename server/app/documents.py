@@ -875,7 +875,9 @@ def update_document_content(
     if body.baseMarkdown is not None and not body.allowMerge:
         raise AppError(422, "VALIDATION_FAILED", "显式基准只能用于合并保存。")
 
-    with connect() as conn:
+    from app.patch_inflight import saving
+    # QA 复验 13：登记进行中的整篇保存，随后到达的关页块级保存先等它落库（见 patch_inflight.wait_whole_saves）
+    with saving(did, whole=True), connect() as conn:
         # 检查文档和版本
         row = _document_row(conn, did, session.user_id, admin, "edit")
         block_ids = _checked_block_ids(conn, did, session.user_id, body)

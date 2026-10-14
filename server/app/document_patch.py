@@ -273,6 +273,8 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
         if replayed is not None:
             return {"data": _public(replayed), "requestId": request.state.request_id}
         ensure_committed(connection, did)
+        from app.patch_inflight import wait_whole_saves
+        wait_whole_saves(did)
         _reject_word_headings(connection, did, principal, body.ops)
         for attempt in range(OPTIMISTIC_ATTEMPTS + 1):
             guard = document_lock(did) if attempt == OPTIMISTIC_ATTEMPTS else nullcontext()
