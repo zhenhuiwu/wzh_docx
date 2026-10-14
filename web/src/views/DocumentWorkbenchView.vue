@@ -1267,6 +1267,9 @@ async function load() {
     draftAccount = readSession()?.staffId || draftAccount;
     await browserTabId();
     browserTab = browserTabIdentity().current;
+    // QA 复验 12：先上线（等其他标签回答的 PRESENCE_WAIT_MS 与取正文、快速预览并行），不在可编辑前再干等 250 ms
+    openPresence(id);
+    const presenceAt = Date.now();
     void getCapabilities().then(value => { capabilities.value = value; }).catch(() => { capabilities.value = null; });
     const fetched = await getDocument(id);
     // 验收 P0-2：版式预览（整篇 Word 排版）可能很慢，不等它：先显示只读正文，预览到了再换成可编辑的编辑稿
@@ -1305,10 +1308,9 @@ async function load() {
     savedAt.value = Date.parse(record.updatedAt) || null;
     void refreshLastEditor();
     // 复审 M1：先上线、等其他标签回答，再列本机草稿，避免另一个仍打开着的标签的草稿短暂闪现为恢复条。
-    openPresence(record.id);
     void refreshMemory();
     void refreshConflicts();
-    await new Promise(resolve => window.setTimeout(resolve, PRESENCE_WAIT_MS));
+    await new Promise(resolve => window.setTimeout(resolve, Math.max(0, PRESENCE_WAIT_MS - (Date.now() - presenceAt))));
     if (id !== documentId.value || version !== loadVersion) return;
     findLocalDrafts(record);
   } catch (error) {
