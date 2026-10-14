@@ -694,7 +694,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
                 ctx_c.unroute("**/api/v1/documents/**")
             page4 = ctx_c.new_page(); open_pages.append(page4)
             open_doc(page4, pid, d2)
-            expect(page4.get_by_test_id("draft-recovery")).to_be_visible(timeout=30000)
+            # 复验 16 P1-1：拆分后服务器未变时会直接自动恢复（恢复条可能一闪而过），恢复条或恢复结果提示出现其一即可
+            expect(page4.get_by_test_id("draft-recovery").or_(page4.get_by_test_id("restore-split"))).to_be_visible(timeout=30000)
             for _ in range(40):
                 if "DRAFTB" in stash(page4):
                     break
@@ -703,7 +704,11 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             assert "DRAFTB" in value and "OLDSTASH" in value, (mode, value)   # N-4 拆分生效；N-5 旧暂存还在
             leftover = page4.evaluate("() => Object.keys(localStorage).filter(k => !k.startsWith('docwb.a07.stash') && (localStorage.getItem(k) || '').includes('DRAFTB')).length")
             assert leftover == 0, f"{mode}：拆分后的草稿不应再含不归我负责的修改"
-            page4.get_by_test_id("draft-restore").click()
+            # 拆分后草稿只剩自己负责的修改，服务器未变时会自动恢复；没自动恢复就手动点
+            try:
+                page4.get_by_test_id("draft-restore").click(timeout=5000)
+            except Exception:
+                pass
             for _ in range(60):
                 saved = admin.call("GET", f"/documents/{d2}")["markdownContent"]
                 if "DRAFTA" in saved:
@@ -714,6 +719,13 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             assert "DRAFTB" not in saved, saved[-300:]
             expect(page4.get_by_test_id("save-rejected-banner")).to_have_count(0)
             assert "OLDSTASH" in stash(page4)
+            # 复验 16 P1-1（PM 定稿）：说清楚各几处，他人负责部分可查看、复制
+            expect(page4.get_by_test_id("restore-split")).to_contain_text("已恢复并保存 1 处；另有 1 处属于他人负责的部分，未保存，已保留在本机草稿", timeout=10000)
+            page4.get_by_test_id("restore-split-view").click()
+            expect(page4.get_by_test_id("unsaved-part")).to_have_count(1)
+            expect(page4.get_by_test_id("unsaved-part")).to_contain_text("DRAFTB")
+            shot(page4, f"A07-10b-未保存内容-{mode}")
+            page4.keyboard.press("Escape")
             shot(page4, f"A07-10-草稿按分工拆分-{mode}")
             ctx_c.close()
 

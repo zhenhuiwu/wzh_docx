@@ -134,3 +134,18 @@ export function keepMineOnly(markdown: string, baseline: BaselineObject[], edita
   }
   return { markdown: out.join("\n\n") + "\n", stashed, blockIds: outIds };
 }
+
+/**
+ * QA 复验 16 P1-1：恢复本机草稿时按当前分工拆开——我负责部分的修改照常保存，他人负责部分的修改不提交（提交必被整份拒绝），
+ * 留在本机供查看、复制。saved：我负责部分改动的块数；others：他人负责部分被留下的块。
+ */
+export function splitRestore(markdown: string, baseline: BaselineObject[], editable: Set<string>): { markdown: string; saved: number; others: string[] } {
+  const kept = keepMineOnly(markdown, baseline, editable);
+  const base = new Set(baseline.map(item => item.markdown.trim()));
+  const saved = splitBlocks(kept.markdown).filter(block => !base.has(block.body.trim())).length;
+  return { markdown: kept.markdown, saved, others: kept.stashed };
+}
+
+export function restoreSplitText(saved: number, others: number): string {
+  return `已恢复并保存 ${saved} 处；另有 ${others} 处属于他人负责的部分，未保存，已保留在本机草稿`;
+}

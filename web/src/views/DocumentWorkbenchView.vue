@@ -6,6 +6,8 @@ import DocumentDiagrams from "../components/DocumentDiagrams.vue";
 import DocumentHistory from "../components/DocumentHistory.vue";
 import { CHUNK_ATTR, ChunkedBody, fastBodyHtml, quickBodyHtml, searchBlocks, textRange, type SearchHit } from "../editorChunks";
 import DocumentAssignments from "../components/DocumentAssignments.vue";
+import UnsavedOthersDialog from "../components/UnsavedOthersDialog.vue";
+import { appendUnsaved, parseUnsaved, unsavedKey, type UnsavedPart } from "../unsavedOthers";
 import DocumentBlockGuidance from "../components/DocumentBlockGuidance.vue";
 import DocumentReferences from "../components/DocumentReferences.vue";
 import type { DocumentReferencesState } from "../api/documentReferences";
@@ -41,7 +43,7 @@ import { ApiError } from "../api/client";
 import { assignBlockIds, keepalivePatch, rememberSaveKey, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
-import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
+import { keepMineOnly, lockedText, restoreSplitText, splitRestore, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, changeRevisionBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
@@ -239,6 +241,19 @@ const localDrafts = ref<DraftV2[]>([]);
 const draftBusy = ref(false);
 /** 最后一审建议 3：恢复的草稿还没存上服务器（保存在重试）。存上前草稿不删、恢复条保持“恢复中…”、编辑区保持锁定。 */
 const restorePending = ref<{ draft: DraftV2; record: DocumentRecord } | null>(null);
+// QA 复验 16 P1-1：恢复草稿时按分工拆开后留下的他人负责部分（本机保留，可查看、复制）
+const restoreSplit = ref<{ saved: number; others: number } | null>(null);
+const unsavedParts = ref<UnsavedPart[]>([]);
+const unsavedOpen = ref(false);
+// 打开时已按分工从草稿里拆出去的他人负责部分的处数（恢复时一并告知）
+let settledOthers = 0;
+function readUnsaved(record: DocumentRecord) {
+  try { unsavedParts.value = parseUnsaved(window.localStorage.getItem(unsavedKey(account(), record.id))); } catch { unsavedParts.value = []; }
+}
+function keepUnsaved(record: DocumentRecord, texts: string[]) {
+  unsavedParts.value = appendUnsaved(unsavedParts.value, texts, Date.now());
+  try { window.localStorage.setItem(unsavedKey(account(), record.id), JSON.stringify(unsavedParts.value)); } catch { /* 本机存储不可用：仍在本页可查看 */ }
+}
 const exporting = ref(false);
 const exportMenu = ref(false);
 const exportError = ref("");
@@ -418,6 +433,8 @@ function settleDraftOwnership() {
     const kept = keepMineOnly(draft.markdown, baselineObjects, info.editable);
     if (!kept.stashed.length) continue;
     addStash(kept.stashed.join("\n\n"), null, true);
+    keepUnsaved(record, kept.stashed);
+    settledOthers += kept.stashed.length;
     const server = baselineObjects.map(item => item.markdown).join("\n\n") + "\n";
     if (kept.markdown === server) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
@@ -1062,6 +1079,7 @@ function placePublicEmbeds() {
   publicHosts.value = hosts;
 }
 watch(() => document.value?.id, () => { publicRefs.value = []; publicHosts.value = []; void loadPublicRefs(); });
+watch(() => document.value?.id, () => { restoreSplit.value = null; settledOthers = 0; if (document.value) readUnsaved(document.value); else unsavedParts.value = []; }, { immediate: true });
 
 const pendingSections = computed(() => outlineInfo.value.filter(item => item.todo).length);
 const totalChars = computed(() => countChars(statsContent.value));
@@ -1453,7 +1471,7 @@ async function settledThenRestore(record: DocumentRecord, draft: DraftV2) {
   const same = (other: DraftV2 | null | undefined) => other?.tabId === draft.tabId && other?.savedAt === draft.savedAt;
   if (document.value !== record || !same(localDraft.value) || restoreRefusal.value) return;
   await restoreLocalDraft();
-  if (document.value === record && !localDrafts.value.some(same)) noteAction("已自动恢复上次关闭页面前没保存的修改，并已保存。", 8000);
+  if (document.value === record && !localDrafts.value.some(same) && !restoreSplit.value) noteAction("已自动恢复上次关闭页面前没保存的修改，并已保存。", 8000);
 }
 async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
   for (const draft of drafts) {
@@ -1543,6 +1561,8 @@ async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[]) {
     // 关页保存最终没落库：放回恢复条；服务器还是草稿基于的那一版时自动恢复（见 maybeAutoRestore）
     localDrafts.value = [...localDrafts.value, ...waiting.filter(draft => !localDrafts.value.some(item => sameDraft(item, draft)))];
     localDraft.value = localDrafts.value[0] ?? null;
+    // QA 复验 16 P1-1：关页保存没落库、放回恢复条的草稿也按当前分工拆一次（之前只拆了打开时直接显示的草稿）
+    if (assignInfo.value?.restricted) settleDraftOwnership();
   }
   checkingDrafts.value = false;
   void flushLoadTyping();
@@ -3544,17 +3564,27 @@ async function restoreLocalDraft() {
       noteAction("本机存储写入失败，请先处理本标签的草稿（恢复、下载或舍弃）再恢复这一份。", 10000);
       return;
     }
+    // QA 复验 16 P1-1：草稿里改到他人负责部分的修改不提交（一提交整份被拒，自己负责的也存不上）：
+    // 只保存我负责部分的修改，他人负责部分留在本机（可查看、复制），恢复后说清楚各有几处
+    const info = assignInfo.value;
+    const split = info?.restricted && baselineObjects.length ? splitRestore(draft.markdown, baselineObjects, info.editable) : null;
+    const others = split?.others.length ? split.others : [];
+    const othersCount = others.length + settledOthers;
+    settledOthers = 0;
+    const restoring = others.length ? split!.markdown : draft.markdown;
+    if (others.length) keepUnsaved(record, others);
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
-    markdownContent.value = draft.markdown;
+    markdownContent.value = restoring;
     draftRestoring = true;
     try {
       // 增量审查 M1：草稿记着显式基准时按它合并（expectedRevision 用当前修订）
-      if (typeof draft.baseMarkdown === "string") await saveContent(draft.markdown, "manual", record.revision, undefined, { baseMarkdown: draft.baseMarkdown });
-      else await saveContent(draft.markdown, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
+      if (typeof draft.baseMarkdown === "string") await saveContent(restoring, "manual", record.revision, undefined, { baseMarkdown: draft.baseMarkdown });
+      else await saveContent(restoring, "manual", draft.docRevision === record.revision ? undefined : (draft.mergeBase ?? draft.docRevision));
     } finally {
       draftRestoring = false;
     }
     if (blocked.value || document.value !== record) return;
+    if (othersCount) restoreSplit.value = { saved: splitRestore(restoring, baselineObjects, info?.editable ?? new Set()).saved, others: othersCount };
     const conflicted = lastConflictAt >= restoreStarted;
     if (conflicted) {
       // 恢复的内容与他人的修改冲突：冲突部分已存为冲突副本，其余已（或正在）保存；不是“重试中”
@@ -5282,6 +5312,10 @@ onUnmounted(() => {
           <p v-if="floatingReason" class="wb-float-note" role="status" data-testid="float-reason"><span class="spin" aria-hidden="true"></span>{{ floatingReason }}</p>
         </div>
         <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
+        <p v-if="restoreSplit" class="wb-notice warning" role="status" data-testid="restore-split"><span>{{ restoreSplitText(restoreSplit.saved, restoreSplit.others) }}</span>
+          <span class="acts"><button type="button" class="ghost sm" data-testid="restore-split-view" @click="unsavedOpen = true">查看未保存内容</button><button type="button" class="subtle sm" @click="restoreSplit = null">知道了</button></span></p>
+        <p v-else-if="unsavedParts.length && !localDraft" class="wb-notice neutral" role="status" data-testid="unsaved-others"><span>本机还保留着 {{ unsavedParts.length }} 处属于他人负责的部分、没有保存的修改。</span>
+          <span class="acts"><button type="button" class="ghost sm" data-testid="unsaved-others-view" @click="unsavedOpen = true">查看未保存内容</button></span></p>
         <!-- S11：草稿恢复条只锁编辑区；顶栏、目录和面板照常可用 -->
         <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
           <div class="draft-row">
@@ -5597,6 +5631,7 @@ onUnmounted(() => {
         <template v-if="lastEditor"><span>最近由 {{ lastEditor.name }} 修改于 {{ shortTime(lastEditor.at) }}</span><span class="sep" aria-hidden="true"></span></template>
         <span>Ctrl+S 立即保存</span>
       </footer>
+      <UnsavedOthersDialog :open="unsavedOpen" :parts="unsavedParts" @close="unsavedOpen = false" />
       <LeaveDialog v-if="leaveDialog" :mode="leaveDialog.mode" :count="leaveDialog.count" @download="downloadMyChanges" @stay="leaveDialog = null" @leave="confirmLeave(false)" @download-leave="confirmLeave(true)" />
     </template>
   </div>
