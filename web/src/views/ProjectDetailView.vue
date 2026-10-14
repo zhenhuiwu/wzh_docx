@@ -37,6 +37,9 @@ const chainState = ref({ ready: false, hasDocuments: true, canCreate: false });
 /** 首页“一页一事”（30 §3.1）：项目信息和成员管理收进“…›编辑项目”“成员与权限”，按需展开。 */
 const showMembers = ref(false);
 const canCreateFromTemplate = computed(() => !archived.value && (project.value?.permissions?.projectRole === "owner" || Boolean(project.value?.permissions?.canArchive)));
+// QA 复验 16 补 a05 V19–V22：/projects/{id}#members（停用账号的“打开并恢复”“打开项目概述”）直接展开成员与权限，
+// 成员区挂载后按 #members 自己滚动、聚焦（ProjectMembersSection.scrollToSelf）
+watch(() => route.hash, hash => { if (hash === "#members") showMembers.value = true; }, { immediate: true });
 function manageMembers() {
   showMembers.value = true;
   requestAnimationFrame(() => document.getElementById("members-anchor")?.scrollIntoView({ behavior: "smooth", block: "start" }));
