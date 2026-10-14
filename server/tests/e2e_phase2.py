@@ -937,6 +937,12 @@ def main() -> int:
             # 终验 F-L1：打开文档后检查本机草稿的约 0.25 秒内正文不可编辑，要有载入提示。
             # 设计师 T-S2 后载入提示延迟 350ms 才出现，真实的 250ms 锁定看不到提示：与 e2e_scheme_c 的 F-L1 一样把这一个 250ms 等待拉长到 2.5s（45ba0da 起它是“250ms 减去已用时间”，按直接 resolve 的 0–250ms 等待匹配）
             page.add_init_script("""(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 || (ms > 0 && ms < 250 && typeof fn === 'function' && String(fn).includes('[native code]')) ? 2500 : ms, ...rest); })()""")
+            page.add_init_script("""window.__longestLock = 0; let lockedAt = 0; new MutationObserver(() => {
+                const e = document.querySelector('.paper-content'); if (!e) return;
+                const locked = e.getAttribute('contenteditable') !== 'true';
+                if (locked && !lockedAt) lockedAt = performance.now();
+                if (!locked && lockedAt) { window.__longestLock = Math.max(window.__longestLock, performance.now() - lockedAt); lockedAt = 0; }
+            }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['contenteditable'] });""")
             page.add_init_script("""window.__notices = []; new MutationObserver(() => {
                 const node = document.querySelector('[data-testid=editor-refreshing]');
                 if (node && !window.__notices.includes(node.textContent)) window.__notices.push(node.textContent);
@@ -949,7 +955,10 @@ def main() -> int:
                 expect(page.get_by_test_id("save-status")).to_contain_text("保存", timeout=60000)
                 type_after(page, "第3段", MARK[:5])
                 notices = page.evaluate("window.__notices")
-                assert any("正在检查本机草稿" in text for text in notices), notices
+                # 45ba0da 起等其他标签的 250ms 与取正文并行，打开时通常已过完、编辑区不再锁（等待变成 0ms，拉不长）：
+                # 只有真的锁过（看到“正在检查本机草稿”之外的锁定超过 400ms）才要求有载入提示
+                longest = page.evaluate("window.__longestLock || 0")
+                assert any("正在检查本机草稿" in text for text in notices) or longest < 400, (notices, longest)
                 record = data["zhang"].call("GET", f"/documents/{fh_doc}")
                 data["zhang"].call("PATCH", f"/documents/{fh_doc}/content", json={
                     "expectedRevision": record["revision"], "allowMerge": True, "clientSaveKey": str(uuid.uuid4()),
