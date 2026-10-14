@@ -83,11 +83,21 @@ def fast_call(fn, *args):
 def render(path: str, markdown: str, images: list | None, outline_headings: bool, selection: bool) -> str:
     """在子进程中执行：Word 原稿 + 正文 → 预览 HTML（selection 时再加选区标注）。"""
     from app.docx_preview import render_document_html
-    html = render_document_html(Path(path), markdown, images, outline_headings=outline_headings)
-    if selection:
-        from app.document_selection import decorate_selection_html
-        html = decorate_selection_html(markdown, html)
+    from app.timing_log import span
+    with span("full_render", chars=len(markdown), selection=selection) as info:
+        with span("full_render_word"):
+            html = render_document_html(Path(path), markdown, images, outline_headings=outline_headings)
+        if selection:
+            from app.document_selection import decorate_selection_html
+            with span("full_render_selection"):
+                html = decorate_selection_html(markdown, html)
+        info["html_chars"] = len(html)
     return html
+
+
+def has(key: str) -> bool:
+    with _lock:
+        return key in _done
 
 
 Job = tuple  # (path, markdown, images, outline_headings, selection)

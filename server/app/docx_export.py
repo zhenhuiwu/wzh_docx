@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from app.fast_diff import bounded_opcodes
+from app.text_memo import TextMemo
 from pathlib import Path
 from shutil import copyfile
 from io import BytesIO
@@ -34,7 +35,7 @@ from docx.shared import Inches
 from docx.text.run import Run
 from lxml import html
 
-from app.docx_parser import parse_docx, _list_info, heading_level
+from app.docx_parser import parse_docx_cached, _list_info, heading_level
 
 
 _PROTECTED_INLINE = (
@@ -106,13 +107,17 @@ class _Block:
 _LOCAL = threading.local()
 
 
-def _markdown_html(content: str) -> str:
+def _convert_markdown(content: str) -> str:
     """N1：每线程复用一个 Markdown 实例（每次 markdown.markdown 都新建实例并加载扩展，
     大文档逐对象取纯文本时占一半以上；同 document_selection._render）。输出与 markdown.markdown 相同。"""
     renderer = getattr(_LOCAL, "markdown", None)
     if renderer is None:
         renderer = _LOCAL.markdown = markdown.Markdown(extensions=["tables", "fenced_code"])
     return renderer.reset().convert(content)
+
+
+# 整篇预览提速：一次预览里当前正文要转换两次（写回检查与预览各一次），原稿正文每次都转换；按文本缓存
+_markdown_html = TextMemo(_convert_markdown, max_items=64)
 
 
 def _html_blocks(content: str) -> list:
@@ -820,7 +825,7 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
     original_path = Path(original_path)
     doc = Document(original_path)
     _memoize_styles(doc)
-    source = _html_blocks(parse_docx(str(original_path), outline_headings=outline_headings).markdown)
+    source = _html_blocks(parse_docx_cached(str(original_path), outline_headings=outline_headings).markdown)
     target = _html_blocks(markdown_content)
     blocks = _word_blocks(doc, outline_headings=outline_headings)
     source_levels = [depth for element in source if element.tag in {"ul", "ol"}
@@ -832,7 +837,7 @@ def edit_original_docx(markdown_content: str, original_path: str | Path, output_
         # Treat missing nesting as that legacy view, not permission to remove
         # the original numbering. Explicit nested target markup uses the current
         # parser. This changes only the matching baseline, never stored content.
-        source = _html_blocks(parse_docx(str(original_path), flat_lists=True, outline_headings=outline_headings).markdown)
+        source = _html_blocks(parse_docx_cached(str(original_path), flat_lists=True, outline_headings=outline_headings).markdown)
         blocks = _word_blocks(doc, flat_lists=True, outline_headings=outline_headings)
     if [block.tag for block in blocks] != [element.tag for element in source]:
         raise ValueError("原稿结构无法与编辑稿对应，未导出以避免破坏格式。")
