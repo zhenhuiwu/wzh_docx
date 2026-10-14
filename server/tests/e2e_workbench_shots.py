@@ -208,7 +208,7 @@ def main() -> int:
         expect(w.locator(".ai-panel")).to_be_visible(timeout=10000)
         w.locator("#ai-instruction").fill("识别类别按总体要求的五类；写明识别依据与输出方式。")
         w.locator(".ai-panel").get_by_role("button", name=re.compile("生成草稿")).click()
-        expect(w.locator("[data-ai-preview]")).to_be_visible(timeout=20000)
+        expect(w.locator(".ai-suggestion[data-ai-preview]").first).to_be_visible(timeout=20000)
         w.wait_for_timeout(800)
         shot(w, "02-写作助手")
         w.close()
