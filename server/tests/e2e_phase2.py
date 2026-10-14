@@ -64,6 +64,9 @@ def step(name: str):
             except Exception as error:  # noqa: BLE001 - 汇总后统一失败
                 results.append((name, False, f"{type(error).__name__}: {error}"))
                 print(f"FAIL {name}: {error}", flush=True)
+                if not str(error):  # 裸 assert：打印出错行
+                    import traceback
+                    traceback.print_exc()
                 for index, page in enumerate(open_pages):
                     if not page.is_closed():
                         OUT.mkdir(parents=True, exist_ok=True)
@@ -177,10 +180,17 @@ def wait_saved(page: Page, timeout: int = 30000):
     expect(page.get_by_test_id("save-status")).to_contain_text(re.compile("刚刚保存|已保存"), timeout=timeout)
 
 
-def pick_paragraphs(markdown: str, count: int) -> list[str]:
+def pick_paragraphs(markdown: str, count: int, skip_headings: frozenset[str] = frozenset()) -> list[str]:
+    # 只读章节（公共框架引用、任务分解，371dc3d 起编辑区只读，输入进暂存）里的段落不能当作可编辑的目标
     picked = []
+    skipping = False
     for block in markdown.split("\n\n"):
         block = block.strip()
+        if block.startswith("#"):
+            skipping = block.lstrip("#").strip() in skip_headings
+            continue
+        if skipping:
+            continue
         if not block or block[0] in "#|!-*>0123456789[" or "\n" in block or len(block) < 12 or any(c in block for c in "*_`[]<>\\"):
             continue
         key = block[:10]
@@ -193,6 +203,18 @@ def pick_paragraphs(markdown: str, count: int) -> list[str]:
     return picked
 
 
+def restore_or_auto(page: Page, shot_name: str | None = None, shot_fn=None) -> None:
+    """重开后的草稿：服务器还是草稿基于的那一版时自动恢复并保存（9f140e8 起，maybeAutoRestore），否则出恢复条手动恢复。"""
+    bar = page.get_by_test_id("draft-recovery")
+    auto = page.get_by_role("status").filter(has_text="已自动恢复上次关闭页面前没保存的修改")
+    expect(bar.or_(auto).first).to_be_visible(timeout=20000)
+    if shot_fn and shot_name:
+        shot_fn(page, shot_name)
+    if bar.count():
+        bar.get_by_role("button", name="恢复并保存").click()
+    expect(bar).to_have_count(0, timeout=30000)
+
+
 def require_targets() -> None:
     missing = [name for name, value in (("E2E_API", API), ("E2E_WEB", WEB), ("DATABASE_URL", os.environ.get("DATABASE_URL", ""))) if not value]
     if missing:
@@ -203,7 +225,8 @@ def main() -> int:
     require_targets()
     data = seed()
     markdown = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
-    p_export, p_a, p_b, p_conflict, p_offline, p_member, p_upd, p_upd2, p_dup_a, p_dup_b, p_block, p_del = pick_paragraphs(markdown, 12)
+    p_export, p_a, p_b, p_conflict, p_offline, p_member, p_upd, p_upd2, p_dup_a, p_dup_b, p_block, p_del = pick_paragraphs(markdown, 12, frozenset(
+        item["title"] for item in data["zhang"].call("GET", f"/documents/{data['document']['id']}/locked-chapters")["chapters"]))
     doc_id = data["document"]["id"]
 
     def server_markdown() -> str:
@@ -473,12 +496,13 @@ def main() -> int:
                 data["zhang"].call("PATCH", f"/documents/{doc_id}/content", json={
                     "expectedRevision": record["revision"], "markdownContent": md, "allowMerge": True, "clientSaveKey": str(uuid.uuid4())})
 
-            # 预览请求在页面里改慢（mode=delay）或先失败一次再慢（mode=fail-then-delay，走锁定兜底路径）
+            # 预览请求在页面里改慢（mode=delay）或先失败一次再慢（mode=fail-then-delay，走锁定兜底路径）。
+            # 快速预览（/preview/blocks，失败时退回整篇预览）也要失败，否则整篇预览照常返回、走不到锁定兜底
             slow_preview = """(mode) => { const original = window.__origFetch || window.fetch; window.__origFetch = original; let first = true;
                 window.fetch = (input, init) => {
                     const url = String(input instanceof Request ? input.url : input);
                     if (!url.includes('/preview')) return original(input, init);
-                    if (mode === 'fail-then-delay' && first) { first = false; return Promise.reject(new TypeError('probe')); }
+                    if (mode === 'fail-then-delay' && first) { if (!url.includes('/preview/blocks')) first = false; return Promise.reject(new TypeError('probe')); }
                     window.__previewDelayed = (window.__previewDelayed || 0) + 1;
                     return new Promise(resolve => setTimeout(resolve, 4000)).then(() => original(input, init)); }; }"""
             ctx = browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
@@ -656,11 +680,7 @@ def main() -> int:
             ctx_b.set_offline(False)
             page = ctx_b.new_page()
             open_doc(page, data)
-            bar = page.get_by_test_id("draft-recovery")
-            expect(bar).to_be_visible(timeout=20000)
-            shot(page, "08-重开-草稿恢复条")
-            bar.get_by_role("button", name="恢复并保存").click()
-            expect(bar).to_have_count(0, timeout=30000)
+            restore_or_auto(page, "08-重开-草稿恢复条", shot)
             wait_saved(page)
             server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
             assert "（断网关页）" in server
@@ -688,10 +708,18 @@ def main() -> int:
             page.locator(".paper-content").click()
             page.keyboard.type("（回来立刻打字）")
             bar = page.get_by_test_id("draft-recovery")
-            expect(bar).to_be_visible(timeout=20000)
-            expect(page.locator(".paper-content")).to_have_attribute("contenteditable", "false")
+            # 服务器仍是草稿基于的那一版时自动恢复并保存（9f140e8 起）；载入期间立刻打的字另有“没能写入”提示，会盖掉“已自动恢复”的短提示，
+            # 所以自动恢复以服务器上有过期前的内容为准
+            for _ in range(60):
+                if bar.count() or "（会话过期前未保存）" in data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]:
+                    break
+                page.wait_for_timeout(500)
             shot(page, "09b-会话过期重新登录-草稿恢复条")
-            bar.get_by_role("button", name="恢复并保存").click()
+            if bar.count():
+                try:  # 恢复条可能正自动恢复（按钮变“恢复中…”后消失）
+                    bar.get_by_role("button", name="恢复并保存").click(timeout=5000)
+                except Exception:
+                    pass
             expect(bar).to_have_count(0, timeout=30000)
             wait_saved(page)
             server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
@@ -700,8 +728,14 @@ def main() -> int:
             type_after(page, p_offline, "（回来后新输入）")
             save_now(page)
             wait_saved(page)
-            server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
-            assert "（会话过期前未保存）" in server and "（回来后新输入）" in server
+            # 状态条在按 Ctrl+S 前就是“已保存”，wait_saved 可能立即返回：等服务器上出现新输入
+            for _ in range(120):
+                server = data["zhang"].call("GET", f"/documents/{data['document']['id']}")["markdownContent"]
+                if "（回来后新输入）" in server:
+                    break
+                page.wait_for_timeout(500)
+            # End 只到折行的行尾：长段落里新输入可能落在“（会话过期前未保存）”中间，去掉新输入再查前一段内容
+            assert "（会话过期前未保存）" in server.replace("（回来后新输入）", "") and "（回来后新输入）" in server
             page.reload()
             expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
             page.wait_for_timeout(2000)
@@ -901,8 +935,8 @@ def main() -> int:
             page = ctx.new_page()
             open_pages.append(page)
             # 终验 F-L1：打开文档后检查本机草稿的约 0.25 秒内正文不可编辑，要有载入提示。
-            # 设计师 T-S2 后载入提示延迟 350ms 才出现，真实的 250ms 锁定看不到提示：与 e2e_scheme_c 的 F-L1 一样把这一个 250ms 等待拉长到 2.5s
-            page.add_init_script("""(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 ? 2500 : ms, ...rest); })()""")
+            # 设计师 T-S2 后载入提示延迟 350ms 才出现，真实的 250ms 锁定看不到提示：与 e2e_scheme_c 的 F-L1 一样把这一个 250ms 等待拉长到 2.5s（45ba0da 起它是“250ms 减去已用时间”，按直接 resolve 的 0–250ms 等待匹配）
+            page.add_init_script("""(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 || (ms > 0 && ms < 250 && typeof fn === 'function' && String(fn).includes('[native code]')) ? 2500 : ms, ...rest); })()""")
             page.add_init_script("""window.__notices = []; new MutationObserver(() => {
                 const node = document.querySelector('[data-testid=editor-refreshing]');
                 if (node && !window.__notices.includes(node.textContent)) window.__notices.push(node.textContent);
