@@ -29,6 +29,7 @@ import { countChars, caretBlockIndex, keepsServerChanges, mapBlockIndex, mergedI
 import { draftUsage, listDrafts, readDraft, recoverySummary, removeDraft, verifyDraft, writeDraft, type DraftV2 } from "../draftStore";
 import { browserTabId, browserTabIdentity, pageInstance } from "../tabIdentity";
 import { revertBlock } from "../blockRevert";
+import { blockText, caretBlocks } from "../caretBlocks";
 import { frozenMark, looksLikePinyin, nextSeq, noteYields, substituteFrozen, type NoteKind } from "../frozenConflict";
 import { flash } from "../flash";
 import DOMPurify from "dompurify";
@@ -1514,19 +1515,19 @@ async function settleDraftConflicts(record: DocumentRecord, drafts: DraftV2[]) {
 function pointMark(): { texts: string[]; index: number; offset: number } | null {
   const root = editor.value;
   if (!root || !loadPoint || !root.contains(loadPoint.node)) return null;
-  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const blocks = caretBlocks(root);
   const block = [...blocks].reverse().find(item => item === loadPoint!.node || item.contains(loadPoint!.node));
   if (!block) return null;
   const range = window.document.createRange();
   range.selectNodeContents(block);
   try { range.setEnd(loadPoint.node, loadPoint.offset); } catch { return null; }
-  return { texts: blocks.map(item => item.textContent || ""), index: blocks.indexOf(block), offset: (range.cloneContents().textContent || "").length };
+  return { texts: blocks.map(blockText), index: blocks.indexOf(block), offset: (range.cloneContents().textContent || "").length };
 }
 function remapLoadPoint(mark: { texts: string[]; index: number; offset: number }) {
   const root = editor.value;
   if (!root || !loadPoint || root.contains(loadPoint.node)) return;
-  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
-  const index = mapBlockIndex(mark.texts, blocks.map(item => item.textContent || ""), mark.index);
+  const blocks = caretBlocks(root);
+  const index = mapBlockIndex(mark.texts, blocks.map(blockText), mark.index);
   const block = index >= 0 ? blocks[index] : null;
   if (!block) return;
   const walker = window.document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
@@ -2140,14 +2141,16 @@ type AcceptOptions = { reason?: string; yieldToTyping?: boolean; stateApplied?: 
 let composing = false;
 function setComposing(value: boolean) { composing = value; }
 function blockTexts(root: ParentNode): string[] {
-  return [...root.querySelectorAll(CARET_BLOCKS)].map(block => block.textContent || "");
+  return caretBlocks(root).map(blockText);
 }
 /** 编辑区里的光标位置（块序号 + 块内文字偏移），重绘前后用来恢复光标。 */
-const CARET_BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,:scope > div";
+// QA 复验 16 补（F-M1 / 重复段落写回）：只读章节角标、公共内容卡、AI 预览等显示用节点（data-ai-preview）不算正文块。
+// 公共内容卡（aace389 起挂在引用章节后）只在编辑区里有、预取的新版式里没有：算进来时它之后的块序号整体错位，
+// 载入期间打的字按错位的序号写回（写进别的段或写不回），重绘后的正文还会把他人刚写进相邻段的内容冲掉。
 function captureCaret(root: HTMLElement): { index: number; offset: number }[] {
   const selection = window.getSelection();
   const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const blocks = caretBlocks(root);
   const positions: { index: number; offset: number }[] = [];
   if (!range || !root.contains(range.startContainer) || !root.contains(range.endContainer)) return positions;
   for (const [container, offset] of [[range.startContainer, range.startOffset], [range.endContainer, range.endOffset]] as const) {
@@ -2183,7 +2186,7 @@ function noteCaretMark(root: HTMLElement, range: Range) {
 function restoreCaret(root: HTMLElement, positions: { index: number; offset: number }[]): boolean {
   if (positions.length !== 2) return false;
   const restored = window.document.createRange();
-  const blocks = [...root.querySelectorAll(CARET_BLOCKS)];
+  const blocks = caretBlocks(root);
   for (const [boundary, position] of positions.entries()) {
     const block = blocks[position.index];
     if (!block) return false;
