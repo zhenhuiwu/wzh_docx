@@ -583,7 +583,7 @@ def s_tablist(ctx: Run, page):
 
 
 # —— F-L1 缺口：载入锁定期间不经按键的直接上屏 / 组字 ——
-STRETCH_LOCK = """(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 ? 2500 : ms, ...rest); })()"""
+STRETCH_LOCK = """(() => { const raw = window.setTimeout; window.setTimeout = (fn, ms, ...rest) => raw(fn, ms === 250 || (ms > 0 && ms < 250 && typeof fn === 'function' && String(fn).includes('[native code]')) ? 2500 : ms, ...rest); })()"""
 
 
 def load_lock_round(ctx: Run, page, mode: str, n: int) -> dict:
