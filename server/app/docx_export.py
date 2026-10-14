@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from app.fast_diff import bounded_opcodes
+from app.text_memo import TextMemo
 from pathlib import Path
 from shutil import copyfile
 from io import BytesIO
@@ -106,13 +107,17 @@ class _Block:
 _LOCAL = threading.local()
 
 
-def _markdown_html(content: str) -> str:
+def _convert_markdown(content: str) -> str:
     """N1：每线程复用一个 Markdown 实例（每次 markdown.markdown 都新建实例并加载扩展，
     大文档逐对象取纯文本时占一半以上；同 document_selection._render）。输出与 markdown.markdown 相同。"""
     renderer = getattr(_LOCAL, "markdown", None)
     if renderer is None:
         renderer = _LOCAL.markdown = markdown.Markdown(extensions=["tables", "fenced_code"])
     return renderer.reset().convert(content)
+
+
+# 整篇预览提速：一次预览里当前正文要转换两次（写回检查与预览各一次），原稿正文每次都转换；按文本缓存
+_markdown_html = TextMemo(_convert_markdown, max_items=64)
 
 
 def _html_blocks(content: str) -> list:
