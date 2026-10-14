@@ -2094,12 +2094,16 @@ function showEditorHtml(html: string, mapped?: boolean) {
   if (editor.value) {
     // 方案 C：冻结区节点不随重绘替换（光标、组字、撤销栈都在这些节点上），重绘后放回服务器上这一段的位置
     const kept = detachFrozen(editor.value);
+    // QA 复验 16 补 F-L1：载入锁定期间点过正文（loadPoint）后编辑区又重绘了（打开时的快速版式 → 正式版式等），
+    // 记下的点跟着换算到新节点上，否则解锁后锁定期间打的字写不回去，只能提示“没能写入”
+    const pointBefore = loadPoint ? pointMark() : null;
     const keep = chunks ? chunks.mountedIndexes : undefined;
     chunks?.destroy();
     chunks = null;
     // 测试 L3：服务端把目录/域段落标成 contenteditable=false（data-word-protected）。
     editor.value.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["contenteditable"] });
     reattachFrozen(editor.value, kept);
+    if (pointBefore) remapLoadPoint(pointBefore);
     if (chunkedEditor.value && !Object.keys(frozen.value).length && !aiOpen.value && !conflictOpen.value) {
       chunks = new ChunkedBody(editor.value, desk.value, { onMount: chunkMounted, onUnmount: () => queueMicrotask(() => { placePublicEmbeds(); mountedBlocks.value = chunks?.mountedBlockCount ?? 0; }) });
       chunks.build(keep);
