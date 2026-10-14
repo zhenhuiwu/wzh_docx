@@ -274,3 +274,25 @@ def test_close_patch_waits_for_inflight_whole_save(document_context, monkeypatch
     assert out["patch"].json()["data"]["documentRevision"] == detail["revision"] + 1
     final = client.get(f"/api/v1/documents/{did}").json()["data"]
     assert final["revision"] == detail["revision"] + 1 and "速改" in final["markdownContent"]
+
+
+def test_timing_log_records_preview_blocks_cache(document_context, monkeypatch, tmp_path):  # noqa: F811
+    """QA 复验 14 P2：DOCWB_TIMING_LOG 开启时 /preview/blocks 记下等待与缓存命中情况；未开启时不写。"""
+    import json
+
+    from app import timing_log
+    client, headers, project, *_ = document_context
+    did = _srs_document(client, headers, project, name="SRS-timing")
+    log = tmp_path / "timing.jsonl"
+    monkeypatch.setattr(timing_log, "_PATH", str(log))
+    fast_preview.clear()
+    for _ in range(2):
+        assert client.get(f"/api/v1/documents/{did}/preview/blocks").status_code == 200
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    caches = [item["cache"] for item in events if item["ev"] == "fast_blocks"]
+    assert caches == ["miss", "hit"]
+    assert [item["ev"] for item in events].count("preview_blocks") == 2
+    assert any(item["ev"] == "wait_idle" and item["busy"] is False for item in events)
+    monkeypatch.setattr(timing_log, "_PATH", None)
+    client.get(f"/api/v1/documents/{did}/preview/blocks")
+    assert len(log.read_text(encoding="utf-8").splitlines()) == len(events)

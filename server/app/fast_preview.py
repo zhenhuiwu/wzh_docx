@@ -113,19 +113,26 @@ def _render(body: str) -> str:
 
 
 def blocks(connection, document_id, revision: int, rows) -> list[dict]:
+    from app.timing_log import span
     key = (str(document_id), revision)
-    with _lock:
-        if key in _blocks:
-            _blocks.move_to_end(key)
-            return _blocks[key]
-        pending = _warming.get(key)
-    if pending is not None and pending.wait(WARM_WAIT_S):
-        # 保存后的后台预热正在算同一修订：等它算完直接用，不重复渲染
+    with span("fast_blocks", doc=key[0][:8], rev=revision) as info:
         with _lock:
             if key in _blocks:
                 _blocks.move_to_end(key)
+                info["cache"] = "hit"
                 return _blocks[key]
-    return _compute(connection, key, document_id, rows)
+            pending = _warming.get(key)
+            info["warming"] = sorted(rev for did, rev in _warming if did == key[0])
+            info["cached"] = sorted(rev for did, rev in _blocks if did == key[0])
+        if pending is not None and pending.wait(WARM_WAIT_S):
+            # 保存后的后台预热正在算同一修订：等它算完直接用，不重复渲染
+            with _lock:
+                if key in _blocks:
+                    _blocks.move_to_end(key)
+                    info["cache"] = "warm_wait"
+                    return _blocks[key]
+        info["cache"] = "miss"
+        return _compute(connection, key, document_id, rows)
 
 
 def _compute(connection, key, document_id, rows) -> list[dict]:
@@ -160,8 +167,10 @@ def warm_after_commit(document_id, revision: int) -> threading.Thread | None:
                 connection.execute("BEGIN")  # 修订号与对象行取自同一读快照
                 current = connection.execute("SELECT revision FROM documents WHERE id=%s", (str(document_id),)).fetchone()
                 if current is not None:
-                    rows = live_objects(connection, document_id)
-                    _compute(connection, (str(document_id), int(current["revision"])), document_id, rows)
+                    from app.timing_log import span
+                    with span("fast_warm", doc=key[0][:8], rev=int(current["revision"]), asked=key[1]):
+                        rows = live_objects(connection, document_id)
+                        _compute(connection, (str(document_id), int(current["revision"])), document_id, rows)
                 connection.rollback()
         except Exception as exc:  # noqa: BLE001 - 预热失败不影响保存；真正请求时再算
             logging.getLogger(__name__).info("fast preview warm failed: %s", exc)

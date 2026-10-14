@@ -393,19 +393,22 @@ def get_preview_blocks(request: Request, document_id: str, offset: int = Query(d
                        limit: int = Query(default=500, ge=1, le=5000)) -> dict:
     """43 快速预览：按对象给出 HTML 片段（不经 Word 往返），供编辑区先挂载；整篇版式预览仍走 /preview。"""
     from app.fast_preview import blocks
+    from app.timing_log import span
     principal = document_principal(request)
     did = _uuid(document_id, "documentId")
-    wait_idle(did)  # 关页保存进行中：重开先等它落库（见 patch_inflight）
-    with connect() as conn:
-        load_document(conn, did, principal.user_id, is_admin(principal), "read")
-        available = ensure_committed(conn, did)
-        revision = int(conn.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()["revision"])
-        items = blocks(conn, did, revision, live_objects(conn, did)) if available else []
-        page = items[offset:offset + limit]
-        return {"data": {"documentRevision": revision, "objectModel": bool(available), "total": len(items),
-                         "offset": offset, "limit": limit, "blocks": page,
-                         "nextOffset": offset + len(page) if offset + len(page) < len(items) else None},
-                "requestId": request.state.request_id}
+    with span("preview_blocks", doc=str(did)[:8]) as info:
+        wait_idle(did)  # 关页保存进行中：重开先等它落库（见 patch_inflight）
+        with connect() as conn:
+            load_document(conn, did, principal.user_id, is_admin(principal), "read")
+            available = ensure_committed(conn, did)
+            revision = int(conn.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()["revision"])
+            info["rev"] = revision
+            items = blocks(conn, did, revision, live_objects(conn, did)) if available else []
+    page = items[offset:offset + limit]
+    return {"data": {"documentRevision": revision, "objectModel": bool(available), "total": len(items),
+                     "offset": offset, "limit": limit, "blocks": page,
+                     "nextOffset": offset + len(page) if offset + len(page) < len(items) else None},
+            "requestId": request.state.request_id}
 
 
 @router.get("/documents/{document_id}/objects")

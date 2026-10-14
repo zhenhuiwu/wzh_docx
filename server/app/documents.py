@@ -880,7 +880,8 @@ def update_document_content(
 
     from app.patch_inflight import saving
     # QA 复验 13：登记进行中的整篇保存，随后到达的关页块级保存先等它落库（见 patch_inflight.wait_whole_saves）
-    with saving(did, whole=True), connect() as conn:
+    from app.timing_log import span
+    with span("content_save", doc=str(did)[:8], base=body.expectedRevision), saving(did, whole=True), connect() as conn:
         # 检查文档和版本
         row = _document_row(conn, did, session.user_id, admin, "edit")
         block_ids = _checked_block_ids(conn, did, session.user_id, body)

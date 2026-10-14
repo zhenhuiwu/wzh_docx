@@ -298,7 +298,9 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
     _validate(body.ops)
     rhash = request_hash({"patch": body.model_dump(exclude={"clientSaveKey"})})
     from app.patch_inflight import saving
-    with saving(did), connect() as connection:
+    from app.timing_log import span
+    with span("patch", doc=str(did)[:8], base=body.baseDocumentRevision, ops=len(body.ops),
+              keys=len(body.afterSaveKeys)) as pinfo, saving(did), connect() as connection:
         load_document(connection, did, principal.user_id, is_admin(principal), "edit")
         replayed = replay(connection, did, principal.user_id, body.clientSaveKey, rhash)
         if replayed is not None:
@@ -321,7 +323,9 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                                             body.baseDocumentRevision, body.ops)
                 live = list(live_objects(connection, did))
                 doc, conflicts, applied = _apply(connection, did, live, ops)
+                pinfo["attempts"] = attempt + 1
                 if conflicts:
+                    pinfo["outcome"] = "conflict"
                     conflicted = {op_index for op_index, _, _ in conflicts}
                     partial = None if body.atomic else _apply(connection, did, live, ops, skip=conflicted)[0]
                     # 冲突副本里的“我的全文”：在当前正文上按我的意图应用全部 op（冲突处用我的版本）。
@@ -343,13 +347,15 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                 merged_md = doc.markdown(prefix)
                 merged_flag = revision != base_rev
                 if merged_md == theirs:
+                    pinfo["outcome"] = "noop"
                     return {"data": {"documentRevision": revision, "merged": merged_flag, "changeId": None, "applied": applied,
                                      "othersChangedSince": base_rev if merged_flag else None,
                                      "changedBy": _changed_by(connection, did, base_rev, principal.user_id),
                                      "markdownContent": theirs},
                             "requestId": request.state.request_id}
                 current_row = load_document(connection, did, principal.user_id, is_admin(principal), "edit")
-                _check_word(connection, current_row, merged_md)
+                with span("patch_check_word", doc=str(did)[:8], rev=revision):
+                    _check_word(connection, current_row, merged_md)
                 if connection.in_transaction:
                     connection.commit()
                 try:
@@ -384,6 +390,8 @@ def patch_objects(request: Request, document_id: str, body: PatchBody) -> dict:
                 data["markdownContent"] = merged_md
                 from app.fast_preview import warm_after_commit
                 warm_after_commit(did, revision + 1)
+                pinfo["outcome"] = "commit"
+                pinfo["rev"] = revision + 1
                 return {"data": data, "requestId": request.state.request_id}
     raise AppError(503, "DATABASE_BUSY", "文档正在被频繁修改，请稍后重试。", retry_after=1)
 

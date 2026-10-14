@@ -46,12 +46,16 @@ def wait_whole_saves(document_id, timeout: float = WAIT_S) -> bool:
     块级保存若立刻按旧修订合并，会再做一遍同样的检查（与前者抢 GIL、两者都变慢），提交时发现修订已变再重试，
     重开的读请求要等两次检查。先等整篇保存落库，再按新修订合并：内容相同时直接返回，不再检查。"""
     key = str(document_id)
-    with _cond:
+    from app.timing_log import span
+    with span("wait_whole_saves", doc=key[:8]) as info, _cond:
+        info["busy"] = key in _content
         return _cond.wait_for(lambda: key not in _content, timeout)
 
 
 def wait_idle(document_id, timeout: float = WAIT_S) -> bool:
     """同一文档没有进行中的块级保存时立即返回 True；否则最多等 timeout 秒。"""
     key = str(document_id)
-    with _cond:
+    from app.timing_log import span
+    with span("wait_idle", doc=key[:8]) as info, _cond:
+        info["busy"] = key in _active
         return _cond.wait_for(lambda: key not in _active, timeout)
