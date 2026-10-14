@@ -427,6 +427,11 @@ KEEPALIVE_LIMIT = 60000  # 与前端关页 keepalive 正文上限一致：超过
 def _content_result(request: Request, row: dict, conn=None) -> dict[str, object]:
     data = {"id": str(row[0]), "markdownContent": row[7], "outline": row[8],
             "status": row[9], "revision": row[12], "updatedAt": format_timestamp(row[13])}
+    if conn is not None:
+        # 整篇保存（含 Ctrl+S、自动恢复草稿）后同样后台预热新修订的快速预览（块级保存已在 document_patch 里预热），
+        # 之后重开或刷新时 /preview/blocks 直接命中
+        from app.fast_preview import warm_after_commit
+        warm_after_commit(row[0], int(row[12]))
     if conn is not None and len((row[7] or "").encode("utf-8")) > KEEPALIVE_LIMIT:
         # QA 复验 12：大文档保存后附上存活对象的 [id, revision]（按位置），前端据此立即更新关页按块保存的基准，
         # Ctrl+S 后马上关页也能发出 keepalive（不必等再取一次对象）

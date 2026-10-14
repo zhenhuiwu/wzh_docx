@@ -202,3 +202,25 @@ def test_large_content_save_returns_object_revisions(document_context):  # noqa:
         "expectedRevision": detail["revision"], "markdownContent": target, "allowMerge": True, "clientSaveKey": "objrev-save-2"})
     assert plain.status_code == 200, plain.text
     assert "objectRevisions" not in plain.json()["data"]
+
+
+def test_content_save_warms_fast_preview(document_context, monkeypatch):  # noqa: F811
+    """整篇保存（/content）后同样预热新修订的快速预览：重开时 /preview/blocks 不现算。"""
+    client, headers, project, *_ = document_context
+    fast_preview.clear()
+    did = _srs_document(client, headers, project, name="SRS-warm-content")
+    threads = []
+    original = fast_preview.warm_after_commit
+    monkeypatch.setattr(fast_preview, "warm_after_commit", lambda *a: threads.append(original(*a)) or threads[-1])
+    detail = client.get(f"/api/v1/documents/{did}").json()["data"]
+    saved = client.patch(f"/api/v1/documents/{did}/content", headers=headers, json={
+        "expectedRevision": detail["revision"], "markdownContent": detail["markdownContent"].rstrip("\n") + "\n\n补一段。\n",
+        "allowMerge": True, "clientSaveKey": "warm-content-1"})
+    assert saved.status_code == 200, saved.text
+    assert threads and threads[0] is not None
+    threads[0].join(10)
+    computed = []
+    real = fast_preview._compute
+    monkeypatch.setattr(fast_preview, "_compute", lambda *a: computed.append(a) or real(*a))
+    page = client.get(f"/api/v1/documents/{did}/preview/blocks?limit=5000").json()["data"]
+    assert page["documentRevision"] == saved.json()["data"]["revision"] and computed == []
