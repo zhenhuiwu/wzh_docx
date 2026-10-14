@@ -163,3 +163,23 @@ function baseBlocks(draftBase?: string | null): Set<string> {
 export function restoreSplitText(saved: number, others: number): string {
   return `已恢复并保存 ${saved} 处；另有 ${others} 处属于他人负责的部分，未保存，已保留在本机草稿`;
 }
+
+/**
+ * 设计师复验（2ffb8a6）P2：未保存内容逐条写明所在章节和现在的负责人（如“附录 · 王测负责”）。
+ * 章节按草稿里这一段之前最近的标题；负责人取该标题在当前分工里的负责人（locked：对象 ID → 负责人姓名）。
+ */
+export function describePart(draftMarkdown: string, part: string, baseline: BaselineObject[], locked: Map<string, string>): { section: string; owner: string } {
+  let heading = "";
+  for (const block of splitBlocks(draftMarkdown)) {
+    if (block.kind === "heading") heading = block.body;
+    else if (block.body.trim() === part.trim()) break;
+  }
+  const section = heading.replace(/^#+\s*/, "").trim();
+  const id = baseline.find(item => item.kind === "heading" && item.markdown.trim() === heading.trim())?.id;
+  return { section, owner: id ? locked.get(id) ?? "" : "" };
+}
+
+export function partWhere(part: { section?: string; owner?: string }): string {
+  const owner = part.owner ? (part.owner === "只读" ? "只读章节" : `${part.owner}负责`) : "";
+  return [part.section, owner].filter(Boolean).join(" · ");
+}

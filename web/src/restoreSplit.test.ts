@@ -36,3 +36,14 @@ describe("恢复草稿按分工拆开", () => {
     expect(unsavedKey("u", "d")).toBe("docwb.a07.stash.u.d.unsaved");
   });
 });
+
+import { describePart, partWhere } from "./assignmentModel";
+describe("describePart", () => {
+  it("names section and current owner", () => {
+    const md = "# 需求\n\n甲\n\n# 附录\n\n别人的段（改）";
+    const base = [{ id: "h2", kind: "heading", markdown: "# 附录" }] as never;
+    const where = describePart(md, "别人的段（改）", base, new Map([["h2", "王测"]]));
+    expect(where).toEqual({ section: "附录", owner: "王测" });
+    expect(partWhere(where)).toBe("附录 · 王测负责");
+  });
+});

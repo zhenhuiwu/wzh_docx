@@ -2,6 +2,7 @@
 /** QA 复验 16 P1-1：恢复草稿后没保存的“他人负责部分”的内容——逐段查看、复制（内容留在本机，不在这里删）。 */
 import { nextTick, ref, watch } from "vue";
 import type { UnsavedPart } from "../unsavedOthers";
+import { partWhere } from "../assignmentModel";
 
 const props = defineProps<{ open: boolean; parts: UnsavedPart[] }>();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -28,7 +29,7 @@ function when(part: UnsavedPart) {
       <p class="dialog-text">这些修改改到了现在由他人负责的部分，没有保存到服务器，只保留在这台电脑上。可以复制后发给负责人，或粘贴到你负责的位置。</p>
       <ol class="parts">
         <li v-for="(part, index) in parts" :key="index" data-testid="unsaved-part">
-          <div class="part-head"><span class="meta">第 {{ index + 1 }} 处<template v-if="when(part)"> · {{ when(part) }}</template></span>
+          <div class="part-head"><span class="meta">第 {{ index + 1 }} 处<template v-if="partWhere(part)"> · {{ partWhere(part) }}</template><template v-if="when(part)"> · {{ when(part) }}</template></span>
             <button type="button" class="ghost sm" :data-testid="`unsaved-copy-${index}`" @click="copy(part.text, index)">{{ copied === index ? '已复制' : '复制' }}</button></div>
           <pre class="text">{{ part.text }}</pre>
         </li>

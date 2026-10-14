@@ -44,7 +44,7 @@ import { ApiError } from "../api/client";
 import { assignBlockIds, keepalivePatch, rememberSaveKey, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
-import { keepMineOnly, lockedText, restoreSplitText, splitRestore, userChanged, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
+import { describePart, keepMineOnly, lockedText, restoreSplitText, splitRestore, userChanged, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, changeRevisionBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
@@ -251,8 +251,9 @@ let settledOthers = 0;
 function readUnsaved(record: DocumentRecord) {
   try { unsavedParts.value = parseUnsaved(window.localStorage.getItem(unsavedKey(account(), record.id))); } catch { unsavedParts.value = []; }
 }
-function keepUnsaved(record: DocumentRecord, texts: string[]) {
-  unsavedParts.value = appendUnsaved(unsavedParts.value, texts, Date.now());
+function keepUnsaved(record: DocumentRecord, texts: string[], draftMarkdown = "") {
+  const locked = assignInfo.value?.locked ?? new Map<string, string>();
+  unsavedParts.value = appendUnsaved(unsavedParts.value, texts, Date.now(), text => describePart(draftMarkdown, text, baselineObjects, locked));
   try { window.localStorage.setItem(unsavedKey(account(), record.id), JSON.stringify(unsavedParts.value)); } catch { /* 本机存储不可用：仍在本页可查看 */ }
 }
 const exporting = ref(false);
@@ -454,7 +455,7 @@ async function settleDraftOwnershipNow() {
     const mine = userChanged(kept.stashed, base);
     if (mine.length) {
       addStash(mine.join("\n\n"), null, true);
-      keepUnsaved(record, mine);
+      keepUnsaved(record, mine, draft.markdown);
       settledOthers += mine.length;
     }
     const server = baselineObjects.map(item => item.markdown).join("\n\n") + "\n";
@@ -3603,7 +3604,7 @@ async function restoreLocalDraft() {
     const othersCount = others.length + settledOthers;
     settledOthers = 0;
     const restoring = others.length ? split!.markdown : draft.markdown;
-    if (others.length) keepUnsaved(record, others);
+    if (others.length) keepUnsaved(record, others, draft.markdown);
     // S5：服务器版本已变化时按草稿的基准修订做三方合并；改到同一段落的进入冲突面板，不覆盖别人的修改。
     markdownContent.value = restoring;
     draftRestoring = true;
