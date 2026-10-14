@@ -220,6 +220,8 @@ def test_patch_rejects_word_body_style_headings(team, monkeypatch):
         seen.append({str(item["id"]) for item in rows})
         return {str(item["id"]): 2 for item in rows if str(item["id"]) == p1["objectId"]}
     monkeypatch.setattr(fast_preview, "word_heading_levels", levels)
+    # QA 复验 16 P2：保存成功后后台预热（warm_after_commit → 预览块）也会调 word_heading_levels（整篇），与本断言竞争；本用例不需要预热
+    monkeypatch.setattr(fast_preview, "warm_after_commit", lambda *args, **kwargs: None)
     headers = _as(client, "editor")
     rejected = patch(client, did, 1, [update(p1, "改了标题段。")], headers, "word-heading-1")
     assert rejected.status_code == 403, rejected.text
