@@ -819,6 +819,9 @@ def get_document(request: Request, document_id: str) -> dict[str, object]:
     # 打开时读到的正文与快速预览是同一修订，前端不必再读一遍
     from app.patch_inflight import wait_idle
     wait_idle(did)
+    # QA 复验 14：本人与本人的冲突（如旧版本关页保存留下的）重开时自动处理，编辑区不再被锁
+    from app.document_commit import auto_resolve_self_conflicts
+    auto_resolve_self_conflicts(request, did, session.user_id)
 
     with connect() as conn:
         row = _document_row(conn, did, session.user_id, admin)

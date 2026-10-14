@@ -1311,3 +1311,55 @@ def _resolve_result(connection, did: UUID, conflict_id: UUID, user_id: UUID, sto
     return {"documentRevision": int(document["revision"]), "changeId": str(change_id) if change_id else None,
             "items": results, "conflictStatus": status, "mineOpen": mine_open,
             "markdownContent": document["markdown_content"]}
+
+
+def auto_resolve_self_conflicts(request: Request, did: UUID, user_id) -> list[str]:
+    """QA 复验 14（PM 定）：重开时，本人未处理的冲突若是“自己跟自己冲突”——冲突以来该段只被本人改过
+    （从冲突基准修订到现在，该对象的每次修改都出自本人），且段落仍停在冲突时的修订——就按“保留我的”（最新一份快照）
+    自动处理：较新的内容写入正文，冲突记为已处理（不删除）。夹着别人的修改则保持为真冲突。返回自动处理的冲突 id。"""
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT id, base_revision, payload_json FROM document_conflicts WHERE document_id=%s AND actor_id=%s AND status='open' "
+            "ORDER BY created_at", (did, user_id)).fetchall()
+        plans: list[tuple[str, int, list[ResolveItem]]] = []
+        for conflict in rows:
+            payload = json.loads(conflict["payload_json"])
+            open_items = connection.execute(
+                "SELECT item_index FROM document_conflict_items WHERE conflict_id=%s AND status='open'", (conflict["id"],)).fetchall()
+            by_index = {int(item["itemIndex"]): item for item in payload["conflicts"]}
+            items: list[ResolveItem] = []
+            for open_item in open_items:
+                index = int(open_item["item_index"])
+                item = by_index.get(index)
+                if item is None or item["reason"] != "MODIFIED" or item["mine"].get("deleted"):
+                    break
+                refreshed = _latest_theirs(payload, index) or {}
+                object_ids = refreshed.get("objectIds", item["objectIds"])
+                revisions = refreshed.get("theirsRevisions", item.get("theirsRevisions", {}))
+                if len(object_ids) != 1:
+                    break
+                ref = object_ids[0]
+                live = connection.execute("SELECT revision, deleted_at FROM document_objects WHERE id=%s AND document_id=%s",
+                                          (ref, did)).fetchone()
+                if live is None or live["deleted_at"] is not None or int(live["revision"]) != revisions.get(ref):
+                    break
+                actors = connection.execute(
+                    """SELECT DISTINCT c.actor_id FROM document_object_changes oc JOIN document_changes c ON c.id=oc.change_id
+                       WHERE oc.object_id=%s AND c.document_id=%s AND c.doc_revision>%s""",
+                    (ref, did, int(conflict["base_revision"]))).fetchall()
+                if not actors or any(str(actor["actor_id"]) != str(user_id) for actor in actors):
+                    break
+                items.append(ResolveItem(itemIndex=index, action="keep_mine", theirsRevision=int(live["revision"])))
+            else:
+                if items:
+                    revision = int(connection.execute("SELECT revision FROM documents WHERE id=%s", (did,)).fetchone()["revision"])
+                    plans.append((str(conflict["id"]), revision, items))
+    done = []
+    for conflict_id, revision, items in plans:
+        try:
+            resolve_conflict(request, str(did), conflict_id,
+                             ResolveBody(clientSaveKey=f"auto-self-{conflict_id}"[:80], baseDocumentRevision=revision, items=items))
+            done.append(conflict_id)
+        except AppError:
+            continue  # 处理不了（期间又有修改等）就留给用户手动处理
+    return done
