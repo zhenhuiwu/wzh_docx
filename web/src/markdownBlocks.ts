@@ -238,3 +238,14 @@ export function keepalivePatch(content: string, base: RevisionedObject[], maxOps
   for (const object of base) if (!kept.has(object.id)) ops.push({ op: "delete", objectId: object.id, baseRevision: object.revision });
   return ops.length && ops.length <= maxOps ? ops : null;
 }
+
+/**
+ * QA 复验 12：大文档保存（/content）返回存活对象的 [id, revision]（按位置）。与保存后的正文逐块对上时，
+ * 直接作为关页按块保存的基准（Ctrl+S 后马上关页也能发 keepalive）；块数对不上返回 null，交给再取一次对象。
+ */
+export function revisionedFromSave(content: string, pairs: Array<[string, number]> | undefined | null): RevisionedObject[] | null {
+  if (!pairs?.length) return null;
+  const blocks = splitBlocks(content).filter(block => block.body.trim());
+  if (blocks.length !== pairs.length) return null;
+  return blocks.map((block, index) => ({ id: pairs[index][0], kind: block.kind, revision: pairs[index][1], markdown: block.body }));
+}

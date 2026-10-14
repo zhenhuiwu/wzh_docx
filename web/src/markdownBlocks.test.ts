@@ -64,3 +64,18 @@ describe("keepalivePatch（关页按块保存）", () => {
     ]);
   });
 });
+
+import { revisionedFromSave } from "./markdownBlocks";
+describe("revisionedFromSave（保存响应直接给出关页按块保存的基准）", () => {
+  const content = "# 一\n\n第一段。\n\n第二段。\n";
+  it("块数对上：按位置配 id/修订，正文取保存后的块", () => {
+    const base = revisionedFromSave(content, [["a", 1], ["b", 3], ["c", 2]]);
+    expect(base?.map(item => [item.id, item.revision, item.markdown.trim()])).toEqual([["a", 1, "# 一"], ["b", 3, "第一段。"], ["c", 2, "第二段。"]]);
+    // 以它为基准：只改第二段 → 只有一条 update，带服务器上的修订号
+    expect(keepalivePatch("# 一\n\n第一段。\n\n第二段改。\n", base!)).toEqual([{ op: "update", objectId: "c", baseRevision: 2, markdown: "第二段改。" }]);
+  });
+  it("块数对不上或没有：null", () => {
+    expect(revisionedFromSave(content, [["a", 1]])).toBeNull();
+    expect(revisionedFromSave(content, undefined)).toBeNull();
+  });
+});

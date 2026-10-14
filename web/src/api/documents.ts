@@ -310,7 +310,7 @@ export async function insertDocumentSection(id: string, expectedRevision: number
 
 // ---- 阶段2 S5：合并保存与冲突（01 §4.3、§4.4） ----
 export interface Person { id: string; name: string }
-export interface ContentSaveResult { id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; snapshotLimited?: { conflictId: string; itemIndex: number; markdown?: string }[]; frozenByConflict?: string[]; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
+export interface ContentSaveResult { /** 大文档：保存后存活对象 [id, revision]（按位置） */ objectRevisions?: Array<[string, number]>; id: string; markdownContent: string; status: DocumentRecord["status"]; revision: number; updatedAt: string; merged?: boolean; changeId?: string | null; changedBy?: Array<Person & { objects: number }>; replayed?: boolean; snapshotLimited?: { conflictId: string; itemIndex: number; markdown?: string }[]; frozenByConflict?: string[]; whitespaceDropped?: number; whitespaceDeleted?: number; theirsWhitespaceOverridden?: number }
 export interface ConflictLocation { headingPath?: string[]; ordinal?: number | null; kind?: string; label?: string | null }
 export interface ConflictSide { markdown?: string | null; revision?: number | null; deleted?: boolean; updatedBy?: Person | null; updatedAt?: string | null; deletedBy?: Person | null; deletedAt?: string | null; /** K1-M1：这一段最近一次是冲突作者本人改的（如重新打开后在正文里改了） */ latestBySelf?: boolean }
 export interface ConflictItem {
@@ -357,6 +357,12 @@ export async function resolveConflict(id: string, conflictId: string, clientSave
   });
   if (!body?.data) throw new Error("处理冲突响应不完整。");
   return body.data;
+}
+/** 按关页保存键查落库的修订号；没落库返回 null。 */
+export async function changeRevisionBySaveKey(id: string, clientSaveKey: string): Promise<number | null> {
+  const body = await apiRequest<{ data: Array<{ docRevision?: number }> }>(`/documents/${id}/changes?clientSaveKey=${encodeURIComponent(clientSaveKey)}`);
+  const item = body?.data?.[0];
+  return item ? Number(item.docRevision ?? 0) : null;
 }
 export async function findChangeBySaveKey(id: string, clientSaveKey: string): Promise<boolean> {
   const body = await apiRequest<{ data: unknown[] }>(`/documents/${id}/changes?clientSaveKey=${encodeURIComponent(clientSaveKey)}`);

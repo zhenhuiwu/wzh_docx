@@ -38,13 +38,13 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { assignBlockIds, keepalivePatch, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
+import { assignBlockIds, keepalivePatch, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
 import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
-import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, findChangeBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
+import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, changeRevisionBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
 import { listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
@@ -1512,8 +1512,10 @@ function remapLoadPoint(mark: { texts: string[]; index: number; offset: number }
   loadPoint = node ? { node, offset: remaining } : { node: block, offset: 0 };
 }
 async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[]) {
+  let landedRevision = 0;
   const result = await waitForCloseSaves(drafts, async draft => {
-    if (await findChangeBySaveKey(record.id, draft.pendingSave!.clientSaveKey).catch(() => false)) return true;
+    const revision = await changeRevisionBySaveKey(record.id, draft.pendingSave!.clientSaveKey).catch(() => null);
+    if (revision !== null) { landedRevision = Math.max(landedRevision, revision); return true; }
     // 审查 S5 / 测试 L7：合并后与服务器正文相同时不记键
     if (!draft.wholeDocument) return false;
     return (await getDocument(record.id)).markdownContent === draft.markdown;
@@ -1526,7 +1528,9 @@ async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[]) {
   // 打开时读到的是落库前的正文：编辑区还锁着、没有未保存修改，直接换成服务器最新的（快速预览，见 editingHtml）
   // 等待期间点过的位置（记下的输入要写回那里）跟着重绘换算到新节点上，否则字只能放进“没能写入”的提示
   const mark = landedAny ? pointMark() : null;
-  const fresh = landedAny ? await refreshFromServer({ reason: "正在载入刚保存的内容…" }).catch(() => false) : true;
+  // QA 复验 12：打开时读到的正文已含关页保存（后端让文档详情等关页保存落库）就不再读一遍
+  const covered = landedAny && landedRevision > 0 && landedRevision <= record.revision;
+  const fresh = landedAny && !covered ? await refreshFromServer({ reason: "正在载入刚保存的内容…" }).catch(() => false) : true;
   if (mark) remapLoadPoint(mark);
   if (document.value !== record) return;
   if (waiting.length) {
@@ -3742,7 +3746,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
       record.revision = result.revision;
       record.status = result.status;
       record.markdownContent = serverText;
-      scheduleKeepaliveBase(record);
+      scheduleKeepaliveBase(record, result.objectRevisions);
       mergeBase = null;
       domBase = dsend;
       let rerender = false;
@@ -4534,9 +4538,12 @@ function onOffline() { online.value = false; }
  * 保存成功后（只对超过 keepalive 上限、关页要走按块保存的大文档）稍后重取对象，把基准前移到刚保存的修订。
  */
 let keepaliveTimer: number | undefined;
-function scheduleKeepaliveBase(record: DocumentRecord) {
+function scheduleKeepaliveBase(record: DocumentRecord, pairs?: Array<[string, number]>) {
   window.clearTimeout(keepaliveTimer);
   if (new Blob([record.markdownContent]).size <= 60000) return;
+  // QA 复验 12：保存响应带了对象修订就立即更新（Ctrl+S 后 0.3 s 内关页也能按块保存）；对不上才稍后再取
+  const fromSave = revisionedFromSave(record.markdownContent, pairs);
+  if (fromSave) { keepaliveBase = { revision: record.revision, objects: fromSave }; return; }
   keepaliveTimer = window.setTimeout(() => {
     const revision = record.revision;
     void getAllObjects(record.id).then(data => {
