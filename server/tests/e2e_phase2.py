@@ -162,13 +162,19 @@ def paragraph(page: Page, text: str):
     return page.locator(".paper-content p", has_text=text).first
 
 
+def caret_to_end(target) -> None:
+    """光标放到段落末尾。End 键只到折行的行尾（浏览器原生行为，与产品无关），长段落里会把字打进段落中间。"""
+    target.evaluate("""e => { const r = document.createRange(); r.selectNodeContents(e); r.collapse(false);
+        const s = getSelection(); s.removeAllRanges(); s.addRange(r); }""")
+
+
 def type_after(page: Page, text: str, addition: str):
     # 合并/撤销后编辑区会按服务器正文重绘，重绘期间不可编辑
     expect(page.locator(".paper-content")).to_have_attribute("contenteditable", "true", timeout=30000)
     target = paragraph(page, text)
     target.scroll_into_view_if_needed()
     target.click()
-    page.keyboard.press("End")
+    caret_to_end(target)
     page.keyboard.type(addition)
 
 
@@ -426,7 +432,7 @@ def main() -> int:
             target = paragraph(b, p_upd2)
             target.scroll_into_view_if_needed()
             target.click()
-            b.keyboard.press("End")
+            caret_to_end(target)
             b.keyboard.type("（打字甲", delay=60)
             api_append(p_upd, "（张工第三次）")
             b.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
@@ -444,7 +450,7 @@ def main() -> int:
             b.wait_for_timeout(300)
             target = paragraph(b, p_upd2)
             target.click()
-            b.keyboard.press("End")
+            caret_to_end(target)
             b.keyboard.type("（紧接着输入）", delay=80)
             wait_saved(b, 40000)
             expect(paragraph(b, "（紧接着输入）")).to_be_visible(timeout=15000)
@@ -461,7 +467,7 @@ def main() -> int:
             api_append(p_upd, "（张工第五次）")
             target = paragraph(b, p_upd2)
             target.click()
-            b.keyboard.press("End")
+            caret_to_end(target)
             b.keyboard.type("（锁前）", delay=40)
             # 停止输入 3 秒触发自动保存，服务器合并张工的修改后重绘编辑区；重绘一开始就继续打字
             b.wait_for_function("window.__previewDelayed > 0", timeout=30000, polling=20)
@@ -475,7 +481,8 @@ def main() -> int:
                 at = server.find(word)
                 return server[max(0, at - 120):at + 160] if at >= 0 else f"缺少 {word}"
             assert "（锁前）" in server and "（张工第五次）" in server, (around("（锁前）"), around("（张工第五次）"), around(p_upd2[:8]))
-            assert "锁定中输入" in server, around("（锁前）")
+            # 重绘前后光标不移位：重绘期间接着打的字紧跟在“（锁前）”后面，不插进别的标记
+            assert "（锁前）（锁定中输入）" in server, around("（锁前）")
             expect(b.locator(".paper-content")).to_contain_text("（张工第五次）", timeout=20000)
             expect(b.locator(".paper-content")).to_contain_text("（锁定中输入）")
             shot(b, "28-他人更新时打字不丢字")
@@ -523,7 +530,7 @@ def main() -> int:
             page.wait_for_function("(window.__previewDelayed || 0) > 0", timeout=30000, polling=20)
             target = second_none("A")
             target.click()
-            page.keyboard.press("End")
+            caret_to_end(target)
             page.keyboard.type("（写在乙A后的无）", delay=40)
             page.wait_for_timeout(6000)
             wait_saved(page, 40000)
@@ -543,7 +550,7 @@ def main() -> int:
             type_after(page, "探针B丙段落", "（李工改丙B）")
             target = second_none("B")
             target.click()
-            page.keyboard.press("End")
+            caret_to_end(target)
             insert_before("B")
             page.evaluate(slow_preview, "fail-then-delay")
             expect(page.locator(".paper-content")).to_have_attribute("aria-busy", "true", timeout=20000)
@@ -609,7 +616,7 @@ def main() -> int:
             other = paragraph(b, p_offline)
             other.scroll_into_view_if_needed()
             other.click()
-            b.keyboard.press("End")
+            caret_to_end(other)
             for route in held:
                 route.continue_()
             b.unroute("**/conflicts/*/resolve")
@@ -734,8 +741,7 @@ def main() -> int:
                 if "（回来后新输入）" in server:
                     break
                 page.wait_for_timeout(500)
-            # End 只到折行的行尾：长段落里新输入可能落在“（会话过期前未保存）”中间，去掉新输入再查前一段内容
-            assert "（会话过期前未保存）" in server.replace("（回来后新输入）", "") and "（回来后新输入）" in server
+            assert "（会话过期前未保存）" in server and "（回来后新输入）" in server
             page.reload()
             expect(page.locator(".paper-content")).to_be_visible(timeout=60000)
             page.wait_for_timeout(2000)
