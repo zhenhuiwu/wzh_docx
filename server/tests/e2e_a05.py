@@ -183,6 +183,8 @@ def row(page: Page, user) -> object:
 
 def open_overview(page: Page, project: str):
     page.goto(f"{WEB}/projects/{project}")
+    # 39bb8cb 起项目首页把“成员与权限”收进右栏按钮（或“…”菜单），点开后才渲染成员区
+    page.get_by_test_id("side-manage-members").click(timeout=30000)
     expect(page.get_by_test_id("members-section")).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("members-count")).to_be_visible(timeout=30000)
 
@@ -212,7 +214,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         @step("V1 项目内只有概述/文档编写，没有成员导航；概述里有成员与权限")
         def v1():
             open_overview(page, pid)
-            expect(page.get_by_role("navigation", name="项目内导航").get_by_role("link")).to_have_text(["项目概述", "文档编写"])
+            expect(page.get_by_role("navigation", name="项目内导航").get_by_role("link")).to_have_text(["首页", "文档", "分工", "基线"])  # 95ac7ee/39bb8cb 改名并增加分工、基线
             expect(page.locator('aside[aria-label="主导航"] >> text=成员')).to_have_count(0)
             expect(page.get_by_test_id("members-count")).to_have_text("3")
             expect(page.get_by_test_id("frame-owners")).to_contain_text(admin_name)
@@ -269,7 +271,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         @step("V4 普通账号进入所分配项目并能编写；概述里没有管理入口；未加入的项目 404")
         def v4():
             login(page2, f"lisi{RUN}")
-            expect(page2.locator(f'[data-testid=project-my-role][data-project-id="{pid}"]')).to_have_text("编写人员")
+            page2.goto(f"{WEB}/projects")  # 编写人员登录落在「我的编写」，角色列在「项目」列表
+            expect(page2.locator(f'[data-testid=project-my-role][data-project-id="{pid}"]')).to_have_text("编写人员", timeout=30000)
             expect(page2.locator(f'[data-testid=project-my-role][data-project-id="{data["other"]["id"]}"]')).to_have_count(0)
             page2.goto(f"{WEB}/projects/{pid}/documents/{doc}")
             expect(page2.locator(".paper-content")).to_have_attribute("contenteditable", "true", timeout=60000)
@@ -341,12 +344,15 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
         @step("V15 成员操作不让“编辑项目”表单 409")
         def v15():
             open_overview(page, pid)
-            page.get_by_role("button", name="编辑项目").click()
+            # 39bb8cb：“编辑项目”收进页头“…”菜单
+            page.get_by_test_id("project-more").locator("summary").click()
+            page.get_by_test_id("menu-edit-project").click()
             page.locator(".edit-form textarea").fill(f"保障资源管理、维修计划与器材库存模块的需求与设计文档。{RUN}")
             admin.set_role(pid, users["sunmin"], "viewer")
             page.get_by_role("button", name="保存项目").click()
             expect(page.locator(".edit-form")).to_have_count(0, timeout=10000)
-            expect(page.locator(".description")).to_contain_text(RUN)
+            # 39bb8cb：首页不再展示项目说明（只在“…›编辑项目”表单里），改用接口核对已保存、未被 409
+            assert RUN in (admin.call("GET", f"/projects/{pid}").get("description") or ""), "项目说明未保存"
         v15()
 
         @step("V16/V17 接口：缺版本号 422；reviewer 不能分配，旧数据显示“审核人员（只读）”")
@@ -511,7 +517,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page.get_by_test_id("members-notice")).to_contain_text("项目已归档，成员和权限不能调整。恢复项目后才能修改。")
             # 21 S-1/S-3：页头“已归档”，概述“已归档（原：进行中）”；说明行不再说“可以添加成员”；管理员有［恢复项目］
             expect(page.get_by_test_id("frame-archived")).to_have_text("已归档")
-            expect(page.get_by_test_id("project-status")).to_have_text("已归档（原：进行中）")
+            # 39bb8cb：概述里的“已归档（原：…）”状态行移除，原状态改为页头“已归档”标签的 title
+            expect(page.get_by_test_id("frame-archived")).to_have_attribute("title", "归档前状态：进行中")
             expect(page.get_by_test_id("members-note")).not_to_contain_text("可以添加成员")
             expect(page.get_by_test_id("project-restore")).to_be_visible()
             expect(page.get_by_test_id("member-role-select")).to_have_count(0)
@@ -580,7 +587,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             open_overview(page, p5["id"])
             expect(page.get_by_test_id("frame-no-owner")).to_have_text("暂无启用的负责人")
             expect(page.get_by_test_id("frame-owners")).to_have_text("负责人：—")
-            expect(page.get_by_test_id("project-no-owner")).to_be_visible()
+            # 39bb8cb：首页不再单列“暂无启用的负责人”行，页头 frame-no-owner（上两行）即该提示
             expect(page.get_by_test_id("members-no-owner")).to_contain_text("请把一位启用的成员设为负责人")
             shot(page, "A05-11-暂无启用的负责人")
             page.goto(f"{WEB}/projects?name={RUN}")

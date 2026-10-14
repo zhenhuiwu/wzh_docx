@@ -229,6 +229,8 @@ def main() -> int:
 
         @step("成员可见项目与文档列表（P0-4 / N-S5）")
         def members_visible():
+            # 编写人员登录落在「我的编写」（只列分给自己的部分），项目可见性到「项目」列表核对
+            b.goto(f"{WEB}/projects")
             expect(b.get_by_text(data["project"]["name"]).first).to_be_visible(timeout=30000)
             b.goto(f"{WEB}/projects/{data['project']['id']}/documents")
             expect(b.get_by_text("软件需求规格说明").first).to_be_visible(timeout=30000)
