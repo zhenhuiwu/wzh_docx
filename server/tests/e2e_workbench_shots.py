@@ -43,7 +43,7 @@ def shot(page: Page, name: str, **kwargs):
     print(f"shot {PREFIX}-{name}", flush=True)
 
 
-def ai_routes(page: Page, revision_of):
+def ai_routes(page: Page, revision_of, anchor_of=None):
     def capabilities(route):
         ok = {"available": True}
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"data": {
@@ -56,7 +56,9 @@ def ai_routes(page: Page, revision_of):
         html = "".join(f"<p>{part}</p>" for part in text.split("\n\n"))
         lines = [
             {"type": "progress", "stage": "writing", "message": "正在编写", "content": "", "html": "", "revision": revision},
-            {"type": "done", "content": text, "html": html, "revision": revision, "message": "", "allowedModes": ["append", "replace"]},
+            {"type": "done", "content": text, "html": html, "revision": revision, "message": "", "allowedModes": ["append", "replace"],
+             # 30 §4.4 起本节草稿按块操作渲染成逐条建议（aiSuggestions.renderSuggestions），只给整段文字不再出建议卡
+             **({"operations": [{"op": "insertAfter", "blockId": anchor, "content": text, "html": html}]} if (anchor := anchor_of() if anchor_of else None) else {})},
         ]
         route.fulfill(status=200, content_type="application/x-ndjson", body="\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n")
     page.route("**/sections/draft*", draft)
@@ -72,7 +74,8 @@ def main() -> int:
     doc_id = data["document"]["id"]
     zhang = data["zhang"]
     markdown = zhang.call("GET", f"/documents/{doc_id}")["markdownContent"]
-    p_edit, p_conflict, p_dirty, p_draft = base.pick_paragraphs(markdown, 4)
+    p_edit, p_conflict, p_dirty, p_draft = base.pick_paragraphs(markdown, 4, frozenset(  # 只读章节（371dc3d）里的段落改不了
+        item["title"] for item in zhang.call("GET", f"/documents/{doc_id}/locked-chapters")["chapters"]))
     project_id = data["project"]["id"]
 
     # 整篇保存样例：嵌套列表（06：预览块与对象对不上）
@@ -91,6 +94,11 @@ def main() -> int:
 
     def revision():
         return zhang.call("GET", f"/documents/{doc_id}")["revision"]
+
+    def requirement_heading():
+        # 写作助手截图选中“需求”一章：建议插在这一章标题之后（标题只接受 insertAfter）
+        objects = zhang.call("GET", f"/documents/{doc_id}/objects")["objects"]
+        return next((item["id"] for item in objects if item["kind"] == "heading" and item["markdown"].lstrip("#").strip().endswith("需求")), None)
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -200,7 +208,7 @@ def main() -> int:
 
         # 写作助手（拦截能力与草稿流）
         w = page_for(f"e2e-zhang-{base.RUN}")
-        ai_routes(w, revision)
+        ai_routes(w, revision, requirement_heading)
         base.open_doc(w, data)
         w.wait_for_timeout(800)
         outline_item(w, "需求").click() if outline_item(w, "需求").count() else None
@@ -269,6 +277,10 @@ def main() -> int:
         ctx = b.context
         b.close()
         ctx.set_offline(False)
+        # 服务器还是草稿基于的那一版时会直接自动恢复（9f140e8 起）、看不到恢复条：先让张工改一下别的段，恢复条才会出现
+        rec = zhang.call("GET", f"/documents/{doc_id}")
+        zhang.call("PATCH", f"/documents/{doc_id}/content", json={"expectedRevision": rec["revision"], "allowMerge": True, "clientSaveKey": str(uuid.uuid4()),
+                                                                  "markdownContent": rec["markdownContent"].replace(p_edit, p_edit + "（张工补）", 1)})
         r = ctx.new_page()
         base.open_doc(r, data)
         expect(r.get_by_test_id("draft-recovery")).to_be_visible(timeout=20000)
