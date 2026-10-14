@@ -38,7 +38,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createTurndown, editorMarkdown, storedImageRule } from "../editorMarkdown";
 import { ApiError } from "../api/client";
-import { assignBlockIds, keepalivePatch, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
+import { assignBlockIds, keepalivePatch, rememberSaveKey, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
 import { keepMineOnly, lockedText, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
@@ -294,6 +294,10 @@ function readStash() {
 let baselineObjects: BaselineObject[] = [];
 /** 复验 P2-1：关页按块保存的基准（与 documentRevision 对应的对象及修订号） */
 let keepaliveBase: { revision: number; objects: RevisionedObject[] } | null = null;
+// QA 复验 14：本页最近发出的保存键（含还在途的）。关页按块保存带上它们，服务器在这些本人保存之上重新定基，不自冲突。
+// 不随基准更新清空：基准更新时可能还有后一次保存在途；服务器只认本人、且修订确由这些键产生的修改，多带无害
+let savesSinceKeepaliveBase: string[] = [];
+function setKeepaliveBase(value: typeof keepaliveBase) { keepaliveBase = value; }
 let baseSnapshot: { revision: number; objects: BaselineObject[] } | null = null;
 let ownershipSeq = 0;
 const assignMode = computed(() => document.value?.permissions?.assignmentMode ?? null);
@@ -331,7 +335,7 @@ async function loadOwnership(record = document.value) {
     const [data, view, chapters] = await Promise.all([getAllObjects(record.id), getAssignments(record.id).catch(() => null), getLockedChapters(record.id).catch(() => [] as LockedChapter[])]);
     if (document.value !== record || seq !== ownershipSeq) return;
     baselineObjects = data.objectModel ? data.objects.map(item => ({ id: item.id, kind: item.kind, markdown: item.markdown })) : [];
-    keepaliveBase = data.objectModel ? { revision: data.documentRevision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null;
+    setKeepaliveBase(data.objectModel ? { revision: data.documentRevision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null);
     // 27 复验 M-4：编辑区渲染所依据的那一版对象（ID 与编辑区 data-object-id 一致），“只保存我负责的部分”以它为底
     if (data.objectModel && data.documentRevision === record.revision) baseSnapshot = { revision: record.revision, objects: [...baselineObjects] };
     const locked = new Map<string, string>();
@@ -3710,6 +3714,7 @@ function saveContent(content: string, trigger: "auto" | "manual", baseRevision?:
     pendingKey = { content, key: crypto.randomUUID(), base, dsend, gen, editor, ...(explicit !== null ? { baseMarkdown: explicit } : {}) };
   }
   const key = pendingKey.key;
+  savesSinceKeepaliveBase = rememberSaveKey(savesSinceKeepaliveBase, key);
   flushDraft();
   savePromise = (async () => {
     try {
@@ -4545,12 +4550,12 @@ function scheduleKeepaliveBase(record: DocumentRecord, pairs?: Array<[string, nu
   if (new Blob([record.markdownContent]).size <= 60000) return;
   // QA 复验 12：保存响应带了对象修订就立即更新（Ctrl+S 后 0.3 s 内关页也能按块保存）；对不上才稍后再取
   const fromSave = revisionedFromSave(record.markdownContent, pairs);
-  if (fromSave) { keepaliveBase = { revision: record.revision, objects: fromSave }; return; }
+  if (fromSave) { setKeepaliveBase({ revision: record.revision, objects: fromSave }); return; }
   keepaliveTimer = window.setTimeout(() => {
     const revision = record.revision;
     void getAllObjects(record.id).then(data => {
       if (document.value !== record || record.revision !== revision || data.documentRevision !== revision) return;
-      keepaliveBase = data.objectModel ? { revision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null;
+      setKeepaliveBase(data.objectModel ? { revision, objects: data.objects.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, markdown: item.markdown })) } : null);
     }).catch(() => undefined);
   }, KEEPALIVE_BASE_DELAY_MS);
 }
@@ -4565,10 +4570,10 @@ function onPageHide() {
     // keepalive 正文上限 64KB：大文档改为只提交改过的块（/objects/patch）；配不上或仍超限时只留本机草稿
     const ops = explicit === null && mergeBase === null && keepaliveBase?.revision === record.revision ? keepalivePatch(content, keepaliveBase.objects) : null;
     const key = crypto.randomUUID();
-    if (!ops || new Blob([JSON.stringify({ clientSaveKey: key, baseDocumentRevision: record.revision, atomic: true, ops })]).size > 60000) return;
+    if (!ops || new Blob([JSON.stringify({ clientSaveKey: key, baseDocumentRevision: record.revision, atomic: true, ops, afterSaveKeys: savesSinceKeepaliveBase })]).size > 60000) return;
     pendingKey = { content, key, base: record.revision, dsend: domPair?.dom ?? content, gen: fallbackGen };
     persistLocalDraft();
-    void patchObjectsKeepalive(record.id, record.revision, ops, key).catch(() => undefined);
+    void patchObjectsKeepalive(record.id, record.revision, ops, key, savesSinceKeepaliveBase).catch(() => undefined);
     return;
   }
   const base = explicit !== null ? record.revision : mergeBase ?? record.revision;

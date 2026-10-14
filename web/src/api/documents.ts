@@ -147,8 +147,8 @@ export async function previewDocument(id: string): Promise<{ html: string; objec
 }
 
 /** 复验 P2-1：关页时按块保存（只带改过的块，放得进 keepalive 的 64KB）。 */
-export function patchObjectsKeepalive(id: string, baseDocumentRevision: number, ops: unknown[], clientSaveKey: string): Promise<unknown> {
-  return apiRequest(`/documents/${id}/objects/patch`, { method: "POST", json: { clientSaveKey, baseDocumentRevision, atomic: true, ops }, keepalive: true });
+export function patchObjectsKeepalive(id: string, baseDocumentRevision: number, ops: unknown[], clientSaveKey: string, afterSaveKeys: string[] = []): Promise<unknown> {
+  return apiRequest(`/documents/${id}/objects/patch`, { method: "POST", json: { clientSaveKey, baseDocumentRevision, atomic: true, ops, ...(afterSaveKeys.length ? { afterSaveKeys } : {}) }, keepalive: true });
 }
 
 /** 43 快速预览：按对象生成的 HTML 片段（不经 Word 往返，版式近似），编辑区先用它挂载。 */

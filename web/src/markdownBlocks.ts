@@ -249,3 +249,8 @@ export function revisionedFromSave(content: string, pairs: Array<[string, number
   if (blocks.length !== pairs.length) return null;
   return blocks.map((block, index) => ({ id: pairs[index][0], kind: block.kind, revision: pairs[index][1], markdown: block.body }));
 }
+
+/** QA 复验 14：记下本页发出的保存键（最近 20 个）。关页按块保存带上它们，服务器在本人这些保存之上重新定基、不自冲突。 */
+export function rememberSaveKey(keys: string[], key: string, limit = 20): string[] {
+  return keys.includes(key) ? keys : [...keys, key].slice(-limit);
+}
