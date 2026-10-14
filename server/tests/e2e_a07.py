@@ -695,7 +695,7 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             page4 = ctx_c.new_page(); open_pages.append(page4)
             open_doc(page4, pid, d2)
             # 复验 16 P1-1：拆分后服务器未变时会直接自动恢复（恢复条可能一闪而过），恢复条或恢复结果提示出现其一即可
-            expect(page4.get_by_test_id("draft-recovery").or_(page4.get_by_test_id("restore-split"))).to_be_visible(timeout=30000)
+            expect(page4.get_by_test_id("draft-recovery").or_(page4.get_by_test_id("restore-split")).first).to_be_visible(timeout=30000)
             for _ in range(40):
                 if "DRAFTB" in stash(page4):
                     break
