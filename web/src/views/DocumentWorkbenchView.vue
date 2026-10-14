@@ -467,7 +467,7 @@ async function settleDraftOwnershipNow() {
       draft.markdown = kept.markdown;
       writeDraft(window.localStorage, account(), { ...draft, markdown: kept.markdown });
     }
-    if (mine.length) noteAction("本机草稿里有不归你负责的修改，已放入暂存，可以复制。", 10000);
+    // 设计师 P2：不再另起一条“已放入暂存”的提示——暂存条 / 恢复结果条已经说明（同一件事只说一次）
   }
   localDraft.value = localDrafts.value[0] ?? null;
 }
@@ -5275,13 +5275,18 @@ onUnmounted(() => {
         <UpstreamNotice :document-id="documentId" :project-id="projectId" />
         <p v-if="errorText" class="wb-notice danger" role="alert">{{ errorText }}</p>
         <p v-if="refreshNoticeShown" class="wb-notice neutral" role="status" data-testid="editor-refreshing"><span class="spin" aria-hidden="true"></span><span>{{ refreshNoticeShown }}</span></p>
+        <!-- 设计师 P2：恢复结果放在最上面；它在时不再显示意思相同的暂存条 -->
+        <p v-if="restoreSplit" class="wb-notice warning" role="status" data-testid="restore-split"><span>{{ restoreSplitText(restoreSplit.saved, restoreSplit.others) }}</span>
+          <span class="acts"><button type="button" class="ghost sm" data-testid="restore-split-view" @click="unsavedOpen = true">查看未保存内容</button><button type="button" class="subtle sm" @click="restoreSplit = null">知道了</button></span></p>
+        <p v-else-if="unsavedParts.length && !localDraft" class="wb-notice neutral" role="status" data-testid="unsaved-others"><span>本机还保留着 {{ unsavedParts.length }} 处属于他人负责的部分、没有保存的修改。</span>
+          <span class="acts"><button type="button" class="ghost sm" data-testid="unsaved-others-view" @click="unsavedOpen = true">查看未保存内容</button></span></p>
         <div v-if="lockedBubble" class="locked-bubble" role="status" data-testid="locked-hint" :style="{ top: `${lockedBubble.top}px`, left: `${lockedBubble.left}px` }">
           <p>{{ lockedBubble.text }}</p>
           <p v-if="lockedStash" class="stash" data-testid="locked-stash"><span>{{ stashText(stashLatest) }}</span>
             <button type="button" class="ghost sm" @mousedown.prevent @click="copyStash">复制</button>
             <button type="button" class="ghost sm" data-testid="locked-stash-place" :disabled="readonly || !mineStarts.length" @mousedown.prevent @click="placeStash">放到我的下一处</button></p>
         </div>
-        <p v-if="lockedStash && !lockedBubble" class="wb-notice neutral" role="status" data-testid="locked-stash-bar"><span>{{ stashBarText }}</span>
+        <p v-if="lockedStash && !lockedBubble && !restoreSplit" class="wb-notice neutral" role="status" data-testid="locked-stash-bar"><span>{{ stashBarText }}</span>
           <span class="acts"><button type="button" class="ghost sm" @click="copyStash">复制</button><button type="button" class="ghost sm" :disabled="readonly || !mineStarts.length" @mousedown.prevent @click="placeStash">放到我的下一处</button><button type="button" class="ghost sm" @click="clearStash">清除</button></span></p>
         <p v-if="assignNotice" class="wb-notice" :class="assignNotice.tone" role="status" data-testid="assign-notice"><span>{{ assignNotice.text }}</span>
           <span class="acts"><button v-if="assignNotice.locate" type="button" class="ghost sm" @click="locateMine()">定位到第一处</button><button v-if="assignNotice.saveMine" type="button" class="ghost sm" :disabled="savingMine" @click="saveMineOnly">只保存我负责的部分</button><button type="button" class="ghost sm" @click="assignNotice = null">知道了</button></span></p>
@@ -5346,10 +5351,6 @@ onUnmounted(() => {
           <p v-if="floatingReason" class="wb-float-note" role="status" data-testid="float-reason"><span class="spin" aria-hidden="true"></span>{{ floatingReason }}</p>
         </div>
         <p v-if="multiTab && !localDraft && !blocked" class="wb-notice info" role="status" data-testid="multi-tab"><span>此文档已在另一个标签页打开，两处的修改会分别保存，可能产生冲突。</span><span class="acts"><button type="button" class="ghost sm" @click="dismissMultiTab">知道了</button></span></p>
-        <p v-if="restoreSplit" class="wb-notice warning" role="status" data-testid="restore-split"><span>{{ restoreSplitText(restoreSplit.saved, restoreSplit.others) }}</span>
-          <span class="acts"><button type="button" class="ghost sm" data-testid="restore-split-view" @click="unsavedOpen = true">查看未保存内容</button><button type="button" class="subtle sm" @click="restoreSplit = null">知道了</button></span></p>
-        <p v-else-if="unsavedParts.length && !localDraft" class="wb-notice neutral" role="status" data-testid="unsaved-others"><span>本机还保留着 {{ unsavedParts.length }} 处属于他人负责的部分、没有保存的修改。</span>
-          <span class="acts"><button type="button" class="ghost sm" data-testid="unsaved-others-view" @click="unsavedOpen = true">查看未保存内容</button></span></p>
         <!-- S11：草稿恢复条只锁编辑区；顶栏、目录和面板照常可用 -->
         <div v-if="localDraft" class="draft-recovery" role="status" data-testid="draft-recovery">
           <div class="draft-row">

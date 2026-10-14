@@ -726,6 +726,8 @@ def main() -> int:  # noqa: C901 - 验收脚本按用例顺序展开
             expect(page4.get_by_test_id("unsaved-part")).to_contain_text("DRAFTB")
             # 设计师 P2：逐条写明章节与现在的负责人（如“附录 · 王测负责”）
             expect(page4.get_by_test_id("unsaved-part")).to_contain_text(re.compile(r"第 1 处 · [^·]+ · \S+负责"))
+            # 设计师 P2：恢复结果在它时不再叠一条意思相同的暂存条
+            expect(page4.get_by_test_id("locked-stash-bar")).to_have_count(0)
             shot(page4, f"A07-10b-未保存内容-{mode}")
             page4.keyboard.press("Escape")
             shot(page4, f"A07-10-草稿按分工拆分-{mode}")
