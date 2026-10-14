@@ -139,11 +139,25 @@ export function keepMineOnly(markdown: string, baseline: BaselineObject[], edita
  * QA 复验 16 P1-1：恢复本机草稿时按当前分工拆开——我负责部分的修改照常保存，他人负责部分的修改不提交（提交必被整份拒绝），
  * 留在本机供查看、复制。saved：我负责部分改动的块数；others：他人负责部分被留下的块。
  */
-export function splitRestore(markdown: string, baseline: BaselineObject[], editable: Set<string>): { markdown: string; saved: number; others: string[] } {
+export function splitRestore(markdown: string, baseline: BaselineObject[], editable: Set<string>, draftBase?: string | null): { markdown: string; saved: number; others: string[] } {
   const kept = keepMineOnly(markdown, baseline, editable);
   const base = new Set(baseline.map(item => item.markdown.trim()));
-  const saved = splitBlocks(kept.markdown).filter(block => !base.has(block.body.trim())).length;
-  return { markdown: kept.markdown, saved, others: kept.stashed };
+  const untouched = baseBlocks(draftBase);
+  const saved = splitBlocks(kept.markdown).filter(block => !base.has(block.body.trim()) && !untouched.has(block.body.trim())).length;
+  return { markdown: kept.markdown, saved, others: userChanged(kept.stashed, draftBase) };
+}
+
+/**
+ * QA 复验 17 (a)：草稿里他人负责部分与草稿自己的基准（开始编辑时那一版）相同的块，是用户没动过、只是负责人后来改了的旧文字，
+ * 不算“我的修改”，不进暂存、不计入“另有 N 处”。没有基准时原样返回。
+ */
+export function userChanged(parts: string[], draftBase?: string | null): string[] {
+  const untouched = baseBlocks(draftBase);
+  return untouched.size ? parts.filter(part => !untouched.has(part.trim())) : parts;
+}
+
+function baseBlocks(draftBase?: string | null): Set<string> {
+  return new Set(typeof draftBase === "string" ? splitBlocks(draftBase).map(block => block.body.trim()) : []);
 }
 
 export function restoreSplitText(saved: number, others: number): string {

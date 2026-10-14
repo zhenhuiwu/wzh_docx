@@ -16,6 +16,15 @@ describe("恢复草稿按分工拆开", () => {
     expect(result.saved).toBe(1);
     expect(result.others).toEqual(["附录段DRAFTB"]);
   });
+  it("负责人后来改过、我没动过的块不算我的修改（复验 17 a）", () => {
+    // 我开始编辑时附录是“附录段”，之后负责人改成了“附录段（王测改）”；我只改了自己的段
+    const current = [base[0], base[1], base[2], { id: "p2", kind: "paragraph", markdown: "附录段（王测改）" }];
+    const draft = "# 我的\n\n我的段DRAFTA\n\n# 附录\n\n附录段\n";
+    const result = splitRestore(draft, current, editable, "# 我的\n\n我的段\n\n# 附录\n\n附录段\n");
+    expect(result.others).toEqual([]);
+    expect(result.saved).toBe(1);
+    expect(splitRestore(draft, current, editable).others).toEqual(["附录段"]);  // 没有基准时仍按旧规则
+  });
   it("提示文案与 PM 定稿一致", () => {
     expect(restoreSplitText(1, 1)).toBe("已恢复并保存 1 处；另有 1 处属于他人负责的部分，未保存，已保留在本机草稿");
   });

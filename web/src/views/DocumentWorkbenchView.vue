@@ -44,11 +44,11 @@ import { ApiError } from "../api/client";
 import { assignBlockIds, keepalivePatch, rememberSaveKey, revisionedFromSave, splitBlocks, type BaselineObject, type RevisionedObject } from "../markdownBlocks";
 import { getAllObjects, getAssignments, getRejectedSave, putRejectedSave } from "../api/assignments";
 import { addStashEntry, parseStash, serializeStash, stashAll, type StashEntry } from "../stashStore";
-import { keepMineOnly, lockedText, restoreSplitText, splitRestore, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
+import { keepMineOnly, lockedText, restoreSplitText, splitRestore, userChanged, mineRegions, noAssignmentText, ownerNames, stashText, type Violation } from "../assignmentModel";
 import SaveRejectedPanel from "../components/SaveRejectedPanel.vue";
 import AssignmentPanel from "../components/AssignmentPanel.vue";
 import { getCapabilities, getConflictSummary, getObjectsSince, listConflicts, changeRevisionBySaveKey, saveConflictMine, type Capabilities, type ConflictItem, type ConflictSummary, type MineLatest, type ResolveResult } from "../api/documents";
-import { listDocumentVersions } from "../api/documents";
+import { getDocumentVersion, listDocumentVersions } from "../api/documents";
 import { getLockedChapters, type LockedChapter } from "../api/lockedChapters";
 import { chapterLockMap, chapterHeadingIds, chapterReadonlyMessage, decorateChapterLocks, CHAPTER_LOCK_LABEL } from "../chapterLocks";
 import { renderSuggestions, resolveSuggestion, pending as pendingSuggestions, sectionBlocks, markScope, clearScope, scopeCount, contentBlocks, bodyBlockAt, chunkBlockById, type Suggestion, type SuggestionCallbacks } from "../aiSuggestions";
@@ -374,7 +374,7 @@ async function loadOwnership(record = document.value) {
     noteOwnershipChange(prev, assignInfo.value);
     if (!prev && assignInfo.value.restricted && editableIds.size && !route.hash) void nextTick(() => locateMine(!localDraft.value));
     // 28 N-4'：每次取到分工都拆（含改派后重取）；草稿列表还没读进来时由 findLocalDrafts 读完后再拆
-    if (assignInfo.value.restricted) settleDraftOwnership();
+    if (assignInfo.value.restricted) void settleDraftOwnership();
   } catch { /* 读不到归属时不锁，保存仍由服务器把关 */ }
 }
 /** 整篇保存附带的块标识：对象模型可用时总是带（编写人员在 enforced 文档上缺了会被 422）。 */
@@ -425,7 +425,23 @@ function locateMine(focus = true) {
   const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
 }
 /** 复验 N-4：本机草稿里不归我改的部分不能“恢复并保存”（必然被拒）：这些放进暂存，草稿只留我负责部分的修改；全部不归我时删掉草稿。 */
-function settleDraftOwnership() {
+/** QA 复验 17 (a)：草稿开始编辑时的那一版正文（显式基准，或按草稿记的修订号取版本）；取不到时 null（按旧规则）。 */
+const draftBaseCache = new Map<string, string | null>();
+async function draftBaseText(record: DocumentRecord, draft: DraftV2): Promise<string | null> {
+  if (typeof draft.baseMarkdown === "string") return draft.baseMarkdown;
+  const revision = draft.mergeBase ?? draft.docRevision;
+  if (typeof revision !== "number" || revision <= 0) return null;
+  const key = `${record.id}:${revision}`;
+  if (!draftBaseCache.has(key)) draftBaseCache.set(key, await getDocumentVersion(record.id, revision, false).then(version => version.markdownContent, () => null));
+  return draftBaseCache.get(key) ?? null;
+}
+// 取基准是异步的：几处同时调用时排队，同一份草稿不会被拆两次、暂存两次
+let settleQueue: Promise<void> = Promise.resolve();
+function settleDraftOwnership(): Promise<void> {
+  settleQueue = settleQueue.then(settleDraftOwnershipNow, settleDraftOwnershipNow);
+  return settleQueue;
+}
+async function settleDraftOwnershipNow() {
   const record = document.value, info = assignInfo.value;
   if (!record || !info || !baselineObjects.length) return;
   const drafts = localDrafts.value.filter(draft => draft.wholeDocument);
@@ -433,9 +449,14 @@ function settleDraftOwnership() {
     if (!draft.markdown) continue;
     const kept = keepMineOnly(draft.markdown, baselineObjects, info.editable);
     if (!kept.stashed.length) continue;
-    addStash(kept.stashed.join("\n\n"), null, true);
-    keepUnsaved(record, kept.stashed);
-    settledOthers += kept.stashed.length;
+    const base = await draftBaseText(record, draft);
+    if (document.value !== record) return;
+    const mine = userChanged(kept.stashed, base);
+    if (mine.length) {
+      addStash(mine.join("\n\n"), null, true);
+      keepUnsaved(record, mine);
+      settledOthers += mine.length;
+    }
     const server = baselineObjects.map(item => item.markdown).join("\n\n") + "\n";
     if (kept.markdown === server) {
       removeDraft(window.localStorage, account(), record.id, draft.tabId, { savedAt: draft.savedAt });
@@ -445,7 +466,7 @@ function settleDraftOwnership() {
       draft.markdown = kept.markdown;
       writeDraft(window.localStorage, account(), { ...draft, markdown: kept.markdown });
     }
-    noteAction("本机草稿里有不归你负责的修改，已放入暂存，可以复制。", 10000);
+    if (mine.length) noteAction("本机草稿里有不归你负责的修改，已放入暂存，可以复制。", 10000);
   }
   localDraft.value = localDrafts.value[0] ?? null;
 }
@@ -1451,7 +1472,7 @@ function findLocalDrafts(record: DocumentRecord) {
   localDrafts.value = shown;
   localDraft.value = shown[0] ?? null;
   // 28 N-4'：分工先到、草稿后到（打开时总是这样）——草稿读完后按当前分工拆一次
-  if (assignInfo.value?.restricted) settleDraftOwnership();
+  if (assignInfo.value?.restricted) void settleDraftOwnership();
   if (verifying.length) { void settlePendingSaves(record, verifying); return; }
   checkingDrafts.value = false;
   void flushLoadTyping();
@@ -1564,7 +1585,8 @@ async function settlePendingSaves(record: DocumentRecord, drafts: DraftV2[]) {
     localDrafts.value = [...localDrafts.value, ...waiting.filter(draft => !localDrafts.value.some(item => sameDraft(item, draft)))];
     localDraft.value = localDrafts.value[0] ?? null;
     // QA 复验 16 P1-1：关页保存没落库、放回恢复条的草稿也按当前分工拆一次（之前只拆了打开时直接显示的草稿）
-    if (assignInfo.value?.restricted) settleDraftOwnership();
+    if (assignInfo.value?.restricted) await settleDraftOwnership();
+    if (document.value !== record) return;
   }
   checkingDrafts.value = false;
   void flushLoadTyping();
@@ -3575,7 +3597,8 @@ async function restoreLocalDraft() {
     // QA 复验 16 P1-1：草稿里改到他人负责部分的修改不提交（一提交整份被拒，自己负责的也存不上）：
     // 只保存我负责部分的修改，他人负责部分留在本机（可查看、复制），恢复后说清楚各有几处
     const info = assignInfo.value;
-    const split = info?.restricted && baselineObjects.length ? splitRestore(draft.markdown, baselineObjects, info.editable) : null;
+    const draftBase = info?.restricted && baselineObjects.length ? await draftBaseText(record, draft) : null;
+    const split = info?.restricted && baselineObjects.length ? splitRestore(draft.markdown, baselineObjects, info.editable, draftBase) : null;
     const others = split?.others.length ? split.others : [];
     const othersCount = others.length + settledOthers;
     settledOthers = 0;
@@ -3592,7 +3615,7 @@ async function restoreLocalDraft() {
       draftRestoring = false;
     }
     if (blocked.value || document.value !== record) return;
-    if (othersCount) restoreSplit.value = { saved: splitRestore(restoring, baselineObjects, info?.editable ?? new Set()).saved, others: othersCount };
+    if (othersCount) restoreSplit.value = { saved: splitRestore(restoring, baselineObjects, info?.editable ?? new Set(), draftBase).saved, others: othersCount };
     const conflicted = lastConflictAt >= restoreStarted;
     if (conflicted) {
       // 恢复的内容与他人的修改冲突：冲突部分已存为冲突副本，其余已（或正在）保存；不是“重试中”
@@ -5130,7 +5153,7 @@ onMounted(() => {
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
   clockTimer = window.setInterval(() => { now.value = Date.now(); }, 15000);
-  // QA 复验 18 P2：他人修改原来最长 45 秒才出现（空闲时实测 ~41s），目标 10 秒内。
+  // QA 复验 18 P2：他人修改原来最长 45 秒才出现（空闲时平均 ~41s 被测到），目标 10 秒内。
   // 轮询的 objects?sinceRevision 没有变化时只回修订号和权限（实测 6–10ms），页面隐藏时不发，8 秒一次负载可接受
   updateTimer = window.setInterval(() => void checkOthersUpdated(), OTHERS_POLL_MS);
   window.addEventListener("resize", scheduleMarks);
